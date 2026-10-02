@@ -39,6 +39,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The type checker (`--check-types`, `--type-check-only` and the language server) is new.
+  It is built so that a script it accepts never stops with a type mismatch at run time,
+  and it rejects code that the old checker accepted and that then failed. In particular:
+  - A stored value keeps the type it was made with: a list, dictionary or grid passed on, stored or duplicated is never seen at a second, wider type.
+    A new value, such as a literal written where it is used, may be given any type it fits: `[1 2] as [int | str]`.
+    `deepCopy` makes a new value from a stored one.
+  - A variable has one type in each definition and in the script.
+    Store values of a different type under a new name, or widen the first store with `as`.
+  - `parseJson` gives `Json`, which must be checked before use, with `match` or `tryAs`.
+  - `as` needs evidence: it widens a type, or retypes a new value. Use `tryAs` to check data from outside.
+  - A redirect or a type-changing grid update needs a new list or grid: `[cmd] *`, not `@cmd *`.
+  - A definition that returns a new list, dictionary or grid says so: `def load ( -- new Json)`.
+  - A definition that never returns says so: `def die (str -- never)`.
+  - `break` and `continue` work in a quotation written at the `loop`, `each`, `map`, or other word that runs it, not in a stored one.
+  - A `?` that can only fail, such as on a key a dictionary's type says is absent, is pointed out by the language server.
 - A name can be defined only once. A second definition of a name, in the script, the init file or the standard library,
   is an error, as is a definition with the name of a builtin or an enum member.
   Previously the first definition silently won, so a later one never ran.

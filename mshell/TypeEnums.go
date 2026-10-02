@@ -202,12 +202,7 @@ func (r *Relations) paramPolarities(t TypeId, p polarity, variance func(decl uin
 	case TKCommand:
 		r.paramPolarities(TypeId(n.A), polInv, variance, visit)
 	case TKGrid, TKGridView, TKGridRow:
-		if n.A != 0 {
-			r.paramPolarities(TypeId(n.A), polInv, variance, visit)
-		}
-		for _, col := range ar.gridSchemas[n.Extra].Columns {
-			r.paramPolarities(col.Type, polInv, variance, visit)
-		}
+		r.paramPolarities(TypeId(n.A), polInv, variance, visit)
 	}
 }
 
@@ -257,12 +252,7 @@ func (r *Relations) nonDataParams(t TypeId, params []EnumParam, underNonData boo
 	case TKCommand:
 		r.nonDataParams(TypeId(n.A), params, underNonData, visit)
 	case TKGrid, TKGridView, TKGridRow:
-		if n.A != 0 {
-			r.nonDataParams(TypeId(n.A), params, underNonData, visit)
-		}
-		for _, col := range ar.gridSchemas[n.Extra].Columns {
-			r.nonDataParams(col.Type, params, underNonData, visit)
-		}
+		r.nonDataParams(TypeId(n.A), params, underNonData, visit)
 	}
 }
 
@@ -353,7 +343,7 @@ func (r *Relations) SubstParams(t TypeId, args []TypeId) TypeId {
 		for i, m := range ar.unionMembers[n.Extra] {
 			members[i] = r.SubstParams(m, args)
 		}
-		return ar.MakeUnion(members, NameNone)
+		return ar.MakeUnion(members)
 	case TKQuote:
 		sig := ar.quoteSigs[n.Extra]
 		out := QuoteSig{Diverges: sig.Diverges}

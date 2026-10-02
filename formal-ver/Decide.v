@@ -604,6 +604,18 @@ Corollary if_join_alg n sigs G Br Co R e1 e2 s s1 s2 s' :
   T sigs G Br Co R e1 s s1 -> T sigs G Br Co R e2 s s2 -> join_stack (le_alg n) s1 s2 = Some s' ->
   TW sigs G Br Co R (WIf e1 e2) ((Sh, TBool) :: s) s'.
 Proof. apply if_join, le_alg_ok. Qed.
+
+(** The checker's join, which also lets a new arm take a shared arm's type
+    (Join.v, [join_slot2]), checks in the core with the procedure, given
+    only that the checker's retype of a new or partly new value is right
+    when it says yes.  For a new value that retype is [rsubq] itself. *)
+Corollary if_join2_alg n rt
+  (rt_ok : forall m a c, rt m a c = true ->
+     (m = Dp /\ rsub a c) \/ (partial m = true /\ ((exists b, msub m a b /\ sub b c) \/ sub a c)))
+  sigs G Br Co R e1 e2 s s1 s2 s' :
+  T sigs G Br Co R e1 s s1 -> T sigs G Br Co R e2 s s2 -> join_stack2 (le_alg n) rt s1 s2 = Some s' ->
+  TW sigs G Br Co R (WIf e1 e2) ((Sh, TBool) :: s) s'.
+Proof. apply if_join2; [apply le_alg_ok | exact rt_ok]. Qed.
 End RSub.
 
 (** ** Examples

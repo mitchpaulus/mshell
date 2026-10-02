@@ -112,6 +112,8 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Checking a quote body once (frame lemma) | `T_frame`, `quote_once` in `Frame.v` |
 | "A diverging effect absorbs what follows" | `t_div`; `diverges` and the `div_*` lemmas in `Frame.v` |
 | Branch joins | `join_slot`, `tjoin` (`tjoin_core`, then one side below the other), `join_slot_ub`, `if_join` in `Join.v`; the join is given the checker's decision procedure `le` for `<=` and fresh retyping, and the proofs assume only that it is right when it says yes (`le_ok`) |
+| The checker's join: a new arm takes a shared arm's type | `join_slot2`, `join_slot2_ub`, `if_join2` in `Join.v` (two subsumption steps per arm); `if_join2_alg` in `Decide.v` |
+| A type in a def body naming the def's generics | `as` is `t_sub`; `item_gdefs_ok`, `item_use_typed`, `item_use_never_stuck`, `item_use_runs` in `Examples.v` |
 | The decision procedures for `<=` and fresh retyping (assumption sets) | `subq`, `rsubq` in `Decide.v`; `subq_sound`, `rsubq_sound`; `le_alg_ok` discharges `le_ok`; `join_slot_ub_alg`, `if_join_alg` |
 | Caching their answers | `subq_set_sound`, `rsubq_set_sound`, `chk_confirmed`; `cache_early` |
 | Joins that meet a recursive alias (never widened inside) | `ajoin` in `Join.v`; `join_*` in `Recursive.v` |

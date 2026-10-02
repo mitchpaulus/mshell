@@ -132,7 +132,7 @@ func (c *coreChecker) redirect(tok Token) bool {
 		}
 	default:
 		if quote || c.arena.nodes[target].Kind != TKPrim {
-			c.mismatch(tok, 1, c.arena.MakeUnion([]TypeId{TidStr, TidPath}, NameNone), target)
+			c.mismatch(tok, 1, c.arena.MakeUnion([]TypeId{TidStr, TidPath}), target)
 		} else {
 			return false
 		}
@@ -368,4 +368,32 @@ func (c *coreChecker) background(tok Token) bool {
 		c.cmdError(tok, "'&' needs a command")
 	}
 	return true
+}
+
+// streamStateDesc mirrors the runtime's StdoutDestinationDesc /
+// StderrDestinationDesc strings so static and runtime conflict errors read
+// identically. Returns "" for an unclaimed stream.
+func streamStateDesc(mode CommandCaptureMode, isStdout bool) string {
+	switch mode {
+	case CommandCaptureStr, CommandCaptureBytes, CommandCaptureLines:
+		if isStdout {
+			return "a capture ('*')"
+		}
+		return "a capture ('^')"
+	case CommandDestFile:
+		if isStdout {
+			return "a file redirect ('>')"
+		}
+		return "a file redirect ('2>')"
+	case CommandDestInPlace:
+		return "an in-place redirect ('<>')"
+	case CommandDestMerged:
+		if isStdout {
+			return "a merge to stderr ('1>&2')"
+		}
+		return "a merge to stdout ('2>&1')"
+	case CommandDestVaried:
+		return "a destination that differs between the commands it came from"
+	}
+	return ""
 }

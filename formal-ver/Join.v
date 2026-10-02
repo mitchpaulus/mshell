@@ -494,3 +494,106 @@ Proof.
   apply tw_if; eapply t_sub; eauto using ssub_refl.
 Qed.
 End UB.
+
+(** ** The checker's join: a new arm takes a shared arm's type
+
+    When [join_slot] finds no join, the checker tries one more thing: if one
+    arm is new or partly new and the other is not new, and the new value can
+    be retyped to the other arm's type, the join is that type, shared.  A new
+    [{values: [...], binaries: true}] and a stored [CompletionResult] give
+    [CompletionResult].  The arm is retyped ([ss_dp], or [ss_m] position by
+    position) and then forgotten ([ss_forget], [ss_m_forget]): two
+    subsumption steps, which [t_sub] allows one after the other, so the
+    result is not a [slot_sub] of the arm but still an upper bound of it.
+
+    [rt] is the checker's procedure for that retype; like [le], it is
+    assumed right only when it says yes.  For a partly new value it may go
+    through a type [b] below the target, such as the member of a union with
+    the value's kind. *)
+Section Join2.
+Variable le : bool -> ty -> ty -> bool.
+Hypothesis le_ok : forall fr a b, le fr a b = true -> jrel fr a b.
+Variable rt : mark -> ty -> ty -> bool.
+Hypothesis rt_ok : forall m a c, rt m a c = true ->
+  (m = Dp /\ rsub a c) \/
+  (partial m = true /\ ((exists b, msub m a b /\ sub b c) \/ sub a c)).
+
+Definition is_dp (m : mark) : bool := match m with Dp => true | _ => false end.
+Definition newish (m : mark) : bool := match m with Sh => false | _ => true end.
+
+Definition join_slot2 (p q : slot) : option slot :=
+  match join_slot le p q with
+  | Some r => Some r
+  | None =>
+      if newish (fst p) && negb (is_dp (fst q)) && rt (fst p) (snd p) (snd q) then Some (Sh, snd q)
+      else if newish (fst q) && negb (is_dp (fst p)) && rt (fst q) (snd q) (snd p) then Some (Sh, snd p)
+      else None
+  end.
+
+Fixpoint join_stack2 (s1 s2 : sty) : option sty :=
+  match s1, s2 with
+  | [], [] => Some []
+  | p :: s1', q :: s2' =>
+      match join_slot2 p q, join_stack2 s1' s2' with Some r, Some rs => Some (r :: rs) | _, _ => None end
+  | _, _ => None
+  end.
+
+(** A slot that is not new is committed at its own type in one step. *)
+Lemma forget_own m t : is_dp m = false -> slot_sub (m, t) (Sh, t).
+Proof.
+  destruct m; simpl; intros H; try discriminate.
+  - apply slot_sub_refl.
+  - apply ss_m_forget; [reflexivity | apply s_refl].
+  - apply ss_m_forget; [reflexivity | apply s_refl].
+Qed.
+
+(** What [rt] accepts is two subsumption steps. *)
+Lemma rt_two_steps m a c : newish m = true -> rt m a c = true ->
+  exists x, slot_sub (m, a) x /\ slot_sub x (Sh, c).
+Proof.
+  intros Nm Hr. destruct (rt_ok _ _ _ Hr) as [[-> Hs] | [Hp [(b & Hm & Hb) | Hs]]].
+  - exists (Dp, c). split; [apply ss_dp; exact Hs | apply ss_forget, s_refl].
+  - exists (m, b). split; [apply ss_m; auto | apply ss_m_forget; auto].
+  - exists (Sh, c). split; [apply ss_m_forget; auto | apply slot_sub_refl].
+Qed.
+
+(** The join is reached from each arm in at most two steps. *)
+Theorem join_slot2_ub p q r : join_slot2 p q = Some r ->
+  exists p' q', slot_sub p p' /\ slot_sub p' r /\ slot_sub q q' /\ slot_sub q' r.
+Proof.
+  unfold join_slot2. destruct (join_slot le p q) as [r0|] eqn:J.
+  { intros E. injection E as <-. destruct (join_slot_ub le le_ok _ _ _ J) as [Hp Hq].
+    exists r0, r0. repeat split; auto using slot_sub_refl. }
+  destruct p as [mp tp], q as [mq tq]; simpl.
+  destruct (newish mp) eqn:Np, (is_dp mq) eqn:Dq, (rt mp tp tq) eqn:Rp; simpl;
+    try (intros E; injection E as <-;
+         destruct (rt_two_steps _ _ _ Np Rp) as (x & H1 & H2);
+         exists x, (Sh, tq); repeat split; auto using slot_sub_refl, forget_own; fail);
+  destruct (newish mq) eqn:Nq, (is_dp mp) eqn:Dp', (rt mq tq tp) eqn:Rq; simpl; intros E; try discriminate;
+  injection E as <-; destruct (rt_two_steps _ _ _ Nq Rq) as (x & H1 & H2);
+  exists (Sh, tp), x; repeat split; auto using slot_sub_refl, forget_own.
+Qed.
+
+Theorem join_stack2_ub : forall s1 s2 s3, join_stack2 s1 s2 = Some s3 ->
+  exists s1' s2', ssub s1 s1' /\ ssub s1' s3 /\ ssub s2 s2' /\ ssub s2' s3.
+Proof.
+  induction s1 as [|p s1 IH]; intros [|q s2] s3 E; simpl in E; try discriminate.
+  - inversion E; subst. exists [], []. repeat split; constructor.
+  - destruct (join_slot2 p q) as [r|] eqn:Er; [|discriminate].
+    destruct (join_stack2 s1 s2) as [rs|] eqn:Ers; [|discriminate]. inversion E; subst.
+    destruct (join_slot2_ub _ _ _ Er) as (p' & q' & A1 & A2 & A3 & A4).
+    destruct (IH _ _ Ers) as (s1' & s2' & B1 & B2 & B3 & B4).
+    exists (p' :: s1'), (q' :: s2'). repeat split; constructor; auto.
+Qed.
+
+(** An [if] whose arms are joined this way checks in the core: each arm is
+    brought to the join by subsumption twice. *)
+Corollary if_join2 sigs G B C R e1 e2 s s1 s2 s' :
+  T sigs G B C R e1 s s1 -> T sigs G B C R e2 s s2 -> join_stack2 s1 s2 = Some s' ->
+  TW sigs G B C R (WIf e1 e2) ((Sh, TBool) :: s) s'.
+Proof.
+  intros H1 H2 J. destruct (join_stack2_ub _ _ _ J) as (s1' & s2' & A1 & A2 & A3 & A4).
+  apply tw_if; eapply t_sub; [apply ssub_refl | eapply t_sub; [apply ssub_refl | eassumption | eassumption] | eassumption
+                             | apply ssub_refl | eapply t_sub; [apply ssub_refl | eassumption | eassumption] | eassumption].
+Qed.
+End Join2.

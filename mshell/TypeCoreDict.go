@@ -109,7 +109,7 @@ func (c *coreChecker) readType(rec TypeId, k coreSlot, tok Token) (TypeId, bool)
 // keyArg checks that slot i is a key: a str or a path.
 func (c *coreChecker) keyArg(i int, tok Token) bool {
 	c.force(i)
-	if !c.check(c.stack[i], c.arena.MakeUnion([]TypeId{TidStr, TidPath}, NameNone)) {
+	if !c.check(c.stack[i], c.arena.MakeUnion([]TypeId{TidStr, TidPath})) {
 		c.mismatch(tok, i, TidStr, c.stack[i].t)
 		return false
 	}
@@ -163,14 +163,14 @@ func (c *coreChecker) dictWord(tok Token) bool {
 			case FieldOpen:
 				t = TidUnknown
 			default:
-				t = c.joinOrFail(lt, def.t, tok)
+				t = c.defaultOrJoin(lt, def, tok)
 			}
 		} else {
 			kt, ok := c.readType(rec, k, tok)
 			if !ok {
 				return true
 			}
-			t = c.joinOrFail(kt, def.t, tok)
+			t = c.defaultOrJoin(kt, def, tok)
 		}
 		if c.abandoned {
 			return true
@@ -294,7 +294,7 @@ func (c *coreChecker) urlEncodeDict(tok Token) bool {
 		read := coreSlot{t: v, fresh: c.stack[n-1].fresh}
 		for _, list := range c.table.urlEncodeLists {
 			cp := c.checkpoint()
-			if c.check(read, ar.MakeUnion([]TypeId{TidStr, TidInt, TidPath, list}, NameNone)) {
+			if c.check(read, ar.MakeUnion([]TypeId{TidStr, TidInt, TidPath, list})) {
 				fits = true
 				break
 			}
@@ -310,6 +310,21 @@ func (c *coreChecker) urlEncodeDict(tok Token) bool {
 	c.stack = c.stack[:n-1]
 	c.push(TidStr, true)
 	return true
+}
+
+// defaultOrJoin types getDef's result: the stored values' type when the
+// default fits it as an argument would (a new default may be given it, as
+// `@d "k" {} getDef` on a {str: Json}), and otherwise the join of the two.
+// The result is shared either way.
+func (c *coreChecker) defaultOrJoin(stored TypeId, def coreSlot, tok Token) TypeId {
+	if !c.hasVars(stored) {
+		cp := c.checkpoint()
+		if c.check(def, stored) {
+			return stored
+		}
+		c.rollback(cp)
+	}
+	return c.joinOrFail(stored, def.t, tok)
 }
 
 // joinOrFail joins two shared types, or reports that they have none.

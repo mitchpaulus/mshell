@@ -515,7 +515,9 @@ func (c *coreChecker) narrowKind(a *coreArm, k valueKind, tok Token) TypeId {
 	case unknown:
 		ut, abstracts := c.unknownOfKind(k)
 		if ut == TidNothing {
-			c.unsupported(tok, "a quotation pattern on a value of unknown type")
+			c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
+				Hint: "a quotation pattern needs to know what the quote takes and leaves, and the type of this value is not known; match it where its type is known"})
+			c.abandoned = true
 			return TidBottom
 		}
 		a.subject, a.abstracts = ut, abstracts

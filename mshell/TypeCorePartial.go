@@ -102,7 +102,33 @@ func (c *coreChecker) markBelow(m coreMark, got, want TypeId) (ok, kept bool) {
 	if c.msub(m, got, want) {
 		return true, true
 	}
+	// Retyped position by position to the union member of its kind, then
+	// committed (ss_m, then ss_m_forget: the member is below the union).
+	if mem, ok := c.unionMemberOfKind(got, want); ok && c.msub(m, got, mem) {
+		return true, false
+	}
 	return c.rel.Sub(got, want), false
+}
+
+// unionMemberOfKind finds the member of want, a union (or an alias that is
+// not recursive whose body is one), with the kind of got. Members have
+// distinct kinds, so there is at most one.
+func (c *coreChecker) unionMemberOfKind(got, want TypeId) (TypeId, bool) {
+	want = c.plainAlias(want)
+	wn := c.arena.Node(want)
+	if wn.Kind != TKUnion {
+		return 0, false
+	}
+	k, ok := c.rel.kindOf(c.plainAlias(got))
+	if !ok {
+		return 0, false
+	}
+	for _, mem := range c.arena.unionMembers[wn.Extra] {
+		if c.rel.hasKind(k, mem) {
+			return mem, true
+		}
+	}
+	return 0, false
 }
 
 // msub is msub in formal-ver/Typing.v: Sub at a stored position, Retype
@@ -257,14 +283,7 @@ func (c *coreChecker) aliasRecursive(idx uint32) bool {
 				}
 			}
 		case TKGrid, TKGridView, TKGridRow:
-			if n.A != 0 {
-				return walk(TypeId(n.A))
-			}
-			for _, col := range ar.gridSchemas[n.Extra].Columns {
-				if walk(col.Type) {
-					return true
-				}
-			}
+			return walk(TypeId(n.A))
 		}
 		return false
 	}

@@ -11,27 +11,27 @@
 @g ["lo"] [{ "name": "n", "agg": (gridRows) }] groupBy gridValues str wl
 
 "-- many distinct, long strings --" wl
-@g ["hi"] [] groupBy r!
-@r gridRows str wl
-@r gridValues 2 take str wl
+@g ["hi"] [] groupBy r1!
+@r1 gridRows str wl
+@r1 gridValues 2 take str wl
 
 "-- two repeating keys --" wl
-@g ["lo" "mid"] [{ "name": "n", "agg": (gridRows) }] groupBy r!
-@r gridRows str wl
-@r gridValues 4 take str wl
+@g ["lo" "mid"] [{ "name": "n", "agg": (gridRows) }] groupBy r2!
+@r2 gridRows str wl
+@r2 gridValues 4 take str wl
 
 "-- two high cardinality keys --" wl
 @g ["hi" "rev"] [] groupBy gridRows str wl
 
 "-- three keys --" wl
-@g ["mid" "rev" "lo"] [] groupBy r!
-@r gridRows str wl
-@r gridValues 2 take str wl
+@g ["mid" "rev" "lo"] [] groupBy r3!
+@r3 gridRows str wl
+@r3 gridValues 2 take str wl
 
 "-- wide int range key --" wl
-@g ["big"] [] groupBy r!
-@r gridRows str wl
-@r "big" gridCol 3 take str wl
+@g ["big"] [] groupBy r4!
+@r4 gridRows str wl
+@r4 "big" gridCol 3 take str wl
 
 "-- filtered view --" wl
 @g (:mid? "m3" =) filter ["lo"] [{ "name": "n", "agg": (gridRows) }] groupBy gridValues str wl
@@ -40,10 +40,10 @@
 @g ["lo"] "mid" (gridRows) pivot gridValues str wl
 
 "-- sortBy --" wl
-@g ["mid" "lo"] sortBy r!
-@r "mid" gridCol 2 take str wl
-@r "lo" gridCol 2 take str wl
-@r "mid" gridCol -1: str wl
+@g ["mid" "lo"] sortBy r5!
+@r5 "mid" gridCol 2 take str wl
+@r5 "lo" gridCol 2 take str wl
+@r5 "mid" gridCol -1: str wl
 
 "-- gridSetCell --" wl
 [| s; "a"; "b"; "a" |] "s" 1 "a" gridSetCell "s" 2 "new" gridSetCell s!
@@ -54,9 +54,9 @@
 [| s; "x"; "y" |] [| s; "y"; "z" |] + c!
 @c "s" gridCol str wl
 @c ["s"] [{ "name": "n", "agg": (gridRows) }] groupBy gridValues str wl
-@g (:mid? "m0" =) filter ["lo"] select [| lo; "k9" |] + r!
-@r gridRows str wl
-@r ["lo"] [{ "name": "n", "agg": (gridRows) }] groupBy gridValues str wl
+@g (:mid? "m0" =) filter ["lo"] select [| lo; "k9" |] + r6!
+@r6 gridRows str wl
+@r6 ["lo"] [{ "name": "n", "agg": (gridRows) }] groupBy gridValues str wl
 [| lo; "k9" |] @g ["lo"] select + ["lo"] [] groupBy gridValues str wl
 
 "-- extend --" wl
@@ -67,6 +67,6 @@
 @e @g ["hi"] select "hi" "s" gridRenameCol extend drop
 @e gridRows str wl
 @e ["s"] [] groupBy gridRows str wl
-[| s; "only" |] e2!
+[| s; "only" |] "s" (as str | int) updateCol e2!
 @e2 [| s; 1 |] extend drop
 @e2 "s" gridCol str wl

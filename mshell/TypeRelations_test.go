@@ -244,7 +244,7 @@ func TestRelationsKinds(t *testing.T) {
 	if !ok || len(ks) != 5 {
 		t.Fatalf("Kinds(Json) = %v, %v; want 5 kinds", ks, ok)
 	}
-	withList := o.arena.MakeUnion([]TypeId{json, o.mustParse(t, listInt)}, NameNone)
+	withList := o.arena.MakeUnion([]TypeId{json, o.mustParse(t, listInt)})
 	ks2, _ := r.Kinds(withList)
 	if kindsDisjoint(ks, ks2[len(ks2)-1:]) {
 		t.Errorf("Json | [int] should repeat the list kind")

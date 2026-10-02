@@ -983,3 +983,98 @@ Proof. intros n. eapply (soundness nosigs nodefs); [intros f ins outs [] | apply
 (** And it runs: the list in [xs] is [[1, 2]] at the end. *)
 Example partly_new_runs : exists H' st', run partly_new = ROk ONormal H' st'.
 Proof. vm_compute. eauto. Qed.
+
+(** * A type in a def body that names the def's generics
+
+    [def item (a int -- {item: a, index: int})] builds its result from its
+    two inputs, both stored, so the dict is new at the top only:
+    [x! i! {item: @x, index: @i}], whose own type is exact.  The body says
+    [as {item: a, index: int}], a type naming the def's generic [a], which
+    the body sees as a rigid type ([TVar 0]); the checker allows that
+    (2026-10-01).  In the core, [as] is subsumption ([t_sub]), here [ss_m]
+    (the new dict gets an open remainder, its stored values keep their
+    types) and then [ss_m_forget] (the output is shared).  So the body
+    checks once at its generic signature ([gdefs_ok]), and
+    [soundness_generic] covers every instance.  [item_use] calls it at
+    [a = [int]], where the value under [item] is a list, and writes through
+    the result. *)
+Definition TItem (a : ty) : ty := TRec [("index", FReq TInt); ("item", FReq a)] FOpen.
+
+Definition item_gs : gsig_env := fun f =>
+  if String.eqb f "item" then Some ([(Sh, TInt); (Sh, TVar 0)], Some [(Sh, TItem (TVar 0))]) else None.
+
+Definition sigs_item : genv := {| g_sigs := instances item_gs; g_ctors := maybe_ctors |}.
+
+Definition item_body : prog :=
+  [WStore "i"; WStore "x"; WDictNew; WLoad "x"; WSetK "item"; WLoad "i"; WSetK "index"].
+
+(** The mark of the built dict: new, with stored values under both labels. *)
+Definition item_mark : mark := mset "index" Sh (mset "item" Sh Dp).
+
+Lemma item_gdefs_ok : gdefs_ok sigs_item item_gs (defs1 "item" item_body).
+Proof.
+  intros f gi go E. unfold item_gs in E. destruct (String.eqb f "item") eqn:Ef; [|discriminate].
+  apply String.eqb_eq in Ef; subst. injection E as <- <-.
+  exists item_body, [("i", TInt); ("x", TVar 0)]. split; [reflexivity|]. intros s0. simpl.
+  step ltac:(apply tw_store with (t := TInt); reflexivity).
+  step ltac:(apply tw_store with (t := TVar 0); reflexivity).
+  step ltac:(apply tw_dictnew).
+  step ltac:(apply tw_load with (t := TVar 0); reflexivity).
+  step ltac:(apply tw_setk_m with (m := Sh) (md := Dp); reflexivity).
+  step ltac:(apply tw_load with (t := TInt); reflexivity).
+  step ltac:(apply tw_setk_m with (m := Sh); reflexivity).
+  (* [as {item: a, index: int}], then the shared output *)
+  eapply t_sub with (s2 := (item_mark, TItem (TVar 0)) :: s0); [apply ssub_refl | | ].
+  - eapply t_sub; [apply ssub_refl | apply t_nil | ].
+    constructor; [| apply ssub_refl]. apply ss_m; [reflexivity|]. simpl.
+    do 4 eexists. split; [reflexivity|]. split; [reflexivity|].
+    intros k. unfold field_at, item_mark, mset. simpl.
+    destruct (String.eqb k "index"); [| destruct (String.eqb k "item")]; simpl; split;
+      try (intros Hp; discriminate Hp).
+    + apply frs_req. apply s_refl.
+    + apply frs_req. apply s_refl.
+    + apply frs_open.
+  - constructor; [apply ss_m_forget; [reflexivity | apply s_refl] | apply ssub_refl].
+Qed.
+
+Lemma maybe_ctors_wf E c pts : maybe_ctors E c = Some pts -> wf_payload E pts.
+Proof.
+  unfold maybe_ctors. destruct (ename_eqb E EMaybe) eqn:Ee; [|discriminate].
+  apply ename_eqb_true in Ee; subst.
+  destruct (String.eqb c "just"); [|destruct (String.eqb c "none")]; intros H; inversion H; subst; reflexivity.
+Qed.
+
+Definition item_use : prog :=
+  [ WNil; WInt 1; WPush; WInt 5; WCall "item"   (* [1] 5 item *)
+  ; WGetReq "item"; WInt 2; WPush; WDrop ].      (* :item 2 append drop *)
+
+Example item_use_typed : T sigs_item [] LNone LNone RNone item_use [] [].
+Proof.
+  unfold item_use.
+  step ltac:(apply tw_nil with (t := TInt)).
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply s_refl] | apply ssub_refl]. }
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons;
+    [apply tw_call with (ins := [(Sh, TInt); (Sh, TList TInt)]) (outs := [(Sh, TItem (TList TInt))]) | ]
+    | apply ssub_refl ].
+  { constructor; [apply slot_sub_refl | constructor; [apply ss_forget, s_refl | constructor]]. }
+  { exists (fun _ => TList TInt), [(Sh, TInt); (Sh, TVar 0)], (Some [(Sh, TItem (TVar 0))]).
+    split; [reflexivity | split; reflexivity]. }
+  simpl.
+  step ltac:(apply tw_getreq with (t := TList TInt); reflexivity).
+  step ltac:(apply tw_int).
+  step ltac:(apply tw_push_sh).
+  step ltac:(apply tw_drop).
+  apply t_nil.
+Qed.
+
+Example item_use_never_stuck : forall n, eval (defs1 "item" item_body) n [OScope []] 0 [] item_use <> RStuck.
+Proof.
+  intros n. eapply (soundness_generic sigs_item item_gs); [reflexivity | apply maybe_ctors_wf | apply maybe_ctors_ok
+                                                          | exact item_gdefs_ok | exact item_use_typed].
+Qed.
+
+Example item_use_runs : exists H' st', eval (defs1 "item" item_body) 200 [OScope []] 0 [] item_use = ROk ONormal H' st'.
+Proof. vm_compute. eauto. Qed.

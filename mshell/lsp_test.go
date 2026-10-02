@@ -94,7 +94,7 @@ func TestHoverRequestForBuiltin(t *testing.T) {
 		t.Fatalf("failed to unmarshal hover result: %v", err)
 	}
 
-	expected := "```mshell\nswap :: (T0 T1 -- T1 T0)\n```\n\n_builtin_\n\nSwap the top two stack items."
+	expected := "```mshell\nswap :: (a b -- b a)\n```\n\n_builtin_\n\nSwap the top two stack items."
 	if hover.Contents.Value != expected {
 		t.Fatalf("unexpected hover contents: %q", hover.Contents.Value)
 	}
@@ -1333,14 +1333,19 @@ func TestBuildHoverIndexCoversTypedBuiltinsAndStdlib(t *testing.T) {
 		t.Skipf("stdlib not available in test environment: %v", err)
 	}
 
-	builtinSigs, stdlibHover := buildHoverIndex(stdlibDefs)
+	builtinSigs, stdlibHover := buildHoverIndex(NewCoreBase(stdlibDefs, nil), stdlibDefs)
 
-	// `over` is in builtinSigsByName but not in defaultBuiltinInfo, so
-	// it exercises the new typed-builtin hover path.
+	// `over` is typed by the checker's walker, not its table, and is not in
+	// defaultBuiltinInfo, so it exercises the walker's hover signatures.
 	if sigs, ok := builtinSigs["over"]; !ok || len(sigs) == 0 {
 		t.Fatalf("expected `over` in builtinSigs, got %v", sigs)
 	} else if !strings.Contains(sigs[0], "--") {
 		t.Fatalf("expected `over` sig to contain stack effect, got %q", sigs[0])
+	}
+
+	// A table entry is written as a def would declare it, `new` included.
+	if sigs := builtinSigs["parseJson"]; len(sigs) == 0 || !strings.Contains(sigs[0], "-- new Json") {
+		t.Fatalf("expected `parseJson` to give a new Json, got %v", sigs)
 	}
 
 	if sigs, ok := stdlibHover["chunk"]; !ok || len(sigs) == 0 {
@@ -1715,10 +1720,9 @@ func readLSPResponse(t *testing.T, reader *bufio.Reader) responseMessage {
 	return resp
 }
 
-// With the core checker, the errors about `new` on def outputs come with
-// quick fixes, and one action fixes them all.
+// The errors about `new` on def outputs come with quick fixes, and one
+// action fixes them all.
 func TestCodeActionFixesNewMarks(t *testing.T) {
-	t.Setenv("MSH_CHECKER", "core")
 	uri := protocol.DocumentURI("file:///new-marks.msh")
 	doc := "def a ( -- [int]) [1] end\ndef b ( -- new int) 1 end\n"
 	server := &lspServer{documents: map[protocol.DocumentURI]*lspDocument{uri: {Text: doc}}}

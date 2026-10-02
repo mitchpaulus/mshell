@@ -4769,7 +4769,10 @@ func decodeJson(data []byte) (any, error) {
 	dec.UseNumber()
 	var v any
 	err := dec.Decode(&v)
-	if err == nil && jsonNumbersInRange(v) {
+	if err == nil {
+		if n, ok := jsonNumberOutOfRange(v); ok {
+			return nil, fmt.Errorf("the number %s is out of range for a float", n)
+		}
 		if _, next := dec.Token(); next == io.EOF {
 			return v, nil
 		}
@@ -4785,27 +4788,28 @@ func decodeJson(data []byte) (any, error) {
 	return nil, err
 }
 
-// jsonNumbersInRange reports whether every number in v fits in a float, as
-// json.Unmarshal requires (`1e400` does not).
-func jsonNumbersInRange(v any) bool {
+// jsonNumberOutOfRange finds a number in v too large for a float (`1e400`),
+// which json.Unmarshal refuses too.
+func jsonNumberOutOfRange(v any) (json.Number, bool) {
 	switch o := v.(type) {
 	case json.Number:
-		_, err := o.Float64()
-		return err == nil
+		if _, err := o.Float64(); err != nil {
+			return o, true
+		}
 	case []any:
 		for _, x := range o {
-			if !jsonNumbersInRange(x) {
-				return false
+			if n, ok := jsonNumberOutOfRange(x); ok {
+				return n, true
 			}
 		}
 	case map[string]any:
 		for _, x := range o {
-			if !jsonNumbersInRange(x) {
-				return false
+			if n, ok := jsonNumberOutOfRange(x); ok {
+				return n, true
 			}
 		}
 	}
-	return true
+	return "", false
 }
 
 // jsonNumber converts a JSON number: an integer (no fraction, no exponent)

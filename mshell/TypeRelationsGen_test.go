@@ -173,7 +173,7 @@ func (g *typeGen) union(depth int, underCtor, inAlias bool) TypeId {
 	if len(members) == 0 {
 		return TidInt
 	}
-	return g.o.arena.MakeUnion(members, NameNone)
+	return g.o.arena.MakeUnion(members)
 }
 
 func (g *typeGen) quote(depth int, inAlias bool) TypeId {
@@ -209,7 +209,7 @@ func (g *typeGen) near(t TypeId, depth int) TypeId {
 		extra := g.ty(1, false, false)
 		ks2, ok2 := g.r.Kinds(extra)
 		if ok2 && len(ks2) > 0 && extra != TidBottom && kindsDisjoint(ks, ks2) && len(ks) > 0 {
-			return a.MakeUnion([]TypeId{t, extra}, NameNone)
+			return a.MakeUnion([]TypeId{t, extra})
 		}
 		return t
 	case 2:
@@ -252,13 +252,13 @@ func (g *typeGen) near(t TypeId, depth int) TypeId {
 			if ok && len(ks) == len(old) && m != TidBottom && m != TidUnknown {
 				members[i] = m
 				rest := append(append([]TypeId(nil), members[:i]...), members[i+1:]...)
-				others, _ := g.r.Kinds(a.MakeUnion(rest, NameNone))
+				others, _ := g.r.Kinds(a.MakeUnion(rest))
 				if len(rest) > 0 && !kindsDisjoint(ks, others) {
 					return t
 				}
 			}
 		}
-		return a.MakeUnion(members, NameNone)
+		return a.MakeUnion(members)
 	case TKQuote:
 		sig := a.quoteSigs[n.Extra]
 		sig2 := QuoteSig{Diverges: sig.Diverges}
@@ -313,7 +313,7 @@ func (g *typeGen) widen(t TypeId, depth int, fresh bool) TypeId {
 			extra := g.ty(1, false, false)
 			ks2, ok2 := g.r.Kinds(extra)
 			if ok2 && len(ks2) > 0 && extra != TidBottom && kindsDisjoint(ks, ks2) {
-				return a.MakeUnion([]TypeId{t, extra}, NameNone)
+				return a.MakeUnion([]TypeId{t, extra})
 			}
 		}
 	}
@@ -354,11 +354,11 @@ func (g *typeGen) widen(t TypeId, depth int, fresh bool) TypeId {
 		old, _ := g.r.Kinds(members[i])
 		rest := append(slices.Clone(members[:i]), members[i+1:]...)
 		ks, ok := g.r.Kinds(m)
-		others, _ := g.r.Kinds(a.MakeUnion(rest, NameNone))
+		others, _ := g.r.Kinds(a.MakeUnion(rest))
 		if ok && len(ks) >= len(old) && m != TidUnknown && (len(rest) == 0 || kindsDisjoint(ks, others)) {
 			members[i] = m
 		}
-		return a.MakeUnion(members, NameNone)
+		return a.MakeUnion(members)
 	case TKQuote:
 		sig := a.quoteSigs[n.Extra]
 		if sig.Diverges {

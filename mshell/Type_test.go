@@ -30,7 +30,7 @@ func TestHashconsAtomic(t *testing.T) {
 	if listStr == listInt1 {
 		t.Errorf("List<Int> and List<Str> share id %d", listInt1)
 	}
-	maybeInt := a.MakeMaybe(TidInt)
+	maybeInt := a.MakeMaybeEnum(TidInt)
 	if maybeInt == listInt1 {
 		t.Errorf("Maybe<Int> and List<Int> share id %d", listInt1)
 	}
@@ -38,8 +38,8 @@ func TestHashconsAtomic(t *testing.T) {
 
 func TestHashconsNested(t *testing.T) {
 	a := NewTypeArena()
-	a1 := a.MakeMaybe(a.MakeList(TidInt))
-	a2 := a.MakeMaybe(a.MakeList(TidInt))
+	a1 := a.MakeMaybeEnum(a.MakeList(TidInt))
+	a2 := a.MakeMaybeEnum(a.MakeList(TidInt))
 	if a1 != a2 {
 		t.Errorf("Maybe<List<Int>> not hashconsed: %d vs %d", a1, a2)
 	}
@@ -47,15 +47,13 @@ func TestHashconsNested(t *testing.T) {
 
 func TestHashconsDict(t *testing.T) {
 	a := NewTypeArena()
-	d1 := a.MakeDict(TidStr, TidInt)
-	d2 := a.MakeDict(TidStr, TidInt)
+	d1 := a.MakeStrDict(TidInt)
+	d2 := a.MakeStrDict(TidInt)
 	if d1 != d2 {
-		t.Errorf("Dict<Str,Int> not hashconsed")
+		t.Errorf("{str: int} not hashconsed")
 	}
-	// Order matters: Dict<Str,Int> != Dict<Int,Str>
-	d3 := a.MakeDict(TidInt, TidStr)
-	if d1 == d3 {
-		t.Errorf("Dict<Str,Int> and Dict<Int,Str> share id")
+	if d1 == a.MakeStrDict(TidStr) {
+		t.Errorf("{str: int} and {str: str} share id")
 	}
 }
 
@@ -66,14 +64,15 @@ func TestShapeNormalization(t *testing.T) {
 	aName := names.Intern("age")
 
 	// Two equivalent shapes specified in different field orders.
-	s1 := a.MakeShape([]ShapeField{
-		{Name: nName, Type: TidStr},
-		{Name: aName, Type: TidInt},
-	})
-	s2 := a.MakeShape([]ShapeField{
-		{Name: aName, Type: TidInt},
-		{Name: nName, Type: TidStr},
-	})
+	open := RecordField{Status: FieldOpen}
+	s1 := a.MakeRecord([]RecordField{
+		{Name: nName, Status: FieldRequired, Type: TidStr},
+		{Name: aName, Status: FieldRequired, Type: TidInt},
+	}, open)
+	s2 := a.MakeRecord([]RecordField{
+		{Name: aName, Status: FieldRequired, Type: TidInt},
+		{Name: nName, Status: FieldRequired, Type: TidStr},
+	}, open)
 	if s1 != s2 {
 		t.Errorf("equivalent shapes not hashconsed: %d vs %d", s1, s2)
 	}
@@ -85,15 +84,16 @@ func TestShapeDistinct(t *testing.T) {
 	nName := names.Intern("name")
 	aName := names.Intern("age")
 
-	s1 := a.MakeShape([]ShapeField{
-		{Name: nName, Type: TidStr},
-		{Name: aName, Type: TidInt},
-	})
+	open := RecordField{Status: FieldOpen}
+	s1 := a.MakeRecord([]RecordField{
+		{Name: nName, Status: FieldRequired, Type: TidStr},
+		{Name: aName, Status: FieldRequired, Type: TidInt},
+	}, open)
 	// Different field type should yield a different id.
-	s2 := a.MakeShape([]ShapeField{
-		{Name: nName, Type: TidStr},
-		{Name: aName, Type: TidFloat},
-	})
+	s2 := a.MakeRecord([]RecordField{
+		{Name: nName, Status: FieldRequired, Type: TidStr},
+		{Name: aName, Status: FieldRequired, Type: TidFloat},
+	}, open)
 	if s1 == s2 {
 		t.Errorf("shapes with different field types share id %d", s1)
 	}
@@ -102,11 +102,11 @@ func TestShapeDistinct(t *testing.T) {
 func TestUnionFlatten(t *testing.T) {
 	a := NewTypeArena()
 	// Build int|str
-	u1 := a.MakeUnion([]TypeId{TidInt, TidStr}, NameNone)
+	u1 := a.MakeUnion([]TypeId{TidInt, TidStr})
 	// Build (int|str)|float -- should flatten
-	u2 := a.MakeUnion([]TypeId{u1, TidFloat}, NameNone)
+	u2 := a.MakeUnion([]TypeId{u1, TidFloat})
 	// And a direct int|float|str should match u2
-	u3 := a.MakeUnion([]TypeId{TidInt, TidFloat, TidStr}, NameNone)
+	u3 := a.MakeUnion([]TypeId{TidInt, TidFloat, TidStr})
 	if u2 != u3 {
 		t.Errorf("flattened union not hashconsed with direct: %d vs %d", u2, u3)
 	}
@@ -114,8 +114,8 @@ func TestUnionFlatten(t *testing.T) {
 
 func TestUnionDedupe(t *testing.T) {
 	a := NewTypeArena()
-	u1 := a.MakeUnion([]TypeId{TidInt, TidInt, TidStr}, NameNone)
-	u2 := a.MakeUnion([]TypeId{TidInt, TidStr}, NameNone)
+	u1 := a.MakeUnion([]TypeId{TidInt, TidInt, TidStr})
+	u2 := a.MakeUnion([]TypeId{TidInt, TidStr})
 	if u1 != u2 {
 		t.Errorf("union with duplicate not deduped: %d vs %d", u1, u2)
 	}
@@ -123,52 +123,19 @@ func TestUnionDedupe(t *testing.T) {
 
 func TestUnionSingleArmCollapse(t *testing.T) {
 	a := NewTypeArena()
-	// Unbranded union of one arm should collapse to that arm.
-	u := a.MakeUnion([]TypeId{TidInt}, NameNone)
+	// A union of one arm collapses to that arm.
+	u := a.MakeUnion([]TypeId{TidInt})
 	if u != TidInt {
-		t.Errorf("single-arm unbranded union didn't collapse: got %d, want %d", u, TidInt)
+		t.Errorf("single-arm union did not collapse: got %d, want %d", u, TidInt)
 	}
 }
 
 func TestUnionOrderInvariant(t *testing.T) {
 	a := NewTypeArena()
-	u1 := a.MakeUnion([]TypeId{TidInt, TidStr, TidFloat}, NameNone)
-	u2 := a.MakeUnion([]TypeId{TidFloat, TidStr, TidInt}, NameNone)
+	u1 := a.MakeUnion([]TypeId{TidInt, TidStr, TidFloat})
+	u2 := a.MakeUnion([]TypeId{TidFloat, TidStr, TidInt})
 	if u1 != u2 {
 		t.Errorf("union order not canonicalized: %d vs %d", u1, u2)
-	}
-}
-
-func TestBrandedUnionDistinctFromUnbranded(t *testing.T) {
-	a := NewTypeArena()
-	names := NewNameTable()
-	rId := names.Intern("Result")
-	plain := a.MakeUnion([]TypeId{TidInt, TidStr}, NameNone)
-	branded := a.MakeUnion([]TypeId{TidInt, TidStr}, rId)
-	if plain == branded {
-		t.Errorf("branded and unbranded union share id %d", plain)
-	}
-}
-
-func TestBrandedUnionsDistinctByBrand(t *testing.T) {
-	a := NewTypeArena()
-	names := NewNameTable()
-	r := names.Intern("Result")
-	e := names.Intern("Either")
-	a1 := a.MakeUnion([]TypeId{TidInt, TidStr}, r)
-	a2 := a.MakeUnion([]TypeId{TidInt, TidStr}, e)
-	if a1 == a2 {
-		t.Errorf("Result|Int|Str and Either|Int|Str share id %d", a1)
-	}
-}
-
-func TestBrandedUnionWithSingleArmDoesNotCollapse(t *testing.T) {
-	a := NewTypeArena()
-	names := NewNameTable()
-	bId := names.Intern("UserId")
-	branded := a.MakeUnion([]TypeId{TidInt}, bId)
-	if branded == TidInt {
-		t.Errorf("branded single-arm union collapsed to underlying")
 	}
 }
 
@@ -196,14 +163,15 @@ func TestQuoteHashcons(t *testing.T) {
 
 func TestGridUnknownSchemaCanonical(t *testing.T) {
 	a := NewTypeArena()
-	g1 := a.MakeGrid(0)
-	g2 := a.MakeGrid(0)
+	unknown := a.MakeRecord(nil, RecordField{Status: FieldOpen})
+	g1 := a.MakeGridOf(TKGrid, unknown)
+	g2 := a.MakeGridOf(TKGrid, unknown)
 	if g1 != g2 {
 		t.Errorf("Grid (unknown schema) not hashconsed")
 	}
 	// Grid vs GridView vs GridRow distinct
-	gv := a.MakeGridView(0)
-	gr := a.MakeGridRow(0)
+	gv := a.MakeGridOf(TKGridView, unknown)
+	gr := a.MakeGridOf(TKGridRow, unknown)
 	if g1 == gv || g1 == gr || gv == gr {
 		t.Errorf("Grid family kinds collide at unknown schema")
 	}
@@ -241,16 +209,23 @@ func TestNameTable(t *testing.T) {
 	}
 }
 
-func TestReservedTypeNames(t *testing.T) {
-	for _, name := range []string{"int", "float", "str", "bool", "bytes", "none", "null",
-		"Maybe", "Grid", "GridView", "GridRow"} {
-		if !IsReservedTypeName(name) {
-			t.Errorf("expected %q to be reserved", name)
-		}
+// An overlay grows on its own and leaves its base unchanged: a check
+// interns names without copying the base's.
+func TestNameTableOverlay(t *testing.T) {
+	base := NewNameTable()
+	foo := base.Intern("foo")
+	o := base.Overlay()
+	if o.Intern("foo") != foo {
+		t.Errorf("an overlay should find its base's names")
 	}
-	for _, name := range []string{"Result", "Person", "x", "MyType"} {
-		if IsReservedTypeName(name) {
-			t.Errorf("expected %q to NOT be reserved", name)
-		}
+	bar := o.Intern("bar")
+	if bar < base.Len() || o.Name(bar) != "bar" || o.Name(foo) != "foo" {
+		t.Errorf("overlay names: bar=%d (base len %d) %q %q", bar, base.Len(), o.Name(bar), o.Name(foo))
+	}
+	if _, ok := base.Lookup("bar"); ok {
+		t.Errorf("an overlay must not change its base")
+	}
+	if o2 := base.Overlay(); o2.Intern("baz") != bar {
+		t.Errorf("two overlays of one base should number their names alike")
 	}
 }

@@ -4,17 +4,13 @@ package main
 //
 // Types are uint32 indices (TypeId) into a hashconsed arena. Identical
 // structural types share an id, so type equality is integer equality.
-// This is Phase 1 scope: arena, primitives, hashconsing infrastructure,
-// name interning. Composite kinds are wired up but most do not have
-// public constructors yet — those land in later phases as they are needed.
 //
-// The design of the checker being built on it is ai/type-core-calculus.typ.
+// The design of the checker built on it is ai/type-core-calculus.typ.
 
 import (
 	"encoding/binary"
 	"maps"
 	"slices"
-	"sort"
 )
 
 // TypeId is an opaque handle into TypeArena. Comparing TypeIds for equality
@@ -44,35 +40,19 @@ const (
 type TypeKind uint8
 
 const (
-	TKPrim     TypeKind = iota // primitive; A unused
-	TKMaybe                    // A = inner T
-	TKList                     // A = element T
-	TKDict                     // A = key T, B = value T
-	TKShape                    // Extra = index into shapeFields
-	TKQuote                    // Extra = index into quoteSigs
-	TKOverloadedQuote          // Extra = index into overloadedQuoteSigs
-	TKUnion                    // A = brand id (or 0); Extra = index into unionMembers
-	TKBrand                    // A = brand id; B = underlying TypeId
-	TKCommand                  // A = argv list TypeId; B = stdout capture; Extra = stderr capture
-	TKVar                      // A = TypeVarId
-	TKRigid                    // A = NameId of the declared generic; see MakeRigid
+	TKPrim    TypeKind = iota // primitive; A unused
+	TKList                    // A = element T
+	TKQuote                   // Extra = index into quoteSigs
+	TKUnion                   // Extra = index into unionMembers
+	TKCommand                 // A = argv list TypeId; B = stdout capture; Extra = stderr capture
+	TKVar                     // A = TypeVarId
+	TKRigid                   // A = NameId of the declared generic; see MakeRigid
 
-	// Grid family. In the old checker Extra is an index into gridSchemas
-	// (0 = unknown schema) and A is 0. In the core checker A is the schema:
-	// a record type with one label per column (MakeGridOf).
+	// Grid family. A is the schema: a record type with one label per
+	// column (MakeGridOf).
 	TKGrid
 	TKGridView
 	TKGridRow
-
-	// TKStrLit is a `str` refined with a statically known value: A holds the
-	// interned NameId of the literal content. It is a subtype of `str` —
-	// unify and every container constructor widen it back to TidStr — so it
-	// behaves exactly like `str` everywhere except where a known key matters:
-	// `get` reads it off the stack to resolve a shape field by name, the same
-	// resolution the `:name` getter does from its token.
-	TKStrLit // A = NameId of the literal string content
-
-	// Kinds of the checker described in ai/type-core-calculus.typ.
 
 	// TKRecord is every dict-kinded type: shapes and `{str: T}`.
 	// Extra = index into records.
@@ -97,22 +77,12 @@ func (k TypeKind) String() string {
 	switch k {
 	case TKPrim:
 		return "Prim"
-	case TKMaybe:
-		return "Maybe"
 	case TKList:
 		return "List"
-	case TKDict:
-		return "Dict"
-	case TKShape:
-		return "Shape"
 	case TKQuote:
 		return "Quote"
-	case TKOverloadedQuote:
-		return "OverloadedQuote"
 	case TKUnion:
 		return "Union"
-	case TKBrand:
-		return "Brand"
 	case TKCommand:
 		return "Command"
 	case TKVar:
@@ -125,8 +95,6 @@ func (k TypeKind) String() string {
 		return "GridView"
 	case TKGridRow:
 		return "GridRow"
-	case TKStrLit:
-		return "StrLit"
 	case TKRecord:
 		return "Record"
 	case TKEnum:
@@ -182,27 +150,6 @@ const CommandPipe CommandCaptureMode = 1 << 16
 // generic-instantiation sites (each call to a polymorphic function yields
 // fresh variables).
 type TypeVarId uint32
-
-// ShapeField is one field in a TKShape's column list. ShapeFields are stored
-// in TypeArena.shapeFields, sorted by Name, with no duplicates.
-type ShapeField struct {
-	Name     NameId
-	Type     TypeId
-	Optional bool
-}
-
-// GridSchemaCol is one column in a TKGrid / TKGridView / TKGridRow schema.
-// Order is meaningful (grids have column order).
-type GridSchemaCol struct {
-	Name NameId
-	Type TypeId
-}
-
-// GridSchema is the full ordered column list for a grid-family type.
-// The unknown schema has Columns == nil and lives at gridSchemas[0].
-type GridSchema struct {
-	Columns []GridSchemaCol
-}
 
 // FieldStatus is what a dict-kinded type says about one label
 // (ai/type-core-calculus.typ, "The per-label reading").
@@ -290,13 +237,12 @@ type AliasDecl struct {
 
 // QuoteSig is a function or quote signature. Inputs are listed bottom-to-top
 // (so the last element is the top of the consumed stack). Outputs are also
-// listed bottom-to-top. Generics names are local to this sig.
+// listed bottom-to-top. A quote that never returns has Diverges set and no
+// outputs: its output side is `never`.
 type QuoteSig struct {
 	Inputs   []TypeId
 	Outputs  []TypeId
-	Diverges bool // return/break/continue style control flow
-	Bindings map[NameId]TypeId
-	Generics []TypeVarId
+	Diverges bool
 }
 
 // TypeArena is the storage for all types in a checking session.
@@ -305,8 +251,8 @@ type QuoteSig struct {
 // cons maps a structural fingerprint to the TypeId that owns it; new
 // constructions look up here first to deduplicate (hashconsing).
 //
-// shapeFields, quoteSigs, unionMembers, and gridSchemas are side tables
-// for variable-length data referenced from a TypeNode's Extra field.
+// quoteSigs, unionMembers, records, enumArgs and aliases are side tables
+// for variable-length data referenced from a TypeNode.
 type TypeArena struct {
 	// parent is the frozen arena this one is an overlay of (see Overlay),
 	// or nil. Its types keep their ids here, and hash-consing looks in it
@@ -320,43 +266,17 @@ type TypeArena struct {
 	// per-construction string key allocation on the checking hot path.
 	atomCons map[TypeNode]TypeId
 
-	shapeFields    [][]ShapeField
-	quoteSigs      []QuoteSig
-	overloadedQuoteSigs [][]QuoteSig
-	unionMembers   [][]TypeId // each slice is sorted, deduped
-	gridSchemas    []GridSchema
-	gridSchemaCons map[string]uint32
-	records        []RecordType
-	enumDecls      []EnumDecl
-	enumArgs       [][]TypeId
-	aliases        []AliasDecl
-	abstractCount  uint32
+	quoteSigs     []QuoteSig
+	unionMembers  [][]TypeId // each slice is sorted, deduped
+	records       []RecordType
+	enumDecls     []EnumDecl
+	enumArgs      [][]TypeId
+	aliases       []AliasDecl
+	abstractCount uint32
 	// keyBuf is scratch space for building composite cons keys.
 	keyBuf []byte
-}
-
-// Clone returns an arena that grows independently: every TypeId already in
-// the arena means the same in both, and neither sees what the other adds
-// afterwards. Entries never change once added, so their contents are
-// shared; only the tables that grow are copied.
-func (a *TypeArena) Clone() *TypeArena {
-	return &TypeArena{
-		parent:              a.parent,
-		nodes:               slices.Clone(a.nodes),
-		cons:                maps.Clone(a.cons),
-		atomCons:            maps.Clone(a.atomCons),
-		shapeFields:         slices.Clone(a.shapeFields),
-		quoteSigs:           slices.Clone(a.quoteSigs),
-		overloadedQuoteSigs: slices.Clone(a.overloadedQuoteSigs),
-		unionMembers:        slices.Clone(a.unionMembers),
-		gridSchemas:         slices.Clone(a.gridSchemas),
-		gridSchemaCons:      maps.Clone(a.gridSchemaCons),
-		records:             slices.Clone(a.records),
-		enumDecls:           slices.Clone(a.enumDecls),
-		enumArgs:            slices.Clone(a.enumArgs),
-		aliases:             slices.Clone(a.aliases),
-		abstractCount:       a.abstractCount,
-	}
+	// varIds caches MakeVar: the TypeId of each type variable made here.
+	varIds []TypeId
 }
 
 // Overlay returns an arena that starts with every type in a and grows on
@@ -367,21 +287,17 @@ func (a *TypeArena) Clone() *TypeArena {
 // overlay adds, looked up before a's.
 func (a *TypeArena) Overlay() *TypeArena {
 	return &TypeArena{
-		parent:              a,
-		nodes:               slices.Clip(a.nodes),
-		cons:                make(map[string]TypeId, 64),
-		atomCons:            make(map[TypeNode]TypeId, 64),
-		shapeFields:         slices.Clip(a.shapeFields),
-		quoteSigs:           slices.Clip(a.quoteSigs),
-		overloadedQuoteSigs: slices.Clip(a.overloadedQuoteSigs),
-		unionMembers:        slices.Clip(a.unionMembers),
-		gridSchemas:         slices.Clip(a.gridSchemas),
-		gridSchemaCons:      make(map[string]uint32),
-		records:             slices.Clip(a.records),
-		enumDecls:           slices.Clip(a.enumDecls),
-		enumArgs:            slices.Clip(a.enumArgs),
-		aliases:             slices.Clip(a.aliases),
-		abstractCount:       a.abstractCount,
+		parent:        a,
+		nodes:         slices.Clip(a.nodes),
+		cons:          make(map[string]TypeId),
+		atomCons:      make(map[TypeNode]TypeId),
+		quoteSigs:     slices.Clip(a.quoteSigs),
+		unionMembers:  slices.Clip(a.unionMembers),
+		records:       slices.Clip(a.records),
+		enumDecls:     slices.Clip(a.enumDecls),
+		enumArgs:      slices.Clip(a.enumArgs),
+		aliases:       slices.Clip(a.aliases),
+		abstractCount: a.abstractCount,
 	}
 }
 
@@ -393,15 +309,6 @@ func (a *TypeArena) lookupCons(key []byte) (TypeId, bool) {
 		}
 	}
 	return TidNothing, false
-}
-
-func (a *TypeArena) lookupGridSchema(key []byte) (uint32, bool) {
-	for p := a; p != nil; p = p.parent {
-		if idx, ok := p.gridSchemaCons[string(key)]; ok {
-			return idx, true
-		}
-	}
-	return 0, false
 }
 
 // NewTypeArena constructs an arena pre-populated with the primitive ids
@@ -432,14 +339,9 @@ func NewTypeArena() *TypeArena {
 		// Encode the primitive id directly in A so the cons key stays unique.
 		a.nodes = append(a.nodes, TypeNode{Kind: TKPrim, A: uint32(i + 1)})
 	}
-	// Reserve gridSchemas[0] as the "unknown schema" sentinel.
-	a.gridSchemas = append(a.gridSchemas, GridSchema{})
-	// Reserve unionMembers[0] as a placeholder so non-zero Extra is meaningful.
+	// Reserve entry 0 of the side tables, so a non-zero Extra is meaningful.
 	a.unionMembers = append(a.unionMembers, nil)
-	// Same for shapeFields and quoteSigs.
-	a.shapeFields = append(a.shapeFields, nil)
 	a.quoteSigs = append(a.quoteSigs, QuoteSig{})
-	a.overloadedQuoteSigs = append(a.overloadedQuoteSigs, nil)
 	a.records = append(a.records, RecordType{})
 	a.enumArgs = append(a.enumArgs, nil)
 	// The built-in enum `Maybe[a] = just a | none end`: covariant and
@@ -460,9 +362,7 @@ func NewTypeArena() *TypeArena {
 // EnumMaybe is the index of the built-in `Maybe` enum declaration.
 const EnumMaybe uint32 = 0
 
-// MakeMaybeEnum returns `Maybe[t]` as an instance of the built-in enum, the
-// form the core checker and its relations use. (MakeMaybe is the old
-// checker's TKMaybe.)
+// MakeMaybeEnum returns `Maybe[t]`, an instance of the built-in enum.
 func (a *TypeArena) MakeMaybeEnum(t TypeId) TypeId {
 	return a.MakeEnum(EnumMaybe, []TypeId{t})
 }
@@ -482,53 +382,24 @@ func (a *TypeArena) Kind(id TypeId) TypeKind {
 	return a.Node(id).Kind
 }
 
-// MakeMaybe returns the canonical TypeId for Maybe[inner]. If a Maybe of
-// the same inner type was constructed before, the existing id is returned.
-func (a *TypeArena) MakeMaybe(inner TypeId) TypeId {
-	return a.intern(TKMaybe, uint32(a.WidenStrLit(inner)), 0, 0)
-}
-
 // MakeList returns the canonical TypeId for [elem].
 func (a *TypeArena) MakeList(elem TypeId) TypeId {
-	return a.intern(TKList, uint32(a.WidenStrLit(elem)), 0, 0)
-}
-
-// MakeDict returns the canonical TypeId for {key: value}.
-func (a *TypeArena) MakeDict(key, value TypeId) TypeId {
-	return a.intern(TKDict, uint32(a.WidenStrLit(key)), uint32(a.WidenStrLit(value)), 0)
-}
-
-// MakeStrLit returns the canonical TypeId for a `str` refined to the literal
-// value named by `name`. It is a subtype of TidStr.
-func (a *TypeArena) MakeStrLit(name NameId) TypeId {
-	return a.intern(TKStrLit, uint32(name), 0, 0)
-}
-
-// StrLitName returns the interned literal value of a TKStrLit type, or
-// (0, false) if id is not a string literal.
-func (a *TypeArena) StrLitName(id TypeId) (NameId, bool) {
-	n := a.Node(id)
-	if n.Kind != TKStrLit {
-		return 0, false
-	}
-	return NameId(n.A), true
-}
-
-// WidenStrLit widens a top-level string-literal refinement to plain `str`;
-// any other type is returned unchanged. Container constructors and unify
-// funnel through this so a literal never escapes the stack slot it was
-// produced on — it stays observable only where a known key is read.
-func (a *TypeArena) WidenStrLit(id TypeId) TypeId {
-	if a.Node(id).Kind == TKStrLit {
-		return TidStr
-	}
-	return id
+	return a.intern(TKList, uint32(elem), 0, 0)
 }
 
 // MakeVar returns the canonical TypeId for the generic type variable v.
 // Two calls with the same TypeVarId always return the same TypeId.
 func (a *TypeArena) MakeVar(v TypeVarId) TypeId {
-	return a.intern(TKVar, uint32(v), 0, 0)
+	// Variable ids are dense, so a slice finds one without hashing.
+	if int(v) < len(a.varIds) && a.varIds[v] != TidNothing {
+		return a.varIds[v]
+	}
+	id := a.intern(TKVar, uint32(v), 0, 0)
+	if int(v) >= len(a.varIds) {
+		a.varIds = append(a.varIds, make([]TypeId, int(v)+1-len(a.varIds))...)
+	}
+	a.varIds[v] = id
+	return id
 }
 
 // MakeRigid returns the canonical TypeId for a rigid (skolem) type
@@ -542,13 +413,6 @@ func (a *TypeArena) MakeRigid(name NameId) TypeId {
 	return a.intern(TKRigid, uint32(name), 0, 0)
 }
 
-// MakeBrand returns a nominal-branded type wrapping underlying.
-// Two calls with the same brandId always return the same TypeId, even if
-// underlying differs (which is a programmer error caught at higher levels).
-func (a *TypeArena) MakeBrand(brandId NameId, underlying TypeId) TypeId {
-	return a.intern(TKBrand, uint32(brandId), uint32(underlying), 0)
-}
-
 // MakeCommand returns the canonical TypeId for an executable command value.
 // argv is the underlying command-list type. stdout/stderr capture modes
 // determine the stack outputs produced by `?`, `;`, and `!`.
@@ -556,54 +420,21 @@ func (a *TypeArena) MakeCommand(argv TypeId, stdout, stderr CommandCaptureMode) 
 	return a.intern(TKCommand, uint32(argv), uint32(stdout), uint32(stderr))
 }
 
-// MakeShape returns the canonical TypeId for a record/shape type with the
-// given fields. The fields are normalized (sorted by Name, duplicate-checked)
-// before lookup so two equivalent shapes always share a TypeId. A duplicate
-// field name is a programmer error and panics.
-func (a *TypeArena) MakeShape(fields []ShapeField) TypeId {
-	// A field never holds a string-literal refinement; widen so shapes stay
-	// keyed on plain value types (and hash-cons identically regardless of
-	// whether a field value arrived as a literal).
-	for i := range fields {
-		if w := a.WidenStrLit(fields[i].Type); w != fields[i].Type {
-			fields = append([]ShapeField(nil), fields...)
-			for j := range fields {
-				fields[j].Type = a.WidenStrLit(fields[j].Type)
-			}
-			break
-		}
-	}
-	normalized := normalizeShapeFields(fields)
-	a.keyBuf = appendShapeKey(a.keyBuf[:0], normalized)
-	if id, ok := a.lookupCons(a.keyBuf); ok {
-		return id
-	}
-	idx := uint32(len(a.shapeFields))
-	a.shapeFields = append(a.shapeFields, normalized)
-	id := a.append(TypeNode{Kind: TKShape, Extra: idx})
-	a.cons[string(a.keyBuf)] = id
-	return id
-}
-
-// MakeUnion returns the canonical TypeId for a structural union of arms.
-// Arms are flattened (nested unions are dissolved), sorted by TypeId, and
+// MakeUnion returns the canonical TypeId for a union of arms. Arms are
+// flattened (nested unions are dissolved), sorted by TypeId, and
 // deduplicated. A union with one arm collapses to that arm.
-//
-// brandId is 0 for an unbranded structural union, or a NameId for a
-// nominally-branded one. Two unions with the same arms but different
-// brand ids are distinct types.
-func (a *TypeArena) MakeUnion(arms []TypeId, brandId NameId) TypeId {
+func (a *TypeArena) MakeUnion(arms []TypeId) TypeId {
 	flat := a.flattenAndCanonicalizeUnion(arms)
-	if len(flat) == 1 && brandId == 0 {
+	if len(flat) == 1 {
 		return flat[0]
 	}
-	a.keyBuf = appendUnionKey(a.keyBuf[:0], flat, brandId)
+	a.keyBuf = appendUnionKey(a.keyBuf[:0], flat)
 	if id, ok := a.lookupCons(a.keyBuf); ok {
 		return id
 	}
 	idx := uint32(len(a.unionMembers))
 	a.unionMembers = append(a.unionMembers, flat)
-	id := a.append(TypeNode{Kind: TKUnion, A: uint32(brandId), Extra: idx})
+	id := a.append(TypeNode{Kind: TKUnion, Extra: idx})
 	a.cons[string(a.keyBuf)] = id
 	return id
 }
@@ -621,58 +452,7 @@ func (a *TypeArena) MakeQuote(sig QuoteSig) TypeId {
 	return id
 }
 
-// MakeOverloadedQuote returns the canonical TypeId for a quote value that
-// still has multiple possible signatures. This is used for bare quoted
-// overloaded words like `(>)`; the concrete arm is selected when context
-// later supplies an expected quote type or `x` applies it to the live stack.
-func (a *TypeArena) MakeOverloadedQuote(sigs []QuoteSig) TypeId {
-	if len(sigs) == 1 {
-		return a.MakeQuote(sigs[0])
-	}
-	a.keyBuf = appendOverloadedQuoteKey(a.keyBuf[:0], sigs)
-	if id, ok := a.lookupCons(a.keyBuf); ok {
-		return id
-	}
-	cp := make([]QuoteSig, len(sigs))
-	copy(cp, sigs)
-	idx := uint32(len(a.overloadedQuoteSigs))
-	a.overloadedQuoteSigs = append(a.overloadedQuoteSigs, cp)
-	id := a.append(TypeNode{Kind: TKOverloadedQuote, Extra: idx})
-	a.cons[string(a.keyBuf)] = id
-	return id
-}
-
-// MakeGrid returns the canonical TypeId for a grid type. schemaIdx of 0
-// denotes "schema unknown" (the V1 default until schema tracking lands).
-func (a *TypeArena) MakeGrid(schemaIdx uint32) TypeId {
-	return a.intern(TKGrid, 0, 0, schemaIdx)
-}
-
-// MakeGridSchemaIdx interns a GridSchema and returns the schema index used by
-// TKGrid / TKGridView / TKGridRow nodes. An empty cols slice maps to the
-// "schema unknown" sentinel (idx 0). Two structurally equal column lists
-// (same names in the same order, same type ids) share an index so that
-// MakeGrid(idx) hash-conses to the same TypeId.
-func (a *TypeArena) MakeGridSchemaIdx(cols []GridSchemaCol) uint32 {
-	if len(cols) == 0 {
-		return 0
-	}
-	a.keyBuf = appendGridSchemaKey(a.keyBuf[:0], cols)
-	if a.gridSchemaCons == nil {
-		a.gridSchemaCons = make(map[string]uint32, 8)
-	}
-	if idx, ok := a.lookupGridSchema(a.keyBuf); ok {
-		return idx
-	}
-	cp := make([]GridSchemaCol, len(cols))
-	copy(cp, cols)
-	idx := uint32(len(a.gridSchemas))
-	a.gridSchemas = append(a.gridSchemas, GridSchema{Columns: cp})
-	a.gridSchemaCons[string(a.keyBuf)] = idx
-	return idx
-}
-
-// MakeGridOf returns the core checker's grid, view or row type (kind is
+// MakeGridOf returns the grid, view or row type (kind is
 // TKGrid, TKGridView or TKGridRow) whose schema is the record type rec: a
 // column is a label, required when it exists, at the type of its cells
 // (ai/type-core-calculus.typ, "Grids are shapes of columns"). The unknown
@@ -681,8 +461,7 @@ func (a *TypeArena) MakeGridOf(kind TypeKind, rec TypeId) TypeId {
 	return a.intern(kind, uint32(rec), 0, 0)
 }
 
-// GridRecord returns the schema record of a core grid, view or row type,
-// or TidNothing for one of the old checker's.
+// GridRecord returns the schema record of a grid, view or row type.
 func (a *TypeArena) GridRecord(t TypeId) TypeId {
 	n := a.Node(t)
 	switch n.Kind {
@@ -690,16 +469,6 @@ func (a *TypeArena) GridRecord(t TypeId) TypeId {
 		return TypeId(n.A)
 	}
 	return TidNothing
-}
-
-// MakeGridView returns the canonical TypeId for a grid-view type.
-func (a *TypeArena) MakeGridView(schemaIdx uint32) TypeId {
-	return a.intern(TKGridView, 0, 0, schemaIdx)
-}
-
-// MakeGridRow returns the canonical TypeId for a grid-row type.
-func (a *TypeArena) MakeGridRow(schemaIdx uint32) TypeId {
-	return a.intern(TKGridRow, 0, 0, schemaIdx)
 }
 
 // MakeRecord returns the canonical TypeId for a dict-kinded type with the
@@ -849,15 +618,6 @@ func (a *TypeArena) MakeAbstract() TypeId {
 	return a.intern(TKAbstract, a.abstractCount, 0, 0)
 }
 
-// ShapeFields returns the fields of a shape type. Caller must not mutate.
-func (a *TypeArena) ShapeFields(id TypeId) []ShapeField {
-	n := a.Node(id)
-	if n.Kind != TKShape {
-		panic("TypeArena.ShapeFields: not a shape")
-	}
-	return a.shapeFields[n.Extra]
-}
-
 // UnionMembers returns the arms of a union type, sorted and deduplicated.
 // Caller must not mutate.
 func (a *TypeArena) UnionMembers(id TypeId) []TypeId {
@@ -875,27 +635,6 @@ func (a *TypeArena) QuoteSig(id TypeId) QuoteSig {
 		panic("TypeArena.QuoteSig: not a quote")
 	}
 	return a.quoteSigs[n.Extra]
-}
-
-// OverloadedQuoteSigs returns the candidate signatures of an overloaded
-// quote type. Caller must not mutate.
-func (a *TypeArena) OverloadedQuoteSigs(id TypeId) []QuoteSig {
-	n := a.Node(id)
-	if n.Kind != TKOverloadedQuote {
-		panic("TypeArena.OverloadedQuoteSigs: not an overloaded quote")
-	}
-	return a.overloadedQuoteSigs[n.Extra]
-}
-
-// GridSchema returns the schema for a grid-family type. The unknown-schema
-// sentinel is returned when no schema is tracked.
-func (a *TypeArena) GridSchema(id TypeId) GridSchema {
-	n := a.Node(id)
-	switch n.Kind {
-	case TKGrid, TKGridView, TKGridRow:
-		return a.gridSchemas[n.Extra]
-	}
-	panic("TypeArena.GridSchema: not a grid-family type")
 }
 
 // intern looks up an atomic composite type and returns its id, allocating
@@ -925,15 +664,12 @@ func (a *TypeArena) Len() int {
 }
 
 // flattenAndCanonicalizeUnion takes a list of arm types and returns a sorted,
-// deduplicated, brand-respecting flat list. Nested unbranded unions are
-// dissolved; branded unions stay as a single arm (their brand is opaque).
+// deduplicated flat list. Nested unions are dissolved.
 func (a *TypeArena) flattenAndCanonicalizeUnion(arms []TypeId) []TypeId {
 	out := make([]TypeId, 0, len(arms))
 	for _, arm := range arms {
-		arm = a.WidenStrLit(arm)
 		n := a.Node(arm)
-		if n.Kind == TKUnion && n.A == 0 {
-			// Unbranded inner union: flatten its arms.
+		if n.Kind == TKUnion {
 			out = append(out, a.unionMembers[n.Extra]...)
 		} else {
 			out = append(out, arm)
@@ -965,26 +701,9 @@ func appendKeyU32(b []byte, v uint32) []byte {
 	return binary.LittleEndian.AppendUint32(b, v)
 }
 
-// appendShapeKey appends the key for a normalized shape.
-func appendShapeKey(b []byte, fields []ShapeField) []byte {
-	b = append(b, 'S')
-	b = appendKeyU32(b, uint32(len(fields)))
-	for _, f := range fields {
-		b = appendKeyU32(b, uint32(f.Name))
-		if f.Optional {
-			b = append(b, 1)
-		} else {
-			b = append(b, 0)
-		}
-		b = appendKeyU32(b, uint32(f.Type))
-	}
-	return b
-}
-
 // appendUnionKey appends the key for a flattened, sorted union.
-func appendUnionKey(b []byte, arms []TypeId, brandId NameId) []byte {
+func appendUnionKey(b []byte, arms []TypeId) []byte {
 	b = append(b, 'U')
-	b = appendKeyU32(b, uint32(brandId))
 	b = appendKeyU32(b, uint32(len(arms)))
 	for _, arm := range arms {
 		b = appendKeyU32(b, uint32(arm))
@@ -1006,18 +725,6 @@ func appendRecordKey(b []byte, fields []RecordField, rest RecordField) []byte {
 	return b
 }
 
-// appendGridSchemaKey appends the key for a grid schema. Order is
-// significant — grids carry column order — so columns are not sorted.
-func appendGridSchemaKey(b []byte, cols []GridSchemaCol) []byte {
-	b = append(b, 'G')
-	b = appendKeyU32(b, uint32(len(cols)))
-	for _, c := range cols {
-		b = appendKeyU32(b, uint32(c.Name))
-		b = appendKeyU32(b, uint32(c.Type))
-	}
-	return b
-}
-
 // appendQuoteKey appends the key for a quote signature.
 func appendQuoteKey(b []byte, sig QuoteSig) []byte {
 	b = append(b, 'Q')
@@ -1034,58 +741,11 @@ func appendQuoteKey(b []byte, sig QuoteSig) []byte {
 	} else {
 		b = append(b, 0)
 	}
-	b = appendKeyU32(b, uint32(len(sig.Bindings)))
-	if len(sig.Bindings) > 0 {
-		names := make([]int, 0, len(sig.Bindings))
-		for name := range sig.Bindings {
-			names = append(names, int(name))
-		}
-		sort.Ints(names)
-		for _, name := range names {
-			b = appendKeyU32(b, uint32(name))
-			b = appendKeyU32(b, uint32(sig.Bindings[NameId(name)]))
-		}
-	}
-	b = appendKeyU32(b, uint32(len(sig.Generics)))
-	for _, g := range sig.Generics {
-		b = appendKeyU32(b, uint32(g))
-	}
 	return b
-}
-
-// appendOverloadedQuoteKey appends the key for an overload set. Candidate
-// order is significant: overload dispatch is most-specific-first with
-// source/table order as the deterministic fallback.
-func appendOverloadedQuoteKey(b []byte, sigs []QuoteSig) []byte {
-	b = append(b, 'O')
-	b = appendKeyU32(b, uint32(len(sigs)))
-	for _, sig := range sigs {
-		b = appendQuoteKey(b, sig)
-	}
-	return b
-}
-
-// normalizeShapeFields returns a sorted copy of fields with duplicate-name
-// detection. Panics on duplicate names — duplicate fields in a shape literal
-// is a static error and should be caught higher up; reaching here is a bug.
-func normalizeShapeFields(fields []ShapeField) []ShapeField {
-	out := make([]ShapeField, len(fields))
-	copy(out, fields)
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j-1].Name > out[j].Name; j-- {
-			out[j-1], out[j] = out[j], out[j-1]
-		}
-	}
-	for i := 1; i < len(out); i++ {
-		if out[i-1].Name == out[i].Name {
-			panic("normalizeShapeFields: duplicate field name")
-		}
-	}
-	return out
 }
 
 // NameId identifies an interned name (built-in name, user definition, field
-// name, brand, type variable name). Comparison is integer equality.
+// name, type variable name). Comparison is integer equality.
 type NameId uint32
 
 // Reserved name ids. Index 0 is the empty name and never returned by Intern.
@@ -1100,22 +760,24 @@ const (
 // NameTable interns strings into NameIds. Within a single checking session,
 // every distinct identifier maps to a unique id.
 type NameTable struct {
-	// parent is the frozen table this one is an overlay of, or nil.
+	// parent is the frozen table this one is an overlay of, or nil. An
+	// overlay holds only its own names: ids below base are the parent's.
 	parent *NameTable
+	base   NameId
 	ids    map[string]NameId
 	names  []string
 }
 
 // Clone returns a name table with the same names that grows independently.
 func (t *NameTable) Clone() *NameTable {
-	return &NameTable{parent: t.parent, ids: maps.Clone(t.ids), names: slices.Clone(t.names)}
+	return &NameTable{parent: t.parent, base: t.base, ids: maps.Clone(t.ids), names: slices.Clone(t.names)}
 }
 
 // Overlay returns a name table that starts with t's names and grows on its
 // own without copying them, as TypeArena.Overlay. t must not change
 // afterwards.
 func (t *NameTable) Overlay() *NameTable {
-	return &NameTable{parent: t, ids: make(map[string]NameId, 32), names: slices.Clip(t.names)}
+	return &NameTable{parent: t, base: t.Len(), ids: make(map[string]NameId)}
 }
 
 // NewNameTable constructs an empty name table.
@@ -1141,10 +803,15 @@ func (t *NameTable) Intern(s string) NameId {
 			return id
 		}
 	}
-	id := NameId(len(t.names))
+	id := t.Len()
 	t.names = append(t.names, s)
 	t.ids[s] = id
 	return id
+}
+
+// Len is one more than the largest NameId in the table.
+func (t *NameTable) Len() NameId {
+	return t.base + NameId(len(t.names))
 }
 
 // Lookup returns the NameId for s if it has been interned.
@@ -1159,19 +826,11 @@ func (t *NameTable) Lookup(s string) (NameId, bool) {
 
 // Name returns the string for an id. Panics on out-of-range ids.
 func (t *NameTable) Name(id NameId) string {
-	if int(id) >= len(t.names) {
+	if id < t.base {
+		return t.parent.Name(id)
+	}
+	if id >= t.Len() {
 		panic("NameTable.Name: id out of range")
 	}
-	return t.names[id]
-}
-
-// IsReservedTypeName reports whether name is a built-in type name that
-// cannot be shadowed by a user `type` declaration.
-func IsReservedTypeName(name string) bool {
-	switch name {
-	case "int", "float", "str", "bool", "bytes", "none", "null",
-		"path", "datetime", "Maybe", "Grid", "GridView", "GridRow":
-		return true
-	}
-	return false
+	return t.names[id-t.base]
 }

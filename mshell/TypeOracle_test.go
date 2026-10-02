@@ -232,7 +232,7 @@ func (o *oracleTypes) fromSexp(x sexp, binders []TypeId) (TypeId, error) {
 			}
 			members[i] = t
 		}
-		return a.MakeUnion(members, NameNone), nil
+		return a.MakeUnion(members), nil
 	case "quote":
 		if len(args) != 2 || !args[0].isList {
 			return TidNothing, fmt.Errorf("bad quote %s", x)

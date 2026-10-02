@@ -92,9 +92,9 @@
 
 # extend widens the receiver to generic on typeof mismatch.
 "-- extend widen --" wl
-[| x; 1; 2 |] wg1!
+[| x; 1; 2 |] "x" (as int | float) updateCol wg1!
 [| x; 3.5; 4.5 |] wg2!
-@wg1 @wg2 extend dropped!
+@wg1 @wg2 extend drop
 @wg1 "x" gridCol str wl
 @wg1 len str wl
 
@@ -104,7 +104,7 @@
 [| x; 100; 200; 300 |] vg!
 @vg (:x? 200 >=) filter vrecv!
 [| x; 1; 2; 3; 4 |] addn!
-@vrecv @addn extend dropped!
+@vrecv @addn extend drop
 @vrecv "x" gridCol str wl
 @vrecv len str wl
 @vg "x" gridCol str wl
@@ -122,6 +122,6 @@
   x { "unit": "ft", "precision": 0.1 };
   2
 |] em2!
-@em1 @em2 extend dropped!
+@em1 @em2 extend drop
 @em1 gridMeta? str wl
 @em1 "x" gridColMeta? str wl

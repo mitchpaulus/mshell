@@ -2,32 +2,28 @@ package main
 
 import "testing"
 
-// Phase 10 step 1 tests: type-expression parser.
+// Tests of the type-expression parser and the checker's resolver.
 //
 // Each test lexes a source snippet representing only a type expression
-// (no surrounding program), feeds the resulting tokens to ParseTypeExpr,
-// and inspects the produced TypeId.
+// (no surrounding program), feeds the resulting tokens to parseTypeExpr,
+// and inspects the resolved TypeId.
 
-func parseTypeExprSrc(t *testing.T, c *Checker, src string) (TypeId, []TypeError) {
+func parseTypeExprSrc(t *testing.T, c *coreChecker, src string) (TypeId, []TypeError) {
 	t.Helper()
 	l := NewLexer(src, nil)
 	p := NewMShellParser(l)
 	p.ensureInitialized()
 	item, errs := p.parseTypeExpr()
-	preLen := len(c.errors)
-	id := c.resolveTypeExpr(item, nil)
-	// Surface resolution-time errors emitted into the checker too, so
-	// tests checking for unknown-type errors still see them.
-	if len(c.errors) > preLen {
-		errs = append(errs, c.errors[preLen:]...)
-		c.errors = c.errors[:preLen]
-	}
+	id := c.res.resolveType(item)
+	// Resolution errors too, so tests of unknown types see them.
+	errs = append(errs, c.res.errs...)
+	c.res.errs = c.res.errs[:0]
 	return id, errs
 }
 
-func newCheckerForTypeExpr(t *testing.T) *Checker {
+func newCheckerForTypeExpr(t *testing.T) *coreChecker {
 	t.Helper()
-	return NewChecker(NewTypeArena(), NewNameTable())
+	return NewCoreBase(nil, nil).newChecker()
 }
 
 func TestTypeExprPrimitives(t *testing.T) {
@@ -88,7 +84,7 @@ func TestTypeExprMaybe(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("errs %+v", errs)
 	}
-	want := c.arena.MakeMaybe(TidInt)
+	want := c.arena.MakeMaybeEnum(TidInt)
 	if got != want {
 		t.Fatalf("got %d, want %d", got, want)
 	}
@@ -108,7 +104,7 @@ func TestTypeExprDict(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("errs %+v", errs)
 	}
-	want := c.arena.MakeDict(TidStr, TidInt)
+	want := c.arena.MakeStrDict(TidInt)
 	if got != want {
 		t.Fatalf("got %d, want %d", got, want)
 	}
@@ -120,10 +116,10 @@ func TestTypeExprShape(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("errs %+v", errs)
 	}
-	want := c.arena.MakeShape([]ShapeField{
-		{Name: c.names.Intern("a"), Type: TidInt},
-		{Name: c.names.Intern("b"), Type: TidStr},
-	})
+	want := c.arena.MakeRecord([]RecordField{
+		{Name: c.names.Intern("a"), Status: FieldRequired, Type: TidInt},
+		{Name: c.names.Intern("b"), Status: FieldRequired, Type: TidStr},
+	}, RecordField{Status: FieldOpen})
 	if got != want {
 		t.Fatalf("got %d, want %d", got, want)
 	}
@@ -135,7 +131,7 @@ func TestTypeExprEmptyShape(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("errs %+v", errs)
 	}
-	want := c.arena.MakeShape(nil)
+	want := c.arena.MakeRecord(nil, RecordField{Status: FieldOpen})
 	if got != want {
 		t.Fatalf("got %d, want %d", got, want)
 	}
@@ -163,7 +159,7 @@ func TestTypeExprUnion(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("errs %+v", errs)
 	}
-	want := c.arena.MakeUnion([]TypeId{TidInt, TidStr}, NameNone)
+	want := c.arena.MakeUnion([]TypeId{TidInt, TidStr})
 	if got != want {
 		t.Fatalf("got %d, want %d", got, want)
 	}
@@ -172,7 +168,7 @@ func TestTypeExprUnion(t *testing.T) {
 func TestTypeExprUnionThreeArms(t *testing.T) {
 	c := newCheckerForTypeExpr(t)
 	got, _ := parseTypeExprSrc(t, c, "int | str | bool")
-	want := c.arena.MakeUnion([]TypeId{TidInt, TidStr, TidBool}, NameNone)
+	want := c.arena.MakeUnion([]TypeId{TidInt, TidStr, TidBool})
 	if got != want {
 		t.Fatalf("got %d, want %d", got, want)
 	}
@@ -230,10 +226,14 @@ func TestTypeExprGridFamily(t *testing.T) {
 
 func TestTypeExprUserDeclaredType(t *testing.T) {
 	c := newCheckerForTypeExpr(t)
-	body := c.arena.MakeUnion([]TypeId{TidInt, TidStr}, NameNone)
-	declared, ok := c.DeclareType("Result", body)
-	if !ok {
-		t.Fatalf("DeclareType failed: %+v", c.Errors())
+	file, err := NewMShellParser(NewLexer("type Result = int | str", nil)).ParseFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.declareAll(file.Items, map[string]Token{})
+	declared, ok := c.res.aliases[c.names.Intern("Result")]
+	if !ok || len(c.errs) > 0 {
+		t.Fatalf("declaring Result failed: %+v", c.errs)
 	}
 	got, errs := parseTypeExprSrc(t, c, "Result")
 	if len(errs) != 0 {
@@ -255,7 +255,7 @@ func TestTypeExprUnknownIdentifierErrors(t *testing.T) {
 func TestTypeExprListOfMaybes(t *testing.T) {
 	c := newCheckerForTypeExpr(t)
 	got, _ := parseTypeExprSrc(t, c, "[Maybe[int]]")
-	want := c.arena.MakeList(c.arena.MakeMaybe(TidInt))
+	want := c.arena.MakeList(c.arena.MakeMaybeEnum(TidInt))
 	if got != want {
 		t.Fatalf("got %d, want %d", got, want)
 	}
@@ -264,7 +264,7 @@ func TestTypeExprListOfMaybes(t *testing.T) {
 func TestTypeExprUnionInList(t *testing.T) {
 	c := newCheckerForTypeExpr(t)
 	got, _ := parseTypeExprSrc(t, c, "[int | str]")
-	want := c.arena.MakeList(c.arena.MakeUnion([]TypeId{TidInt, TidStr}, NameNone))
+	want := c.arena.MakeList(c.arena.MakeUnion([]TypeId{TidInt, TidStr}))
 	if got != want {
 		t.Fatalf("got %d, want %d", got, want)
 	}
@@ -281,7 +281,7 @@ func TestTypeExprConsumedCount(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("errs %+v", errs)
 	}
-	if id := c.resolveTypeExpr(item, nil); id != TidInt {
+	if id := c.res.resolveType(item); id != TidInt {
 		t.Fatalf("id %d, want TidInt", id)
 	}
 	if p.curr.Type != LITERAL || p.curr.Lexeme != "extra" {

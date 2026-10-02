@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // Stack slots, signatures and the builtin table of the core checker
 // (ai/type-core-calculus.typ). Everything here is small and held by value:
 // a slot is 16 bytes, a stack is one []coreSlot, and the builtin table is
@@ -92,11 +94,6 @@ func newCoreSig(ar *TypeArena, p coreSigParts) coreSig {
 type coreTable struct {
 	byName  [][]coreSig
 	byToken [][]coreSig
-	// partialName and partialToken mark words whose entries cover only some
-	// of what the runtime accepts, while the table is being ported: a call
-	// that fits none of them is not checked yet, rather than an error.
-	partialName  map[NameId]string
-	partialToken map[TokenType]string
 	// index is the indexer `:n:`; slice is `n:`, `:n`, `a:b` and a list of
 	// indexers, which concatenates.
 	index, slice []coreSig
@@ -104,6 +101,10 @@ type coreTable struct {
 	// urlEncodeLists are the list types a dict given to urlEncode may hold
 	// (TypeCoreDict.go).
 	urlEncodeLists []TypeId
+	// completion is ([str] -- CompletionResult): every def with `complete`
+	// metadata must be below it, since completionDefs gives its body as a
+	// quote of that type.
+	completion TypeId
 }
 
 func (t *coreTable) setName(id NameId, sigs []coreSig) {
@@ -237,14 +238,37 @@ func typeMentions(ar *TypeArena, t TypeId, kind TypeKind) bool {
 	case TKCommand:
 		return typeMentions(ar, TypeId(n.A), kind)
 	case TKGrid, TKGridView, TKGridRow:
-		if n.A != 0 {
-			return typeMentions(ar, TypeId(n.A), kind)
-		}
-		for _, col := range ar.gridSchemas[n.Extra].Columns {
-			if typeMentions(ar, col.Type, kind) {
-				return true
-			}
-		}
+		return typeMentions(ar, TypeId(n.A), kind)
 	}
 	return false
+}
+
+// formatCoreSig writes sig as a def would declare it: generics by name, and
+// `new` on the outputs that are always new.
+func formatCoreSig(arena *TypeArena, names *NameTable, rel *Relations, sig *coreSig) string {
+	named := make([]TypeId, len(sig.gens))
+	for g, name := range sig.gens {
+		named[g] = arena.MakeRigid(name)
+	}
+	var sb strings.Builder
+	sb.WriteByte('(')
+	for i, t := range sig.ins {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(FormatType(arena, names, rel.SubstParams(t, named)))
+	}
+	sb.WriteString(" --")
+	if sig.diverges {
+		sb.WriteString(" never")
+	}
+	for j, t := range sig.outs {
+		sb.WriteByte(' ')
+		if sig.newOut&(1<<j) != 0 {
+			sb.WriteString("new ")
+		}
+		sb.WriteString(FormatType(arena, names, rel.SubstParams(t, named)))
+	}
+	sb.WriteByte(')')
+	return sb.String()
 }

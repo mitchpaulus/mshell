@@ -8,9 +8,8 @@ import (
 	"strings"
 )
 
-// The core checker: the checker described in ai/type-core-calculus.typ,
-// built beside the old one and selected by MSH_CHECKER=core
-// (ai/type-system-plan.md, stage 3).
+// The type checker: the checker described in ai/type-core-calculus.typ
+// (the "core checker" of ai/type-system-plan.md).
 //
 // It walks the parse tree with a concrete type stack of slots, each a type
 // and a fresh mark. A def body is one unit and the top-level script is
@@ -42,7 +41,8 @@ type CoreBase struct {
 }
 
 // NewCoreBase builds the base: the builtin table, the signatures of
-// stdlibDefs (their bodies are not checked, as with the old checker), and
+// stdlibDefs (their bodies are not checked: their signatures are trusted,
+// like the builtins'), and
 // the startup files' declarations, decls.
 func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBase {
 	arena, names := NewTypeArena(), NewNameTable()
@@ -74,27 +74,57 @@ func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBa
 			continue
 		}
 		parts := res.resolveSig(def.Inputs, def.Outputs)
+		// A startup file's signature that does not resolve is reported with
+		// its file, as its declarations are: its callers would otherwise see
+		// a type with nothing in it.
+		for _, e := range res.errs {
+			e.Pos = withFile(e.Pos, def.File)
+			b.declErrs = append(b.declErrs, e)
+		}
 		res.errs = res.errs[:0]
 		sig := newCoreSig(arena, parts)
 		sig.freeOut = outputOnlyGeneric(arena, parts)
 		table.setName(id, []coreSig{sig})
+		if e := completionSigError(arena, names, res.rel, table, def, &sig); e != nil {
+			e.Pos = withFile(e.Pos, def.File)
+			b.declErrs = append(b.declErrs, *e)
+		}
 	}
 	b.aliases = res.aliases
 	return b
 }
 
-// CoreTypeCheckProgram checks file with the core checker, with the startup
-// files' definitions and declarations. It returns the formatted errors, and
-// whether there were none.
+// completionSigError checks a def with `complete` metadata: completionDefs
+// gives its body as a quote of type ([str] -- CompletionResult), and the
+// completion engine runs it on the words typed so far, so its signature
+// must be below that type.
+func completionSigError(arena *TypeArena, names *NameTable, rel *Relations, table *coreTable, def *MShellDefinition, sig *coreSig) *TypeError {
+	if cmds, err := completionMetadataNames(*def); err != nil || len(cmds) == 0 {
+		return nil
+	}
+	q := arena.MakeQuote(QuoteSig{Inputs: sig.ins, Outputs: sig.outs, Diverges: sig.diverges})
+	if rel.Sub(q, table.completion) {
+		return nil
+	}
+	return &TypeError{Kind: TErrTypeMismatch, Pos: def.NameToken,
+		Hint: "the completion definition '" + def.Name + "' is run on the words typed so far and must leave a list of strings" +
+			" or a completion dict: its signature must be below " + FormatType(arena, names, table.completion) +
+			", and it is " + FormatType(arena, names, q)}
+}
+
+// CoreTypeCheckProgram checks file, with the startup files' definitions
+// and declarations. It returns the formatted errors and `dbg` snapshots,
+// and whether there were no errors.
 func CoreTypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition, decls []MShellParseItem) ([]string, bool) {
 	return NewCoreBase(stdlibDefs, decls).Check(file)
 }
 
-// Check checks file in a new overlay of the base. Errors in the startup
-// files' declarations come first, with their file.
-func (b *CoreBase) Check(file *MShellFile) ([]string, bool) {
-	errs, arena, names := b.Errors(file)
-	out := make([]string, 0, len(b.declErrs)+len(errs))
+// Check checks file in a new overlay of the base, and formats its errors
+// and its `dbg` snapshots; ok is whether there were no errors. Errors in
+// the startup files' declarations come first, with their file.
+func (b *CoreBase) Check(file *MShellFile) (out []string, ok bool) {
+	diags, arena, names := b.Diagnostics(file)
+	out = make([]string, 0, len(b.declErrs)+len(diags))
 	for _, e := range b.declErrs {
 		where := ""
 		if e.Pos.TokenFile != nil {
@@ -102,24 +132,38 @@ func (b *CoreBase) Check(file *MShellFile) ([]string, bool) {
 		}
 		out = append(out, where+e.Format(b.arena, b.names))
 	}
-	for _, e := range errs {
+	ok = len(b.declErrs) == 0
+	for _, e := range diags {
+		switch {
+		case e.Severity == SeverityError:
+			ok = false
+		case e.Kind != TErrDebugDump:
+			continue
+		}
 		out = append(out, e.Format(arena, names))
 	}
-	return out, len(out) == 0
+	return out, ok
 }
 
 // Errors checks file in a new overlay of the base and returns its errors,
 // with the arena and names that format them.
 func (b *CoreBase) Errors(file *MShellFile) ([]TypeError, *TypeArena, *NameTable) {
-	c := b.newChecker()
-	c.checkFile(file)
-	var out []TypeError
-	for _, e := range c.errs {
+	all, arena, names := b.Diagnostics(file)
+	out := all[:0]
+	for _, e := range all {
 		if e.Severity == SeverityError {
 			out = append(out, e)
 		}
 	}
-	return out, c.arena, c.names
+	return out, arena, names
+}
+
+// Diagnostics is Errors with the informational diagnostics too (a `?`
+// that always fails), for the language server.
+func (b *CoreBase) Diagnostics(file *MShellFile) ([]TypeError, *TypeArena, *NameTable) {
+	c := b.newChecker()
+	c.checkFile(file)
+	return c.errs, c.arena, c.names
 }
 
 func (b *CoreBase) newChecker() *coreChecker {
@@ -150,15 +194,69 @@ const (
 // coreVar is a variable of the current scope. Its type is a unification
 // variable fixed by the first store (design doc, "Variable scopes").
 type coreVar struct {
-	gen       uint32 // the scope generation this entry belongs to
-	t         TypeId
-	stored    bool
-	firstLoad Token
-	loaded    bool
+	gen    uint32 // the scope generation this entry belongs to
+	t      TypeId
+	stored bool
+	loaded bool
 	// set is whether every path so far stored the variable, and unsetRead
 	// whether a read without that was recorded (TypeCoreAssign.go).
 	set       bool
 	unsetRead bool
+}
+
+// coreDbg is a `dbg` word, the types on the stack there (bottom first),
+// and the variables set there.
+type coreDbg struct {
+	tok   Token
+	stack []TypeId
+	vars  []NameId
+}
+
+func (c *coreChecker) recordDbg(tok Token) {
+	d := coreDbg{tok: tok, stack: make([]TypeId, 0, len(c.stack)-c.floor)}
+	for _, s := range c.stack[c.floor:] {
+		d.stack = append(d.stack, s.t)
+	}
+	for _, name := range c.unitVars {
+		if c.vars[name].stored {
+			d.vars = append(d.vars, name)
+		}
+	}
+	c.dbgs = append(c.dbgs, d)
+}
+
+// formatDbg writes a `dbg` snapshot with the unit's final types: the stack,
+// top first, and the variables by name.
+func (c *coreChecker) formatDbg(d coreDbg) string {
+	var sb strings.Builder
+	sb.WriteString("\n  stack (top first):")
+	if len(d.stack) == 0 {
+		sb.WriteString(" <empty>")
+	}
+	for i := len(d.stack) - 1; i >= 0; i-- {
+		sb.WriteString("\n    " + c.format(d.stack[i]))
+	}
+	sb.WriteString("\n  vars:")
+	if len(d.vars) == 0 {
+		sb.WriteString(" <none>")
+	}
+	slices.SortFunc(d.vars, func(x, y NameId) int { return strings.Compare(c.names.Name(x), c.names.Name(y)) })
+	for _, name := range d.vars {
+		sb.WriteString("\n    " + c.names.Name(name) + " : " + c.format(c.vars[name].t))
+	}
+	return sb.String()
+}
+
+// coreUnwrap is a `?` and the type of what it unwraps.
+type coreUnwrap struct {
+	tok Token
+	t   TypeId
+}
+
+// alwaysNone reports whether t, solved, is Maybe[⊥]: only none.
+func (c *coreChecker) alwaysNone(t TypeId) bool {
+	n := c.arena.nodes[c.subst.Apply(c.arena, t)]
+	return n.Kind == TKEnum && n.A == EnumMaybe && c.arena.enumArgs[n.Extra][0] == TidBottom
 }
 
 // coreStore is a store, checked again when its unit is solved.
@@ -200,6 +298,15 @@ type coreChecker struct {
 	vars     []coreVar
 	varGen   uint32
 	unitVars []NameId
+	// firstLoads is the unit's first read of each variable, reported
+	// when the variable is never stored.
+	firstLoads []Token
+	// unwraps are the unit's `?` words and the types they unwrap, to
+	// point out the ones that always fail once the unit is solved.
+	unwraps []coreUnwrap
+	// dbgs are the unit's `dbg` words, with the stack and the variables
+	// set there, reported once the unit is solved.
+	dbgs []coreDbg
 	stores   []coreStore
 
 	// saved holds stacks saved for branches, as a stack of slot runs.
@@ -224,7 +331,7 @@ type coreChecker struct {
 	// mentionsVar caches, per TypeId, whether a type mentions a
 	// unification variable: 0 not yet known, 1 no, 2 yes.
 	mentionsVar []uint8
-	genBuf      []TypeId
+	genBuf      []TypeId // the generics stack (instantiate)
 	// parts holds the unit's partly new marks (TypeCorePartial.go).
 	parts []corePart
 	// litLists holds the unit's list literals of string literals.
@@ -263,6 +370,9 @@ func (c *coreChecker) checkFile(file *MShellFile) {
 		c.takeResolveErrors()
 		sig := newCoreSig(c.arena, parts)
 		c.defs[c.names.Intern(def.Name)] = &sig
+		if e := completionSigError(c.arena, c.names, c.rel, c.table, def, &sig); e != nil {
+			c.errs = append(c.errs, *e)
+		}
 	}
 	for i := range file.Definitions {
 		c.checkDef(&file.Definitions[i])
@@ -282,6 +392,9 @@ func (c *coreChecker) takeResolveErrors() {
 func (c *coreChecker) beginUnit() {
 	c.varGen++
 	c.unitVars = c.unitVars[:0]
+	c.firstLoads = c.firstLoads[:0]
+	c.unwraps = c.unwraps[:0]
+	c.dbgs = c.dbgs[:0]
 	c.stores = c.stores[:0]
 	c.deferred = c.deferred[:0]
 	c.parts = c.parts[:0]
@@ -346,10 +459,18 @@ func (c *coreChecker) finishUnit() {
 	}
 	c.finishEscapes()
 	c.finishAssign()
-	for _, name := range c.unitVars {
-		v := &c.vars[name]
-		if v.loaded && !v.stored {
-			c.errs = append(c.errs, TypeError{Kind: TErrUnknownIdentifier, Pos: v.firstLoad, Name: v.firstLoad.Lexeme})
+	for _, u := range c.unwraps {
+		if c.alwaysNone(u.t) {
+			c.errs = append(c.errs, TypeError{Kind: TErrUnwrapAlwaysFails, Severity: SeverityInfo, Pos: u.tok,
+				Hint: "'?' unwraps a value that can only be none (a key the dict's type says is absent, or `none` itself); this fails at run time"})
+		}
+	}
+	for _, d := range c.dbgs {
+		c.errs = append(c.errs, TypeError{Kind: TErrDebugDump, Severity: SeverityInfo, Pos: d.tok, Hint: c.formatDbg(d)})
+	}
+	for _, tok := range c.firstLoads {
+		if !c.vars[c.names.Intern(strings.TrimPrefix(tok.Lexeme, "@"))].stored {
+			c.errs = append(c.errs, TypeError{Kind: TErrUnknownIdentifier, Pos: tok, Name: tok.Lexeme})
 		}
 	}
 }
@@ -367,6 +488,8 @@ func (c *coreChecker) checkDef(def *MShellDefinition) {
 func (c *coreChecker) checkBody(def *MShellDefinition, sig *coreSig) []TypeId {
 	c.beginUnit()
 	c.curDef, c.selfCalled = sig, false
+	c.res.bodyGens = sig.gens
+	defer func() { c.res.bodyGens = nil }()
 	c.exitNew, c.exits = ^uint64(0), 0
 	c.exitShared = append(c.exitShared[:0], make([]Token, len(sig.outs))...)
 	rigid := make([]TypeId, len(sig.gens))
@@ -426,8 +549,8 @@ func (c *coreChecker) checkOutputs(def *MShellDefinition, outs []TypeId) {
 	c.exit(Token{})
 }
 
-// unsupported reports a construct the core checker does not check yet,
-// and stops checking the unit.
+// unsupported reports a construct the checker has no rule for, and stops
+// checking the unit.
 func (c *coreChecker) unsupported(tok Token, what string) {
 	c.errs = append(c.errs, TypeError{Kind: TErrCoreUnsupported, Pos: tok, Hint: what})
 	c.abandoned = true
@@ -587,6 +710,9 @@ func (c *coreChecker) token(tok Token) {
 		if c.commandWord(tok) {
 			return
 		}
+		if tok.Type == QUESTION && len(c.stack) > c.floor {
+			c.unwraps = append(c.unwraps, coreUnwrap{tok: tok, t: c.stack[len(c.stack)-1].t})
+		}
 		if sigs := c.table.token(tok.Type); sigs != nil {
 			c.call(sigs, tok)
 			return
@@ -600,6 +726,9 @@ func (c *coreChecker) token(tok Token) {
 func (c *coreChecker) word(tok Token) {
 	if c.shuffle(tok) {
 		return
+	}
+	if tok.Lexeme == "dbg" {
+		c.recordDbg(tok)
 	}
 	if tok.Lexeme == "return" {
 		c.doReturn(tok)
@@ -782,8 +911,10 @@ func (c *coreChecker) doReturn(tok Token) {
 // Variables
 
 func (c *coreChecker) varOf(name NameId) *coreVar {
-	for int(name) >= len(c.vars) {
-		c.vars = append(c.vars, coreVar{})
+	if int(name) >= len(c.vars) {
+		// One allocation covers every name interned so far.
+		n := max(int(name)+1, int(c.names.Len())+16)
+		c.vars = slices.Grow(c.vars, n-len(c.vars))[:n]
 	}
 	v := &c.vars[name]
 	if v.gen != c.varGen {
@@ -797,7 +928,8 @@ func (c *coreChecker) load(tok Token) {
 	name := c.names.Intern(strings.TrimPrefix(tok.Lexeme, "@"))
 	v := c.varOf(name)
 	if !v.loaded {
-		v.loaded, v.firstLoad = true, tok
+		v.loaded = true
+		c.firstLoads = append(c.firstLoads, tok)
 	}
 	c.daRead(tok, name, v)
 	c.push(v.t, false)
@@ -984,6 +1116,18 @@ func (c *coreChecker) matchSub(got, want TypeId, fresh bool) bool {
 	if wn.Kind == TKAlias && gn.Kind != TKAlias && gn.Kind != TKVar {
 		return c.matchSub(got, ar.aliases[wn.A].Body, fresh)
 	}
+	// A union is entered only by the kind of the other side: its members
+	// have distinct kinds, so at most one can hold got, and taking it is no
+	// guess (`[] as Json` matches `[T]` against `[Json]`).
+	if wn.Kind == TKUnion && gn.Kind != TKUnion && gn.Kind != TKVar {
+		if k, ok := c.rel.kindOf(got); ok {
+			for _, m := range ar.unionMembers[wn.Extra] {
+				if c.rel.hasKind(k, m) {
+					return c.matchSub(got, m, fresh)
+				}
+			}
+		}
+	}
 	if gn.Kind == TKVar || wn.Kind == TKVar || gn.Kind != wn.Kind {
 		return c.uni.Unify(got, want)
 	}
@@ -1098,7 +1242,7 @@ func (c *coreChecker) call(sigs []coreSig, tok Token) {
 			c.need(arity, tok)
 		}
 	}
-	if len(sigs) == 1 && c.partial(tok) == "" {
+	if len(sigs) == 1 {
 		c.apply(&sigs[0], tok)
 		return
 	}
@@ -1114,10 +1258,6 @@ func (c *coreChecker) call(sigs []coreSig, tok Token) {
 	case 1:
 		c.apply(&sigs[fit], tok)
 	case 0:
-		if what := c.partial(tok); what != "" {
-			c.unsupported(tok, what)
-			return
-		}
 		if c.distribute(sigs, tok) {
 			return
 		}
@@ -1262,31 +1402,6 @@ func (c *coreChecker) distribute(sigs []coreSig, tok Token) bool {
 	return true
 }
 
-// partial names what a word's table entry does not cover yet, or "".
-func (c *coreChecker) partial(tok Token) string {
-	if tok.Type == LITERAL {
-		if id, ok := c.names.Lookup(tok.Lexeme); ok {
-			return c.table.partialName[id]
-		}
-		return ""
-	}
-	// The token forms not covered yet all take a list (a command) or a
-	// quote (a redirected quote).
-	what := c.table.partialToken[tok.Type]
-	if what == "" {
-		return ""
-	}
-	for i := max(c.floor, len(c.stack)-2); i < len(c.stack); i++ {
-		if c.waiting(c.stack[i]) != nil {
-			return what
-		}
-		switch c.arena.nodes[c.subst.Apply(c.arena, c.stack[i].t)].Kind {
-		case TKList, TKQuote:
-			return what
-		}
-	}
-	return ""
-}
 
 // topSlots returns the slots a set of candidates would read.
 func (c *coreChecker) topSlots(sigs []coreSig) []coreSlot {
@@ -1325,14 +1440,18 @@ func (c *coreChecker) fitsIfNew(sigs []coreSig) bool {
 	return fits
 }
 
-// instantiate makes new unification variables for sig's generics.
-func (c *coreChecker) instantiate(sig *coreSig) []TypeId {
-	c.genBuf = c.genBuf[:0]
+// instantiate makes new unification variables for sig's generics, on the
+// generics stack: they stay valid, even when a quote body checked in
+// between instantiates again, until release(mark).
+func (c *coreChecker) instantiate(sig *coreSig) (gens []TypeId, mark int) {
+	mark = len(c.genBuf)
 	for range sig.gens {
 		c.genBuf = append(c.genBuf, c.subst.FreshVar(c.arena))
 	}
-	return c.genBuf
+	return c.genBuf[mark:len(c.genBuf):len(c.genBuf)], mark
 }
+
+func (c *coreChecker) releaseGens(mark int) { c.genBuf = c.genBuf[:mark] }
 
 // argsFit reports whether the stack's top fits sig's inputs, unifying as
 // it goes; the caller rolls back.
@@ -1341,7 +1460,8 @@ func (c *coreChecker) argsFit(sig *coreSig) bool {
 	if len(c.stack)-c.floor < n {
 		return false
 	}
-	gens := c.instantiate(sig)
+	gens, mark := c.instantiate(sig)
+	defer c.releaseGens(mark)
 	base := len(c.stack) - n
 	ok := true
 	c.eachInput(sig, gens, c.stackArg(base), func(i int, want TypeId) {
@@ -1446,7 +1566,8 @@ func (c *coreChecker) apply(sig *coreSig, tok Token) {
 	if !c.need(n, tok) {
 		return
 	}
-	gens := append([]TypeId(nil), c.instantiate(sig)...)
+	gens, mark := c.instantiate(sig)
+	defer c.releaseGens(mark)
 	base := len(c.stack) - n
 	c.eachInput(sig, gens, c.stackArg(base), func(i int, want TypeId) {
 		if s := c.stack[base+i]; c.waiting(s) != nil {
@@ -1554,7 +1675,7 @@ func (c *coreChecker) ascribe(a *MShellAsCast) {
 func (c *coreChecker) formatString(fs *MShellParseFormatString) {
 	brk, cont := c.brk, c.cont
 	c.brk, c.cont = coreLoopCtx{}, coreLoopCtx{}
-	allowed := c.arena.MakeUnion([]TypeId{TidStr, TidPath, TidInt}, NameNone)
+	allowed := c.arena.MakeUnion([]TypeId{TidStr, TidPath, TidInt})
 	for i, items := range fs.Interpolations {
 		start, outerFloor := c.child(items)
 		c.floor = outerFloor
@@ -1781,7 +1902,7 @@ func (c *coreChecker) condition(tok Token) bool {
 		return true
 	}
 	t := c.subst.Apply(c.arena, slot.t)
-	if !c.rel.Sub(t, c.arena.MakeUnion([]TypeId{TidBool, TidInt}, NameNone)) {
+	if !c.rel.Sub(t, c.arena.MakeUnion([]TypeId{TidBool, TidInt})) {
 		c.mismatch(tok, 0, TidBool, t)
 	}
 	return true
@@ -1882,12 +2003,48 @@ func (c *coreChecker) joinSlot(a, b coreSlot) (coreSlot, bool) {
 		return coreSlot{t: a.t, fresh: fresh}, true
 	}
 	if c.hasVars(a.t) || c.hasVars(b.t) {
-		return coreSlot{t: a.t, fresh: fresh}, c.uni.Unify(a.t, b.t)
+		cp := c.checkpoint()
+		if c.uni.Unify(a.t, b.t) {
+			return coreSlot{t: a.t, fresh: fresh}, true
+		}
+		c.rollback(cp)
+		// The other side, when one side is below it (the join table): a
+		// side with variables is matched against a solved one, by <= or,
+		// when both are fresh, by retyping, and checked in full once the
+		// unit is solved. `[]` in one arm and a CompletionResult in the
+		// other give CompletionResult.
+		for _, p := range [2][2]coreSlot{{a, b}, {b, a}} {
+			if c.hasVars(p[1].t) {
+				continue
+			}
+			if c.check(coreSlot{t: p[0].t, fresh: fresh}, p[1].t) {
+				return coreSlot{t: p[1].t, fresh: fresh}, true
+			}
+			c.rollback(cp)
+		}
+		return coreSlot{t: a.t, fresh: fresh}, false
 	}
-	s, ok := c.rel.JoinSlot(
-		Slot{Type: c.subst.Apply(c.arena, a.t), Fresh: c.freshish(a)},
-		Slot{Type: c.subst.Apply(c.arena, b.t), Fresh: c.freshish(b)})
-	return coreSlot{t: s.Type, fresh: s.Fresh}, ok
+	at, bt := c.subst.Apply(c.arena, a.t), c.subst.Apply(c.arena, b.t)
+	af, bf := c.freshish(a), c.freshish(b)
+	if s, ok := c.rel.JoinSlot(Slot{Type: at, Fresh: af}, Slot{Type: bt, Fresh: bf}); ok {
+		return coreSlot{t: s.Type, fresh: s.Fresh}, true
+	}
+	// A new or partly new arm may be retyped to the other arm's type and
+	// then forgotten (t_sub twice: ss_dp or ss_m, then ss_forget or
+	// ss_m_forget), so a shared arm's type is an upper bound of both:
+	// `{values: [...]}` and a stored CompletionResult give CompletionResult.
+	for _, p := range [2]struct {
+		x      coreSlot
+		xt, yt TypeId
+		yf     bool
+	}{{a, at, bt, bf}, {b, bt, at, af}} {
+		if !p.yf && (p.x.fresh || p.x.part != 0) {
+			if ok, _ := c.markBelow(slotMark(p.x), p.xt, p.yt); ok {
+				return coreSlot{t: p.yt}, true
+			}
+		}
+	}
+	return coreSlot{}, false
 }
 
 // ---------------------------------------------------------------------------

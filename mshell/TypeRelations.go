@@ -40,36 +40,67 @@ import "slices"
 
 type typePair struct{ a, b TypeId }
 
-// assumedPairs is the set of pairs assumed during one query.
+// assumedPairs is the set of pairs assumed during one query: the tail of
+// the Relations' shared buffer from start. A query that starts inside
+// another (Retype asks Sub) takes the buffer above it and gives it back
+// when it ends, so each query sees only its own pairs and nothing is
+// allocated per query. Small sets are searched linearly; past
+// assumedLinear pairs a map is kept as well.
 type assumedPairs struct {
+	r     *Relations
+	start int
 	has   map[typePair]struct{}
-	added []typePair
 }
 
-func newAssumedPairs() assumedPairs {
-	return assumedPairs{has: make(map[typePair]struct{})}
+const assumedLinear = 64
+
+func (r *Relations) newAssumedPairs() assumedPairs {
+	return assumedPairs{r: r, start: len(r.pairBuf)}
 }
+
+// pairs is the set's contents.
+func (s *assumedPairs) pairs() []typePair { return s.r.pairBuf[s.start:] }
 
 func (s *assumedPairs) contains(p typePair) bool {
-	_, ok := s.has[p]
-	return ok
+	if s.has != nil {
+		_, ok := s.has[p]
+		return ok
+	}
+	for _, q := range s.pairs() {
+		if q == p {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *assumedPairs) add(p typePair) {
-	s.has[p] = struct{}{}
-	s.added = append(s.added, p)
+	s.r.pairBuf = append(s.r.pairBuf, p)
+	if s.has != nil {
+		s.has[p] = struct{}{}
+	} else if len(s.r.pairBuf)-s.start > assumedLinear {
+		s.has = make(map[typePair]struct{}, 2*assumedLinear)
+		for _, q := range s.pairs() {
+			s.has[q] = struct{}{}
+		}
+	}
 }
 
 // mark and rollback put the set back as it was, for a failed union
 // alternative.
-func (s *assumedPairs) mark() int { return len(s.added) }
+func (s *assumedPairs) mark() int { return len(s.r.pairBuf) }
 
 func (s *assumedPairs) rollback(m int) {
-	for _, p := range s.added[m:] {
-		delete(s.has, p)
+	if s.has != nil {
+		for _, p := range s.r.pairBuf[m:] {
+			delete(s.has, p)
+		}
 	}
-	s.added = s.added[:m]
+	s.r.pairBuf = s.r.pairBuf[:m]
 }
+
+// release gives the set's part of the buffer back.
+func (s *assumedPairs) release() { s.r.pairBuf = s.r.pairBuf[:s.start] }
 
 // relationWorkLimit bounds the steps of one top-level query.
 const relationWorkLimit = 1 << 20
@@ -82,6 +113,8 @@ type Relations struct {
 	retypeKnown map[typePair]struct{}
 	work        int
 	active      int
+	// pairBuf holds the assumption sets of the queries in progress.
+	pairBuf []typePair
 }
 
 func NewRelations(arena *TypeArena) *Relations {
@@ -115,11 +148,15 @@ func (r *Relations) spend() bool {
 func (r *Relations) Sub(a, b TypeId) bool {
 	r.begin()
 	defer r.end()
-	q := subQuery{r: r, set: newAssumedPairs()}
+	if a == b {
+		return true
+	}
+	q := subQuery{r: r, set: r.newAssumedPairs()}
+	defer q.set.release()
 	if !q.child(a, b) {
 		return false
 	}
-	for _, p := range q.set.added {
+	for _, p := range q.set.pairs() {
 		r.subKnown[p] = struct{}{}
 	}
 	return true
@@ -281,11 +318,7 @@ func recordLabels(x, y RecordType, fc func(f, g RecordField) bool) bool {
 // quoteLevel compares two quote types: inputs contravariant, outputs
 // covariant, a `never` quote below every quote with the same inputs. The
 // proof writes stacks top first, so they are compared from the top.
-// A quote type with its own generics is not a type the relations take.
 func quoteLevel(x, y QuoteSig, c func(a, b TypeId) bool) bool {
-	if len(x.Generics) > 0 || len(y.Generics) > 0 {
-		return false
-	}
 	if len(x.Inputs) != len(y.Inputs) {
 		return false
 	}
@@ -331,11 +364,15 @@ func commandStateBelow(x, y CommandCaptureMode) bool {
 func (r *Relations) Retype(a, b TypeId) bool {
 	r.begin()
 	defer r.end()
-	q := retypeQuery{r: r, set: newAssumedPairs()}
+	if a == b {
+		return true
+	}
+	q := retypeQuery{r: r, set: r.newAssumedPairs()}
+	defer q.set.release()
 	if !q.child(a, b) {
 		return false
 	}
-	for _, p := range q.set.added {
+	for _, p := range q.set.pairs() {
 		r.retypeKnown[p] = struct{}{}
 	}
 	return true
@@ -492,7 +529,7 @@ func (r *Relations) kindOf(t TypeId) (valueKind, bool) {
 	switch n.Kind {
 	case TKList, TKCommand:
 		return valueKind{code: kindList}, true
-	case TKRecord, TKDict, TKShape:
+	case TKRecord:
 		return valueKind{code: kindDict}, true
 	case TKQuote:
 		return valueKind{code: kindQuote}, true
@@ -697,7 +734,7 @@ func (r *Relations) joinCore(fr bool, a, b TypeId) (TypeId, bool) {
 	case an.Kind == TKEnum && bn.Kind == TKEnum:
 		if an.A != bn.A {
 			// Two different enums are two kinds.
-			return ar.MakeUnion([]TypeId{a, b}, NameNone), true
+			return ar.MakeUnion([]TypeId{a, b}), true
 		}
 		args, ok := r.enumJoin(fr, ar.enumDecls[an.A].Params, ar.enumArgs[an.Extra], ar.enumArgs[bn.Extra])
 		if !ok {
@@ -710,7 +747,7 @@ func (r *Relations) joinCore(fr bool, a, b TypeId) (TypeId, bool) {
 	if !okA || !okB || ka == kb {
 		return TidNothing, false
 	}
-	return ar.MakeUnion([]TypeId{a, b}, NameNone), true
+	return ar.MakeUnion([]TypeId{a, b}), true
 }
 
 // joinIntoUnion joins t into the union u: the member of t's kind is joined
@@ -736,9 +773,9 @@ func (r *Relations) joinIntoUnion(fr bool, u, t TypeId, unionFirst bool) (TypeId
 			return TidNothing, false
 		}
 		members[i] = z
-		return r.arena.MakeUnion(members, NameNone), true
+		return r.arena.MakeUnion(members), true
 	}
-	return r.arena.MakeUnion(append(members, t), NameNone), true
+	return r.arena.MakeUnion(append(members, t)), true
 }
 
 // aliasJoin is ajoin in Join.v: an alias is never widened inside. The join
@@ -760,7 +797,7 @@ func (r *Relations) aliasJoin(fr bool, a, b TypeId) (TypeId, bool) {
 	ka, okA := r.Kinds(a)
 	kb, okB := r.Kinds(b)
 	if okA && okB && kindsDisjoint(ka, kb) {
-		return r.arena.MakeUnion([]TypeId{a, b}, NameNone), true
+		return r.arena.MakeUnion([]TypeId{a, b}), true
 	}
 	return TidNothing, false
 }
@@ -958,21 +995,10 @@ func (r *Relations) checkable(t TypeId, params bool, visiting []TypeId) bool {
 		}
 		return r.checkable(ar.aliases[n.A].Body, false, append(visiting, t))
 	case TKGrid, TKGridView, TKGridRow:
-		if n.A != 0 {
-			// The unknown schema cannot be validated against.
-			s := ar.Node(TypeId(n.A))
-			return s.Kind == TKRecord && ar.records[s.Extra].Rest.Status != FieldOpen &&
-				r.checkable(TypeId(n.A), params, visiting)
-		}
-		if n.Extra == 0 {
-			return false
-		}
-		for _, col := range ar.gridSchemas[n.Extra].Columns {
-			if !r.checkable(col.Type, params, visiting) {
-				return false
-			}
-		}
-		return true
+		// The unknown schema cannot be validated against.
+		s := ar.Node(TypeId(n.A))
+		return s.Kind == TKRecord && ar.records[s.Extra].Rest.Status != FieldOpen &&
+			r.checkable(TypeId(n.A), params, visiting)
 	}
 	return false
 }

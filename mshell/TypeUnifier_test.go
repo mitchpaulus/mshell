@@ -35,10 +35,10 @@ func TestUnifier(t *testing.T) {
 		t.Errorf("[w] = Json needs a union step, which unification does not take")
 	}
 	m := v()
-	if u.Unify(a.MakeUnion([]TypeId{TidInt, a.MakeList(m)}, NameNone), a.MakeUnion([]TypeId{TidInt, a.MakeList(TidStr)}, NameNone)) {
+	if u.Unify(a.MakeUnion([]TypeId{TidInt, a.MakeList(m)}), a.MakeUnion([]TypeId{TidInt, a.MakeList(TidStr)})) {
 		t.Errorf("unification does not enter a union")
 	}
-	if u.Unify(TidInt, a.MakeUnion([]TypeId{TidInt, TidStr}, NameNone)) {
+	if u.Unify(TidInt, a.MakeUnion([]TypeId{TidInt, TidStr})) {
 		t.Errorf("int = int | str is subtyping, not equality")
 	}
 	r := v()

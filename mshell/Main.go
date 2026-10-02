@@ -522,7 +522,7 @@ func main() {
 	var inputFile *TokenFile
 	inputFile = nil
 	inputFilePath := ""
-	checkTypes := false // --check-types: gate execution with the new Checker (Phase 10 step 3)
+	checkTypes := false // --check-types: run the script only if it type checks
 	typeCheckOnly := false
 	inputFromStdin := false
 
@@ -562,8 +562,8 @@ func main() {
 			fmt.Println("  --html       Render the input as HTML")
 			fmt.Println("  --lex        Print the tokens lexed from the input")
 			fmt.Println("  --parse      Print the parsed Abstract Syntax Tree as JSON")
-			fmt.Println("  --check-types Run the new static type checker as a gate before evaluation (Phase 10 preview)")
-			fmt.Println("  --type-check-only Run the new static type checker and exit without evaluation")
+			fmt.Println("  --check-types Type check the input, and run it only if it checks")
+			fmt.Println("  --type-check-only Type check the input and exit without running it")
 			// fmt.Println("  --typecheck  Type check the input and report any errors") Ignore this for now.
 			fmt.Println("  --version    Print version information and exit")
 			fmt.Println("  -c INPUT     Execute INPUT as the program, before positional args")
@@ -875,20 +875,9 @@ func main() {
 	state.AddCompletionDefinitions(file.Definitions)
 
 	if checkTypes {
-		var errs []string
-		var ok bool
-		// MSH_CHECKER=core selects the checker being built beside the
-		// current one (ai/type-system-plan.md, stage 3). Not documented
-		// for users until it replaces the current checker.
-		if os.Getenv("MSH_CHECKER") == "core" {
-			errs, ok = CoreTypeCheckProgram(file, startupDefinitions, state.StartupDecls)
-		} else {
-			errs, ok = TypeCheckProgram(file, startupDefinitions)
-		}
-		if !ok {
-			for _, e := range errs {
-				fmt.Fprintln(os.Stderr, e)
-			}
+		errs, ok := CoreTypeCheckProgram(file, startupDefinitions, state.StartupDecls)
+		for _, e := range errs {
+			fmt.Fprintln(os.Stderr, e)
 		}
 		if typeCheckOnly {
 			if ok {

@@ -505,7 +505,7 @@ func (c *coreChecker) gridDerive(tok Token) bool {
 
 // keyType is the type of a dict key or a column name: str or path.
 func (c *coreChecker) keyType() TypeId {
-	return c.arena.MakeUnion([]TypeId{TidStr, TidPath}, NameNone)
+	return c.arena.MakeUnion([]TypeId{TidStr, TidPath})
 }
 
 // gridUpdateCol checks `grid name (T -- u) updateCol`, where T is the
@@ -746,7 +746,7 @@ func (c *coreChecker) gridMap(tok Token) bool {
 	}
 	c.stack = c.stack[:len(c.stack)-1]
 	open := c.res.unknownSchema()
-	want := c.arena.MakeUnion([]TypeId{open, c.arena.MakeGridOf(TKGridRow, open)}, NameNone)
+	want := c.arena.MakeUnion([]TypeId{open, c.arena.MakeGridOf(TKGridRow, open)})
 	if c.hasVars(b) {
 		c.deferCheck(tok, coreSlot{t: b}, want)
 	} else if !c.rel.Sub(c.subst.Apply(c.arena, b), want) {

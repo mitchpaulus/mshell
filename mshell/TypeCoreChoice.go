@@ -166,7 +166,8 @@ func (c *coreChecker) retryChoices() {
 // choiceFits checks a choice's arguments against sig and unifies its
 // output variables with sig's outputs.
 func (c *coreChecker) choiceFits(sig *coreSig, ch *coreChoice) bool {
-	gens := append([]TypeId(nil), c.instantiate(sig)...)
+	gens, mark := c.instantiate(sig)
+	defer c.releaseGens(mark)
 	ok := true
 	c.eachInput(sig, gens, func(i int) coreSlot { return ch.args[i] }, func(i int, want TypeId) {
 		if ok && !c.check(ch.args[i], want) {

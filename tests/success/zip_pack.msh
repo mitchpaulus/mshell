@@ -15,9 +15,8 @@ tempFile pack-zip!
     `zip/base/repeat.txt`
     "zip/base/nested"
 # The stored list is given the entry type where it is made: lists are
-# invariant. The core checker's built-in name for it is PackEntry
-# (`] as [PackEntry] pack-items!`); the old checker does not know it.
-] as [str | path | {path: str | path, archivePath?: str | path, mode?: int}] pack-items!
+# invariant. PackEntry is the built-in name for an entry.
+] as [PackEntry] pack-items!
 
 @pack-items @pack-zip zipPack
 

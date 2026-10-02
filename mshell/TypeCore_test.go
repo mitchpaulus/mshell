@@ -349,6 +349,32 @@ func TestCoreChecker(t *testing.T) {
 
 		// ⊥ joins to the other side; it does not solve a variable there.
 		{`[] x! {a: @x} (len) map drop  @x 1 append drop`, true, ""},
+
+		// A union is entered by kind (the members' kinds are distinct).
+		{`[] as Json drop  {} as Json drop  [] as int | [str] drop`, true, ""},
+		{`[] as int | str drop`, false, "'as' needs evidence"},
+		{`[1] xs! @xs as Json drop`, false, "a shared value keeps its type"},
+		// A new arm takes a shared arm's type when it retypes to it
+		// (if_join2 in formal-ver/Join.v); a shared arm never widens.
+		{`def f ([str] -- CompletionResult) end  ["a"] f c! true if @c else {values: ["x"], binaries: true} end drop`, true, ""},
+		{`def f ([str] -- CompletionResult) end  ["a"] f c! ["x"] l! true if @c else {values: @l, binaries: true} end drop`, true, ""},
+		{`def f ([str] -- CompletionResult) end  ["a"] f c! true if @c else [] end drop`, true, ""},
+		{`[1] xs! true if @xs else ["a"] end drop`, false, "no common type"},
+		{`[1] xs! {a: @xs} as int | {a: [int | str]} drop`, false, "'as' needs evidence"},
+		// getDef: a new default may take the stored values' type.
+		{`"{}" parseJson match dict d : @d "k" {} getDef drop, _ : end`, true, ""},
+		// A type in a def body may name the def's generics (Examples.v, item_use).
+		{`def item (a int -- {item: a, index: int}) i! x! {item: @x, index: @i} as {item: a, index: int} end  [1] 5 item :item? 2 append drop`, true, ""},
+		{`def item (a -- {item: a}) x! {item: @x} as {item: [a]} end`, false, "'as' needs evidence"},
+		{`1 as a drop`, false, "unknown type 'a'"},
+		// A generic is not a union member, in a signature or a body type.
+		{`def g (a b -- a | b) swap drop end`, false, "'a' is a generic, so it cannot be a member of a union"},
+		{`def g (a -- int) [] as [a | str] drop 0 end`, false, "'a' is a generic"},
+		// Completion definitions run on the words typed so far.
+		{`def c { 'complete': ['foo'] } (int -- int) end`, false, "the completion definition 'c'"},
+		{`def c { 'complete': ['foo'] } ([str] -- [str]) end  completionDefs 'foo' [] getDef len drop`, true, ""},
+		// nth on a row reads a cell at an unknown type; soe takes nothing.
+		{`soe [| a; 1 |] :0: 0 nth match int n : @n 1 + drop, _ : end`, true, ""},
 	}
 	for _, tc := range cases {
 		errs, ok := coreCheck(t, base, tc.src)

@@ -44,10 +44,8 @@ type lspServer struct {
 	stdlibDefs   []MShellDefinition
 	// startupDecls are the startup files' `type` and `enum` declarations.
 	startupDecls []MShellParseItem
-	checkerBase     *CheckerBase // built from stdlibDefs on first use; see newChecker
-	checkerBaseOnce sync.Once
-	// coreBase is the core checker's base, used instead when MSH_CHECKER
-	// is "core" (ai/type-system-plan.md, stage 3); built on first use.
+	// coreBase is the type checker's base, built from the startup files on
+	// first use and shared by every check.
 	coreBase     *CoreBase
 	coreBaseOnce sync.Once
 	builtinSigs  map[string][]string // name -> formatted "(in -- out)" sigs from the type checker
@@ -149,40 +147,43 @@ func RunLSP(in io.Reader, out io.Writer) error {
 		server.stdlibDefs, server.startupDecls = defs, decls
 	}
 
-	server.builtinSigs, server.stdlibHover = buildHoverIndex(server.stdlibDefs)
+	server.builtinSigs, server.stdlibHover = buildHoverIndex(server.base(), server.stdlibDefs)
 
 	return server.run()
 }
 
-// buildHoverIndex renders QuoteSigs for typed builtins and for stdlib
-// definitions into pre-formatted strings keyed by name. The arena and
-// names tables are local to this call; only the formatted strings
-// escape, so we don't carry around the type-checker state.
-func buildHoverIndex(stdlibDefs []MShellDefinition) (map[string][]string, map[string][]string) {
-	arena := NewTypeArena()
-	names := NewNameTable()
-
+// buildHoverIndex formats the signatures of the builtins and of the
+// startup files' definitions, keyed by name. It formats in an overlay, so
+// the base stays frozen.
+func buildHoverIndex(base *CoreBase, stdlibDefs []MShellDefinition) (map[string][]string, map[string][]string) {
+	arena := base.arena.Overlay()
+	rel := NewRelations(arena)
+	std := make(map[string]bool, len(stdlibDefs))
+	for i := range stdlibDefs {
+		std[stdlibDefs[i].Name] = true
+	}
 	builtinSigs := make(map[string][]string)
-	for nameId, sigs := range builtinSigsByName(arena, names) {
-		name := names.Name(nameId)
-		formatted := make([]string, 0, len(sigs))
-		for _, sig := range sigs {
-			formatted = append(formatted, FormatType(arena, names, arena.MakeQuote(sig)))
-		}
-		builtinSigs[name] = formatted
-	}
-
 	stdlibHover := make(map[string][]string, len(stdlibDefs))
-	if len(stdlibDefs) > 0 {
-		checker := NewChecker(arena, names)
-		for i := range stdlibDefs {
-			def := &stdlibDefs[i]
-			sig := checker.ResolveDefSig(def.Inputs, def.Outputs)
-			formatted := FormatType(arena, names, arena.MakeQuote(sig))
-			stdlibHover[def.Name] = append(stdlibHover[def.Name], formatted)
+	for id, sigs := range base.table.byName {
+		if len(sigs) == 0 {
+			continue
+		}
+		name := base.names.Name(NameId(id))
+		formatted := make([]string, len(sigs))
+		for i := range sigs {
+			formatted[i] = formatCoreSig(arena, base.names, rel, &sigs[i])
+		}
+		if std[name] {
+			stdlibHover[name] = formatted
+		} else {
+			builtinSigs[name] = formatted
 		}
 	}
-
+	for name, sigs := range coreWalkerSigs {
+		if _, ok := builtinSigs[name]; !ok {
+			builtinSigs[name] = sigs
+		}
+	}
 	return builtinSigs, stdlibHover
 }
 
@@ -476,9 +477,7 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 	if err != nil {
 		return actions
 	}
-	if useCoreChecker() {
-		actions = append(actions, s.typeFixActions(doc, file, params)...)
-	}
+	actions = append(actions, s.typeFixActions(doc, file, params)...)
 	if codeActionKindRequested(params.Context.Only, protocol.RefactorRewrite) {
 		if a, ok := quoteLiteralsAction(doc, file, params); ok {
 			actions = append(actions, a)
@@ -823,23 +822,17 @@ func (s *lspServer) publishDiagnosticsFor(uri protocol.DocumentURI, text string)
 	}
 }
 
-// newChecker returns a type checker with the builtin and stdlib signatures
-// resolved. They are resolved once per server, and each check starts from
-// a copy, since diagnostics run on every edit and may run concurrently.
-func (s *lspServer) newChecker() *Checker {
-	s.checkerBaseOnce.Do(func() { s.checkerBase = NewCheckerBase(s.stdlibDefs) })
-	return s.checkerBase.NewChecker()
-}
-
-// useCoreChecker reports whether MSH_CHECKER selects the core checker.
-func useCoreChecker() bool {
-	return os.Getenv("MSH_CHECKER") == "core"
-}
-
-// coreErrors checks file with the core checker.
-func (s *lspServer) coreErrors(file *MShellFile) ([]TypeError, *TypeArena, *NameTable) {
+// base returns the type checker's base, built once per server: each check
+// is an overlay of it, since diagnostics run on every edit and may run
+// concurrently.
+func (s *lspServer) base() *CoreBase {
 	s.coreBaseOnce.Do(func() { s.coreBase = NewCoreBase(s.stdlibDefs, s.startupDecls) })
-	return s.coreBase.Errors(file)
+	return s.coreBase
+}
+
+// coreErrors checks file.
+func (s *lspServer) coreErrors(file *MShellFile) ([]TypeError, *TypeArena, *NameTable) {
+	return s.base().Errors(file)
 }
 
 func (s *lspServer) computeDiagnostics(text string) []protocol.Diagnostic {
@@ -850,17 +843,7 @@ func (s *lspServer) computeDiagnostics(text string) []protocol.Diagnostic {
 		return []protocol.Diagnostic{parseErrorToDiagnostic(parseErr)}
 	}
 
-	var errs []TypeError
-	var arena *TypeArena
-	var names *NameTable
-	if useCoreChecker() {
-		errs, arena, names = s.coreErrors(file)
-	} else {
-		checker := s.newChecker()
-		arena, names = checker.arena, checker.names
-		checker.CheckProgram(file)
-		errs = checker.Errors()
-	}
+	errs, arena, names := s.base().Diagnostics(file)
 	if len(errs) == 0 {
 		return nil
 	}
@@ -1405,13 +1388,15 @@ func (s *lspServer) inFileDefSigs(text string) map[string][]string {
 	if len(file.Definitions) == 0 {
 		return nil
 	}
-	checker := s.newChecker()
-	arena, names := checker.arena, checker.names
+	// The file's own type declarations are declared first, so its
+	// signatures may name them.
+	c := s.base().newChecker()
+	c.declareAll(file.Items, map[string]Token{})
 	out := make(map[string][]string, len(file.Definitions))
 	for i := range file.Definitions {
 		def := &file.Definitions[i]
-		sig := checker.ResolveDefSig(def.Inputs, def.Outputs)
-		out[def.Name] = append(out[def.Name], FormatType(arena, names, arena.MakeQuote(sig)))
+		sig := newCoreSig(c.arena, c.res.resolveSig(def.Inputs, def.Outputs))
+		out[def.Name] = append(out[def.Name], formatCoreSig(c.arena, c.names, c.rel, &sig))
 	}
 	return out
 }

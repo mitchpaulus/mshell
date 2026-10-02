@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -27,6 +28,10 @@ type coreResolver struct {
 	// signature, where an unknown name is an error.
 	gens     []NameId
 	inSig    bool
+	// bodyGens are the generics of the def whose body is being checked:
+	// outside its signature, a type written in the body (`as`) may name
+	// them, as the rigid types the body sees.
+	bodyGens []NameId
 	// anon counts the generics `dict` and `list` made in this signature.
 	anon     int
 	errs     []TypeError
@@ -74,7 +79,7 @@ func (r *coreResolver) declareJson() {
 	body := r.arena.MakeUnion([]TypeId{
 		TidNull, TidBool, TidInt, TidFloat, TidStr,
 		r.arena.MakeList(ref), r.arena.MakeStrDict(ref),
-	}, NameNone)
+	})
 	r.arena.SetAliasBody(idx, body)
 	r.aliases[r.jsonName] = ref
 }
@@ -195,7 +200,7 @@ func (r *coreResolver) resolve(item MShellParseItem) TypeId {
 			}
 			arms = append(arms, t)
 		}
-		u := ar.MakeUnion(arms, NameNone)
+		u := ar.MakeUnion(arms)
 		if r.deferUnions {
 			r.unions = append(r.unions, coreUnionCheck{u: u, tok: n.StartTok})
 			return u
@@ -280,6 +285,9 @@ func (r *coreResolver) resolveNamed(n *TypeNamed) TypeId {
 		return t
 	}
 	if !r.inSig {
+		if slices.Contains(r.bodyGens, name) {
+			return ar.MakeRigid(name)
+		}
 		return r.errorf(n.Tok, "unknown type '"+n.Name+"'")
 	}
 	return r.generic(name)
@@ -356,10 +364,27 @@ func schemaGeneric(name string) (TypeKind, string, bool) {
 	return 0, "", false
 }
 
+// genericName names t when it is a generic: of the signature being read,
+// or of the def whose body is checked.
+func (r *coreResolver) genericName(t TypeId) (string, bool) {
+	n := r.arena.Node(t)
+	switch n.Kind {
+	case TKParam:
+		if r.inSig && int(n.A) < len(r.gens) {
+			return r.names.Name(r.gens[n.A]), true
+		}
+		return "", false
+	case TKRigid:
+		return r.names.Name(NameId(n.A)), true
+	}
+	return "", false
+}
+
 // unionKindsError reports a union with two members of the same runtime
 // kind, which the design does not allow (ai/type-core-calculus.typ,
 // "Unions have distinct kinds"), or "" when the union is well formed.
-// Members with no kind (generics) are left to the checker.
+// A generic has no kind, so it cannot be a member: at an instance two
+// members could have one kind, and a kind pattern would pick the wrong one.
 func (r *coreResolver) unionKindsError(u TypeId) string {
 	if r.arena.Node(u).Kind != TKUnion {
 		return ""
@@ -368,6 +393,10 @@ func (r *coreResolver) unionKindsError(u TypeId) string {
 	for _, m := range r.arena.unionMembers[r.arena.Node(u).Extra] {
 		ks, ok := r.rel.Kinds(m)
 		if !ok {
+			if name, generic := r.genericName(m); generic {
+				return "'" + name + "' is a generic, so it cannot be a member of a union: it has no kind," +
+					" and an instance could give the union two members of one kind; declare an enum instead"
+			}
 			continue
 		}
 		for _, k := range ks {

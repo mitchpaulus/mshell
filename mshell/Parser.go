@@ -2270,3 +2270,61 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 	}
 	return nil
 }
+
+// formatPatternSnippet renders a match-arm pattern as a short string,
+// recursing into list / dict / quote literals so patterns like
+// `[a ...rest]` display their contents rather than collapsing to
+// `[...]` the way formatItemsSnippet does for arbitrary composites.
+func formatPatternSnippet(items []MShellParseItem) string {
+	var sb strings.Builder
+	for i, it := range items {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(formatPatternItem(it))
+	}
+	return sb.String()
+}
+
+func formatPatternItem(it MShellParseItem) string {
+	switch v := it.(type) {
+	case Token:
+		return v.Lexeme
+	case *MShellParseOrPattern:
+		return v.DebugString()
+	case *MShellParseList:
+		return "[" + formatPatternSnippet(v.Items) + "]"
+	default:
+		start := it.GetStartToken().Lexeme
+		end := it.GetEndToken().Lexeme
+		if end != "" && end != start {
+			return start + "…" + end
+		}
+		return start
+	}
+}
+
+// isTypeKeywordToken reports whether tok is one of the match type-keyword
+// patterns: int, float, str, bool, list, dict, path, date, quotation,
+// maybe, binary.
+func isTypeKeywordToken(tok Token) bool {
+	switch tok.Type {
+	case TYPEINT, TYPEFLOAT, STR, TYPEBOOL:
+		return true
+	case LITERAL:
+		switch tok.Lexeme {
+		case "list", "dict", "path", "date", "quotation", "maybe", "binary":
+			return true
+		}
+	}
+	return false
+}
+
+// matchPatternFormsHint lists the legal match-arm pattern forms, used in
+// the diagnostic raised when an arm pattern is not recognized.
+const matchPatternFormsHint = "expected one of: `_`; a type keyword " +
+	"(int, float, str, bool, list, dict, path, date, quotation, maybe, binary), " +
+	"optionally followed by a binding name; a value literal (42, 1.5, \"text\", true, false, PATH); " +
+	"two or more value literals of the same kind (strings, ints, or paths) matched as OR alternatives; " +
+	"`none`; `just <name>`; an enum member followed by a name for each payload value; " +
+	"an enum's name, optionally followed by a binding name; a list pattern `[ ... ]`; or a dict pattern `{ ... }`"

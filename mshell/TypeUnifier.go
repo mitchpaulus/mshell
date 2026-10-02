@@ -126,7 +126,7 @@ func (u *Unifier) unify(a, b TypeId, assumed []typePair) bool {
 			u.unifyLabels(x, y, x.Fields, assumed) && u.unifyLabels(x, y, y.Fields, assumed)
 	case TKQuote:
 		x, y := ar.quoteSigs[an.Extra], ar.quoteSigs[bn.Extra]
-		if len(x.Generics) > 0 || len(y.Generics) > 0 || x.Diverges != y.Diverges ||
+		if x.Diverges != y.Diverges ||
 			len(x.Inputs) != len(y.Inputs) || len(x.Outputs) != len(y.Outputs) {
 			return false
 		}

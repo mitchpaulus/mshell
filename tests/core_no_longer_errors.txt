@@ -1,2 +1,0 @@
-# Programs in tests/typecheck_fail that are no longer errors under the core checker.
-# One file name per line, then a tab and the reason.

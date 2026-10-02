@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"strings"
+	"sync"
+)
 
 // The builtin table of the core checker: Φ in ai/type-core-calculus.typ.
 // Each entry is written in signature syntax. An output marked `new` is
@@ -10,6 +13,34 @@ import "strings"
 //
 // This is the seed of the table; the full table is ported and audited
 // against Evaluator.go in stage 3 of ai/type-system-plan.md.
+
+// sigASTCache memoizes the parsed AST per signature string. Signature
+// strings are constants and the AST is read-only during resolution, so a
+// base built again (the LSP's hover index, tests) skips the parse.
+var sigASTCache sync.Map // string -> sigAST
+
+type sigAST struct {
+	inputs  []MShellParseItem
+	outputs []MShellParseItem
+}
+
+// builtinSigAST parses a `(inputs -- outputs)` signature string, once per
+// string. A string that does not parse is a programmer error and panics.
+func builtinSigAST(src string) sigAST {
+	if cached, ok := sigASTCache.Load(src); ok {
+		return cached.(sigAST)
+	}
+	lex := NewLexer(src, nil)
+	parser := NewMShellParser(lex)
+	parser.NextToken()
+	inputs, outputs, err := parser.parseDefSignature()
+	if err != nil {
+		panic("builtin sig " + src + ": " + err.Error())
+	}
+	ast := sigAST{inputs: inputs, outputs: outputs}
+	sigASTCache.Store(src, ast)
+	return ast
+}
 
 // coreTableBuilder fills a coreTable from signature strings.
 type coreTableBuilder struct {
@@ -74,6 +105,8 @@ func (b *coreTableBuilder) builtinAliases() {
 		"httpOnly: bool, sameSite: str, expires: int | float | null, lastAccess: int | float, quoted: bool}")
 	b.alias("HttpRequest", "{url: str, timeout?: int, followRedirects?: bool, headers?: {str: str | int | path}, "+
 		"body?: str | int | path, cookieJar?: [Cookie]}")
+	b.alias("CompletionResult", "[str] | {values?: [str], preferredFiles?: str | [str], files?: str | [str], "+
+		"dirs?: bool, binaries?: bool}")
 	b.alias("HttpResponse", "{status: int, reason: str, headers: {str: [str]}, body: bytes, cookieJar?: [Cookie]}")
 }
 
@@ -157,12 +190,13 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b := &coreTableBuilder{res: res, t: t}
 	ar := res.arena
 	b.builtinAliases()
+	t.completion = b.typ("([str] -- CompletionResult)")
 
 	// ----- Strings, regex, numbers, conversions, encoding -----
 
 	// Words that read their argument as a string. The runtime also turns
 	// an int into its digits there; the table does not, so `5 readFile`
-	// is an error (decision pending, ai/type-system-plan.md).
+	// is an error (decided 2026-10-01).
 
 	// No implicit numeric coercion: int with float is a runtime error.
 	arithmetic := []string{
@@ -462,6 +496,11 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("setenv", "(str | path str | path -- )")
 	b.reg("unsetenv", "(str | path -- )")
 	b.reg("envInspect", "(str | path -- new [EnvEvent])")
+	// A quote per completion definition, built from its body; each def's
+	// signature is checked below the quote type (checkCompletionSig).
+	// soe: stop the script at the first failed command.
+	b.regTok(STOP_ON_ERROR, "( -- )")
+	b.reg("completionDefs", "( -- new {str: [([str] -- CompletionResult)]})")
 	// Each element is [name fullPath].
 	b.reg("binPaths", "( -- new [[str]])")
 	b.reg("sleep", "(int | float -- )")
@@ -602,8 +641,11 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("parseCsv", "(str | path -- new [[str]])")
 
 	// The list form of groupBy. The grid form takes a list of aggregation
-	// specs whose quotes each give their own type (TypeCoreGrid.go).
-	b.reg("groupBy", "([a] (a -- "+key+") -- {str: [a]})")
+	// specs; written at the call, each quote gives its own type and the
+	// result's columns are known (TypeCoreGrid.go). Otherwise, here, every
+	// quote gives one type and the result's columns are not known.
+	b.reg("groupBy", append([]string{"([a] (a -- "+key+") -- {str: [a]})"},
+		gridForms("(G_s [str] [{agg: (GridView_s -- a), name?: str, meta?: {}}] -- Grid)")...)...)
 	b.child("groupBy")
 	// In TypeCoreGrid.go, since their results depend on the schema: select,
 	// exclude, derive, pivot, the grid forms of join, leftJoin, outerJoin,
@@ -612,7 +654,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// parseExcel: one record per sheet. An error cell is none.
 	{
-		cell := ar.MakeUnion([]TypeId{TidStr, TidFloat, TidBool, ar.MakeMaybeEnum(TidBottom)}, NameNone)
+		cell := ar.MakeUnion([]TypeId{TidStr, TidFloat, TidBool, ar.MakeMaybeEnum(TidBottom)})
 		field := func(name string, ty TypeId) RecordField {
 			return RecordField{Name: res.names.Intern(name), Status: FieldRequired, Type: ty}
 		}
@@ -623,7 +665,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 			field("visibility", TidStr),
 		}, RecordField{Status: FieldAbsent})
 		t.setName(res.names.Intern("parseExcel"), []coreSig{{
-			ins:    []TypeId{ar.MakeUnion([]TypeId{TidPath, TidBytes}, NameNone)},
+			ins:    []TypeId{ar.MakeUnion([]TypeId{TidPath, TidBytes})},
 			outs:   []TypeId{ar.MakeList(sheet)},
 			newOut: 1,
 		}})
@@ -640,7 +682,11 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	t.index = b.sigs(append([]string{"([a] -- a)", "(str -- str)", "(path -- path)", "(bytes -- bytes)"},
 		gridForms("(G_s -- GridRow_s)")...))
 	// A row's cell by position: the column is not known.
-	t.index = append(t.index, coreSig{ins: []TypeId{ar.MakeGridOf(TKGridRow, res.unknownSchema())}, outs: []TypeId{TidUnknown}})
+	anyRow := ar.MakeGridOf(TKGridRow, res.unknownSchema())
+	t.index = append(t.index, coreSig{ins: []TypeId{anyRow}, outs: []TypeId{TidUnknown}})
+	// nth on a row is the same read, with the index on either side.
+	nthRow := []coreSig{{ins: []TypeId{anyRow, TidInt}, outs: []TypeId{TidUnknown}}, {ins: []TypeId{TidInt, anyRow}, outs: []TypeId{TidUnknown}}}
+	t.setName(res.names.Intern("nth"), append(t.name(res.names.Intern("nth")), nthRow...))
 	t.slice = b.sigs(append([]string{"([a] -- [a])", "(str -- str)", "(path -- path)", "(bytes -- bytes)"},
 		gridForms("(G_s -- GridView_s)")...))
 	t.slice[0].newListOut = 1
@@ -654,10 +700,37 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		t.slice = append(t.slice, coreSig{ins: []TypeId{pipe}, outs: []TypeId{ar.MakeList(cmd)}, gens: gens, genIn: 1, genOut: 1})
 	}
 
-	// Uses of these words the table does not cover yet.
-	t.partialName = map[NameId]string{
-		res.names.Intern("nth"):       "'nth' on a GridRow",
-		res.names.Intern("groupBy"):   "the grid form of 'groupBy'",
-	}
 	return t
+}
+
+// coreWalkerSigs are signatures, for hover, of the words the walker types
+// itself instead of through the table, because their result depends on
+// more than the argument types: a literal key or column name, a grid's
+// schema, or freshness. `T` is the type the walker works out.
+var coreWalkerSigs = map[string][]string{
+	"dup":           {"(a -- a a)"},
+	"drop":          {"(a -- )"},
+	"swap":          {"(a b -- b a)"},
+	"over":          {"(a b -- a b a)"},
+	"rot":           {"(a b c -- b c a)"},
+	"-rot":          {"(a b c -- c a b)"},
+	"nip":           {"(a b -- b)"},
+	"get":           {"(dict str -- Maybe[T])", "(Grid str -- [T])", "(GridRow str -- T)"},
+	"getDef":        {"(dict str T -- T)"},
+	"values":        {"(dict -- [T])"},
+	"keyValues":     {"(dict -- [{k: str, v: T}])"},
+	"toDict":        {"(GridRow -- new {...})"},
+	"gridCol":       {"(Grid str -- [T])", "(GridView str -- [T])"},
+	"gridValues":    {"(Grid -- [[T]])", "(GridView -- [[T]])"},
+	"select":        {"(Grid [str] -- new Grid)", "(GridView [str] -- new Grid)"},
+	"exclude":       {"(Grid [str] -- new Grid)", "(GridView [str] -- new Grid)"},
+	"derive":        {"(str Grid (GridRow -- T) -- new Grid)", "(str GridView (GridRow -- T) -- new Grid)"},
+	"updateCol":     {"(Grid str (T -- U) -- Grid)", "(GridView str (T -- U) -- new Grid)"},
+	"gridSetCell":   {"(Grid str int T -- Grid)"},
+	"gridAddCol":    {"(Grid str [T] -- Grid)"},
+	"gridRemoveCol": {"(Grid str -- Grid)"},
+	"gridRenameCol": {"(Grid str str -- Grid)"},
+	"leftJoin":      {"(Grid Grid (GridRow -- K) (GridRow -- K) -- new Grid)"},
+	"outerJoin":     {"(Grid Grid (GridRow -- K) (GridRow -- K) -- new Grid)"},
+	"pivot":         {"(Grid [str] str (GridView -- T) -- new Grid)"},
 }
