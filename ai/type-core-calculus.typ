@@ -831,7 +831,11 @@ A `getDef` whose default fits the stored values' type as an
 argument would (a new `{}` default on a `{str: Json}`) gives that type; otherwise the join of the two.
 
 Retyping a partly new value (@sec-partial) looks through an alias that is not recursive, which is the
-same type as its body; a recursive alias is not unfolded there.
+same type as its body; a recursive alias is not unfolded there. At the top of a checking position a
+recursive alias is reached through its body, and the value is committed (2026-10-02, ninth session):
+$subset.sq.eq$ position by position to the body (`ss_m`), commit (`ss_m_forget`), and the body is below
+the alias. So `{name: @n, kids: @ks}` with `ks : [Person]` stored is a `Person`, and a tree node is built
+from stored children without a copy. The value is never kept partly new at a recursive type.
 A width step needs no guess, so it is not asked for: when equality fails between an argument and a
 parameter with unsolved variables, records are matched label by label (the per-label rule, with the
 types it needs equal unified) and covariant enum arguments recursively, and the full $<=$ (or
@@ -1179,6 +1183,21 @@ sees after the break is typed. The two kinds of builtin differ here:
 
 Without `break`, child-stack and current-stack execution are indistinguishable for a well-typed quote
 (frame lemma). They differ only in which stack a loop sees after a `break`.
+
+A list literal and a dict value run on a stack of their own, which a `break` throws away, as a
+child-stack word's (a grid cell ignores one, so it is refused there): `5 (drop [7 break]) loop` leaves the loop with nothing, not the `7` (found
+2026-10-02: the checker counted the literal's own items).
+
+*In the checker (2026-10-02, ninth session).* A break or continue context inside a word's literal quote
+is the enclosing loop's stack $sigma$ together with the stack under the word's arguments, and, for a
+child-stack word, a mark that the quote's own stack is thrown away. At a `break` the stack under the
+word, then (for a current-stack word) the quote's stack, must fit $sigma$. That is the *Each* rule's
+$sigma = L$ and the *Bind* rule's $L$, decided at the `break` itself: a word whose quote has no `break`
+constrains nothing. `map` on a Maybe, `bind` and `map2` used to refuse every `break`; they now follow
+*Bind*. Deciding it when the word was reached, as the checker did for child-stack words, compared the
+stack under the word with the loop's stack eagerly, and a quote literal still waiting there had its type
+fixed without its body being checked: `(1 +) ( drop ("a" +) [1] (drop break) each ) loop 2 swap x`
+checked and added 1 to `"a"`. A `break` now types such a literal on its own first.
 
 *As mechanized.* The proof keeps separate break and continue contexts, because `continue` inside
 `each` also leaves the child stack and restarts the enclosing loop (checked in `Evaluator.go`: `each`
@@ -1841,6 +1860,14 @@ A command is a list plus its redirect state, and the redirect state is part of i
 - On a *fresh* list (`[mycmd arg arg]*!`, `[cmd] 2>&1 *`, ``[cmd] `f` >``) it updates in place,
   with no allocation. This is essentially every redirect in real scripts.
 - On a list that may be aliased (`@c *`, `dup *`) it is a type error; write `@c deepCopy *` (P7).
+- On a new list that holds stored values (`[echo @files] *`) it updates in place too: the redirect changes
+  the list's own type, as `set` on a new dict holding stored values changes the dict's (`tw_setk_m`), and
+  the stored values keep theirs (2026-10-02, ninth session). `|` copies the list of commands, so it gives a
+  new pipe of stored commands, which may be captured (`@l | * !`).
+- A command runs with arguments that are strings, paths, numbers or dates, or lists of them. When an
+  argument's type is not solved yet where the command runs (`(v! [@v] ;) q!`), the check is made again
+  once the def or script is solved (found 2026-10-02: the checker let it through). The elements of a pipe
+  are commands; a pipe is not one (`[@p] |` on a pipe `p` was accepted).
 - A command's arguments may be lists, which the runtime flattens without looking for cycles, so an
   argument type that may contain itself (`type A = [str | A]`) is refused. An alias of a list type is a
   command like the list type it names.
@@ -2092,6 +2119,12 @@ programs that checked and then stopped with a type mismatch for each:
   literal argument again for each member, with that member's candidate and break context.
 - A literal key, or the arm a union came from, does not carry over a loop's back edge: the slot holds
   what the last run left.
+- *The type of a waiting literal is decided once* (2026-10-02, ninth session): when it is typed on its own,
+  checked against the word that takes it, or run inline. If anything fixed it earlier, that decision did
+  not check the body, and the program is rejected there instead of trusted (an earlier hole, @sec-break).
+  `=` types waiting literals before it joins its operands, and a literal fits a parameter only when that
+  is a quote type or a bare generic: `(1) wl` and `(1) (2) +` checked, taking the literal for an `int`
+  or for `[t]`.
 
 The result: the answer does not depend on the order constraints are visited, and
 `inputUnifyOrder`, first-arm union commitment and rollback-driven overload trials are unnecessary
@@ -2527,7 +2560,8 @@ Each was checked against `Evaluator.go` on `main`, not only taken from the docs.
      `del` can stay in place once nothing shares storage.],
   [Variable scoping],
     [One scope per def invocation, none inherited; quotes capture their scope by reference and can
-     add variables to it; closures outlive the def.],
+     add variables to it; closures outlive the def. Every word that runs a quote runs it in that
+     scope; `loop` on a stored quote used to run it in the scope around the loop (fixed 2026-10-02).],
     [$Gamma$ is per scope; cells are heap objects; definite assignment is a separate check.],
   [Enum runtime representation],
     [On the enum branch, values carry enum name, member and payload.],
@@ -2545,7 +2579,8 @@ Each was checked against `Evaluator.go` on `main`, not only taken from the docs.
      leaves the loop (2026-10-01).],
   [Which values does `=` compare?],
     [Two scalars of one kind; `null` with any scalar, on either side (unequal); `Maybe`s, dicts and
-     enums by their contents, where values of different kinds are unequal. Anything else is an error.],
+     enums by their contents, where values of different kinds are unequal. Anything else is an error.
+     A `Maybe` of `int | null` compared an int with a null inside as an error (fixed 2026-10-02).],
     [The two sides join to an equatable type. At the top a union is equatable only when it is one
      scalar kind and `null` (`int | null`), 2026-10-01.],
 )

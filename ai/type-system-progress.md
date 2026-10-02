@@ -771,7 +771,7 @@ Mitchell: no. Elements given to a `map`/`each` quote stay shared even over a new
 - `map` on a `Maybe` checked correctly, but the messages misled. Mitchell's `2026-10-02 just (now date) map` (the quote leaves the date it was given and a second one): the runtime said "found 1 values" for two (`map`/`bind` on a Maybe counted the net change; `quoteLeftMessage`), and the checker's message did not say the quote starts with the value. A quote whose output count is wrong now says what it starts with and suggests `drop`; a quote whose output has the wrong type names the consuming word, not `(`. Tests `tests/typecheck_fail/map_maybe_quote_leaves_input.msh`, `tests/fail/map_maybe_two_values.msh`.
 - From Mitchell's `iem.msh`: a built-in alias `UrlEncodable = str | path | int | [str | path | int]`. `urlEncode`'s dict form is `({str: UrlEncodable} -- str)`: a new or partly new dict is checked against that type first (so a literal with `[str]` and `[int]` lists checks), otherwise the values are read at one type as before (`UrlEncodable`, or `str | int | path` with a stored `[str]`, `[int]` or `[path]`); a stored dict that would fit if new gets a hint to write `as {UrlEncodable}` where it is made. Hover shows walker forms beside table forms (`buildHoverIndex`). `as` on a partly new value now names each stored value in the way and the type it would need (`storedBlockers`, e.g. "`data` is a stored [str], which cannot become [int | str | path]"). Tests in `TestCoreChecker`, `TestHoverIndexMergesWalkerForms`, `tests/success/urlencode.msh`; docs (`functions.inc.html`, `type_system.inc.html`, `mshell.md`) and the design doc's alias table updated. Mitchell's `iem.msh` (in the repository root, his file, untracked) checks with `as [str | path | int]` on the `dataCols` list and `as {UrlEncodable}` on the params literal.
 
-## Where things stand (end of 2026-10-02, eighth session)
+## Where things stand (end of 2026-10-02, eighth session; superseded by the last section)
 
 - Committed on `type-checker-enhancements` (not pushed): "Fix holes an independent review found in the type checker" (code, tests, user docs, changelog), "Record the review, and questions 13-15, in the design notes" (design doc, plan, this log), and "Clearer quote and as errors, and an UrlEncodable alias for urlEncode" (the section above, with its notes). Working tree clean after them, apart from Mitchell's own untracked `iem.msh` in the repository root.
 - Suites at that commit: `tests/test.sh` 0 failed; `tests/typecheck_test.sh` 433 passed, 0 failed; `tests/soundness_test.sh` 0 mismatches; `go test ./...` ok (`go vet`: only the old `UnreadByte` warning in `Main.go`); `make check` in `formal-ver/` closed under the global context; `make -C formal-ver/oracle test` 23 examples agree; `typst compile ai/type-core-calculus.typ` ok; docs rebuilt. `formal-ver/` is unchanged except the oracle script's executable bit.
@@ -797,3 +797,81 @@ Working notes:
 - Never write `go test -cpuprofile` output into `mshell/`: it overwrites the tracked `mshell/mshell.test`.
 - A useful review method this session: independent subagents per area, each writing small programs and running them through a script that type-checks, then runs with `MSH_ERROR_KIND=1` and flags "checks, then type mismatch". Give them a frozen copy of the binary, not `mshell/msh`, if you rebuild meanwhile.
 
+
+## Ninth session (2026-10-02): a second independent review, and the follow-ups
+
+Started from `c10eed6`; all suites passed there (`test.sh` 0 failed, `typecheck_test.sh` 433 passed, soundness 274 run, 0 mismatches, `go test` ok).
+
+### The checker follow-ups from the eighth session
+
+- `break`/`continue` in `map` on a Maybe, `bind` and `map2` were refused. They now follow the design's *Bind* rule: the break leaves the loop with the stack under the word's arguments, then what the quote pushed. Tests `tests/success/break_current_stack.msh`, `tests/typecheck_fail/break_current_stack_*.msh`.
+- While doing it, found an older hole: `childLoopCtx` compared the stack under a child-stack word with the loop's stack as soon as the word was reached, and a quote literal still waiting there got its type fixed without its body being checked. `(1 +) ( drop ("a" +) [1] (drop break) each ) loop 2 swap x` checked, then added 1 to `"a"`. Now one rule for both kinds of word (`bodyLoopCtx` in `TypeCoreQuote.go`): the loop context carries the stack under the word (`below`) and whether a break throws the quote's own stack away (`discard`); the comparison is made at the `break`, after typing waiting literals there. A word whose quote has no break constrains nothing. `loopChild` is gone. Test `break_child_waiting_quote.msh`.
+- Defense: every place that decides a waiting literal's type (`inferPending`, `checkPending`, `x`, `iff`, `loop`, `and`/`or`) goes through `settle`, which reports an error if the placeholder was already fixed, instead of ignoring the failed unification.
+- Not gaps after all: `x.`, `loop.` and `iff.` are not words at run time either (a language change, not a checker one); a multi-index with a slice on a pipe is refused by the runtime too.
+
+### Second independent review
+
+Four read-only subagents, in areas the first review did not cover: defs, generics and std signatures; the inference machinery; scalars, strings, processes; aliases, shapes and partly new values. Each wrote programs and ran them through a script that type-checks with a frozen binary and runs what checks with `MSH_ERROR_KIND=1`. Every hole was reproduced, fixed, and has a test.
+
+Holes (programs that checked and then stopped with a type mismatch):
+
+- **A quote literal where the word takes something else**: `(1) wl`, `(3) f` for `def f (int -- int)`, `[1 2] (3) append`. `checkPending` typed the literal and dropped a failed check. Also `argsFit` counted a literal as fitting any parameter that mentions a generic, so `(1) (2) +` chose `([t] [t])`; now only a quote type or a bare generic. Tests `quote_literal_*`.
+- **`=` with a quote literal**: `(1) 5 =` joined the operands first, fixing the literal's type to `int`. `=` types waiting literals first.
+- **A command argument whose type was not solved yet**: `(v! [@v] ;) q!  true @q x`, and `[] l! ([@l] ;) q! @l true append drop @q x` (also in a loop). `commandLineable` accepted a type variable on the spot; now `argsLineable` defers a check to the solved unit (`ruleCommandArg`). Tests `command_arg_*`.
+- **A pipe of pipes**: `[[echo hi]] | p! [@p] | ;`. `|` and running a pipe refuse a pipe element. Test `pipe_of_pipes.msh`.
+- **`=` on Maybes holding `int | null`**: `null as int | null just 5 as int | null just =` was a runtime error in one order. Runtime fix (`Maybe.Equals`, `equalsIter`): values of different kinds inside a Maybe are unequal, as in a dict. Changelog: Fixed. Test `tests/success/maybe_null_equality.msh`.
+- **`loop` on a stored quote ran it in the caller's variables** (`Evaluator.go`, `processLoop` replaced the quote's scope with the caller's; from #332). The checker types the body in the quote's scope, as for `x` and `each`. Runtime fix: `loop` uses the quote's scope; for a literal that is the same map. Changelog: Fixed. Test `tests/success/loop_stored_quote_scope.msh`.
+- **`break` inside a list literal or dict value**: `5 (drop [7 break]) loop 1 +`. The runtime throws the literal's stack away; the checker counted it. A literal's body now gets the child-stack break context (`childIn`), which also accepts `5 (["x" break]) loop`. Tests `break_in_list_literal.msh`, `continue_in_dict_value.msh`, `tests/success/break_in_literal.msh`.
+- **A chain of more than 64 aliases**: `unfold` stopped after 64 steps, and patterns bound names at ⊥. `unfold` now follows the chain (declarations refuse unguarded cycles; a bound past the number of aliases gives unknown contents), and `keyAllowed` refuses a leftover alias. Test `alias_chain_long.msh`.
+
+Also: a signature with more than 64 inputs or outputs is an error (generic masks are 64 bits).
+
+False rejections fixed:
+
+- An alias of a union is split per member like the union (`type N = int | float`, `5 as N abs`); a recursive alias such as `Json` is not.
+- A redirect target may be a union or alias of `str` and `path` (and `bytes` for `<`).
+- `~` and `~/rest` are typed (`str`); they were "no rule" and "unknown identifier".
+- `e`, `es`, `ec` on a non-command say so, instead of "no rule ... please report this".
+- `append` looks through an alias of a list of lists (`widenForAppend`).
+- A redirect or capture on a new list that holds stored values (`[echo @fs] * !`), and a capture on a pipe made from a stored list (`@l | * !`). The redirect changes the list's own type, as `tw_setk_m` does for a dict; `|` copies the list, so it gives a new pipe of stored commands. Tests `redirect_partly_new.msh`, `redirect_stored_partly_new.msh`.
+- A partly new value can be a recursive alias at a checking position: retyped to the alias's body and committed (`markBelow`). So `def mk (str [P] -- P) ks! n! {name: @n, kids: @ks} end` checks. Tests `partly_new_recursive_alias.msh`, `partly_new_recursive_alias_wrong_child.msh`.
+
+Found by the stricter literal rule in `lib/std.msh`: `__sshCompletion` passed a quote literal to `maybe` as the default, which `maybe` gives back as it is, so completing after an unknown `ssh` option returned a quotation. Now a `match` (the hosts are still looked up only when needed). Changelog: Fixed.
+
+Docs: `setenv` takes the name, then the value (`mshell.md` and `variables.inc.html` said the reverse; the runtime and tests agree with the name first); `::` removed (it never existed in the Go code); a redirect on a literal holding stored values; `break` in `map` on a Maybe, `bind`, `map2`. Design doc: "Quotes that break", "Stacks saved before arms and loops", "Checking positions", "Commands", runtime facts. Generator: a family that breaks or continues from `map` on a Maybe, `bind` and `map2`, sometimes after pushing a value.
+
+### Questions 16 and 18 answered (2026-10-02)
+
+- 16 (Mitchell): `numeric` means `int | float`. `toSvgPathStr` is `([[int | float]] -- str)` in `lib/std.msh`, `mshell.md` and `functions.inc.html`. Lists are invariant, so a stored `[[float]]` needs `as [[int | float]]` where it is made; literals widen as they are.
+- 18 (Mitchell): a size of 0 or less is an error. `chunk` writes `chunk: the chunk size must be positive, got N` to stderr and exits 1. Tests `tests/fail/chunk_size_zero.msh`, `chunk_size_negative.msh`. Changelog: Fixed. Docs updated.
+
+## Where things stand (end of 2026-10-02, ninth session)
+
+This section is the handoff; it repeats what a new session needs from the eighth session's.
+
+- Committed on `type-checker-enhancements` (not pushed; `origin` is at `53d8dcb`): the eighth session's three commits, then this session's "Fix holes a second independent review found in the type checker" (code, tests, user docs, std, changelog) and "Record the second review in the design notes" (design doc, plan, this log). Working tree clean after them.
+- Suites at that point: `tests/test.sh` 359 passed, 0 failed; `tests/typecheck_test.sh` 457 passed, 0 failed; `tests/soundness_test.sh` 0 mismatches; `go test ./...` ok (`go vet`: only the old `UnreadByte` warning in `Main.go`); generated programs, seeds 400000-402999, 410000-412999, 420000-422999, no mismatch; `lib/std.msh` bodies check; `tests/msh-scripts` 75 of 118 type check (unchanged; never run them); `typst compile ai/type-core-calculus.typ` ok; docs rebuilt. `formal-ver/` unchanged this session: every new acceptance is a composition of proved steps (named in the design doc), so `make check` was not rerun.
+- Stages done: 0 through 7, plus two independent reviews (eighth and ninth sessions), whose holes are fixed. Left: stage 8's final pass at release (merge the changelog's duplicate `### Added` headings under Unreleased then).
+- Open question in the plan: 17 (should a type-like name in a signature that is not a type, `numeric`, `string`, `quote`, `binary`, `date`, be an error or a hint; today it silently becomes a generic).
+- `gofmt` has never been run on the type-checker files (not permitted without asking).
+
+Follow-ups not changed, for Mitchell to pick from:
+
+- Checker, conservative: `5 just 2.5 maybe` (no widening through `maybe`); `(a a -- a)` with two quote literals depends on their order; a generic completion def (`([a] -- [a])`) is refused; a stored `(GridRow -- int)` quote is refused by `derive`, `join`, `pivot`, `groupBy`; a `none` nested in a join fixes a variable to ⊥, and `openBottom` does not open ⊥ inside quote types or unions (`(none) q! (5 just) q!`); `[] f! [echo @f] c! @f "x" append drop` (a list of unknown elements in a command literal) is refused; joins of commands with different file redirects; stored `(;)`, `(<)`, quotes as pipe stages; `numFmt` with a stored options dict needs `as NumFmtOptions` (by design); a deferred error can point at a later token; the literal `-9223372036854775808` does not lex.
+- Messages: a quote type written as code says "no rule for '--'"; `def f (-- new)` cascades; `new` is not checked on a body that always diverges (`def f ( -- new int) 1 exit end` is accepted, harmless); `| exact`, `| open` and `Maybe[<bottom>]` in printed types; the hint for a partly new literal blocked by a stored value inside says `deepCopy` the literal; a path key with `set` does not say a path is not a literal key; "unknown identifier" for a variable whose only store is unreachable.
+- Runtime: NaN/Inf to int in `floor`, `ceil`, `round`, `toInt` give MinInt64; `round` on a large int loses precision; `numFmt` prints NaN/Inf as `0` and overflows on large magnitudes; `toFixed`/`decimals` above 10^6 print `%!(BADPREC)`; string indexing is by byte (`"é" :0:` is `Ã`) and `take`/`skip` cut UTF-8; `"ab" -1 take` says "list"; `"-8000000000000000" 16 fromBase` is none; `abs` of MinInt64; a second `<` on a quotation replaces the first silently; grid `map` takes columns from the first row only; captures inside pipe elements are ignored, and a file redirect on the list before `|` is dropped; `[echo hi] * & ;` pushes "".
+- Language: `x.`, `loop.` and `iff.` prefix forms do not exist at run time (the checker agrees).
+- Table vs docs: `writeFile`/`appendFile` accept a path as content (writes its text); `TarEntryInfo`'s `type` key cannot be read with a getter (`type` is a keyword).
+- Still tracked in git: `mshell/mshell.test` (19 MB, from `main` #320). The parser allocates about 37,000 times per 50 KB of source.
+
+Working notes:
+
+- Where to start reading the checker: `mshell/TypeCore.go` (walker, units, `joinSlot`, `check`/`matchSub`), `TypeCoreQuote.go` (waiting quote literals, `settle`, loop and break contexts: `bodyLoopCtx`), `TypeCorePartial.go` (partly new values, `markBelow`), `TypeCoreBuiltins.go` (the table), `TypeRelations.go` (the proved relations; compared with `formal-ver/oracle` by `TestRelationsAgreeWithOracle`).
+- Build both binaries before testing: `cd mshell && ./build.sh` (`test.sh` runs `mshell/mshell`, `typecheck_test.sh` runs `mshell/msh`).
+- By hand, point `MSHINIT` at an empty file (or `/dev/null`); an empty `MSHINIT=` loads the user's init file. Check std's bodies with `MSHSTDLIB=<an empty file> mshell/msh --type-check-only lib/std.msh`; an empty `MSHSTDLIB=` loads an installed std.
+- `tests/msh-scripts` is gitignored and differs per machine (118 files here, 75 pass). Type check them only; never run them (question 13).
+- Generator: `MSH_GEN_WORKERS=4 MSH_GEN_PROGRAMS=3000 MSH_GEN_SEED=<new range> go test -run TestGeneratedProgramsSound -v -timeout 3h .` (about 100 s per 3,000 here). The watchdog (`MSH_GEN_MEMCAP`, `MSH_GEN_TIMEOUT`) stops a runaway; `MSH_GEN_SHOW=seed` prints a program; `MSH_GEN_DEBUG=1` prints refused statements. Seeds used so far: 100000-109999, 200000-201999, 300000-302999, 400000-402999, 410000-412999, 420000-422999.
+- Benchmarks drift between sessions and machines: compare against an older commit in a `git worktree` (in the scratchpad), interleaved, and compare allocations. `BenchmarkCoreCheckGenerated` (fixed input) is the fair one.
+- Never write `go test -cpuprofile` output into `mshell/`: it overwrites the tracked `mshell/mshell.test`.
+- Review method that found holes both times: independent read-only subagents per area, each writing small programs and running them through a script that type-checks with a frozen copy of the binary, then runs what checks with `MSH_ERROR_KIND=1` and flags "checks, then type mismatch". The ninth session's areas: defs/generics/std, inference machinery, scalars/strings/processes, aliases/shapes/partly new values. Areas neither review targeted on its own: grids beyond the first review's pass, enums with generic payloads in joins, the LSP's checker paths.
+- `ntfy "<message>"` notifies Mitchell (the script sends its argument as the message; do not pass flags).

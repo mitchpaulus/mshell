@@ -26,6 +26,7 @@ put the answer in the Typst design doc and remove the row.
 
 | # | Question | Context |
 |---|---|---|
+| 17 | Should a type-like name in a signature that is not a type (`numeric`, `string`, `quote`, `binary`, `date`) be an error, or a hint on the generic? | Today it silently becomes a generic. Noted in stage 3 and again by the second review. |
 
 ## 3. Files
 
@@ -166,7 +167,7 @@ The same applies to runtime work: `deepCopy`, the cycle-safe walkers and `valida
 
 Each stage lists its work, its tests, and when it is done.
 
-Status (end of 2026-10-02, eighth session): done: stages 0 through 7, and an independent review whose holes are fixed (progress log). Open questions: none. Left: stage 8's final pass at release.
+Status (end of 2026-10-02, ninth session): done: stages 0 through 7, and two independent reviews whose holes are fixed (progress log). Open questions: 17. Left: stage 8's final pass at release.
 Stages 2–5 depend on each other in order. Runtime groundwork is independent and can land any time. The soundness oracle can start after the core checker.
 
 ### Stage 0: Baseline and measurements
