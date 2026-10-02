@@ -876,6 +876,8 @@ func (p *progGen) stmtOnce(ctx *gctx, blk *gblock) bool {
 		return p.quoteInStmt(ctx, blk)
 	case r < 98:
 		return p.keepArmStmt(ctx, blk)
+	case r < 99:
+		return p.miscStmt(ctx, blk)
 	default:
 		return p.matchStmt(ctx, blk)
 	}
@@ -1479,7 +1481,7 @@ func (p *progGen) genDef() {
 func (p *progGen) generate() string {
 	p.header = genHeader
 	p.main = &gblock{}
-	switch p.rng.Intn(7) {
+	switch p.rng.Intn(8) {
 	case 0:
 		p.focus = p.gridStmt
 	case 1:
@@ -1492,6 +1494,8 @@ func (p *progGen) generate() string {
 		p.focus = p.cmdStmt
 	case 5:
 		p.focus = p.genericStmt
+	case 6:
+		p.focus = p.miscStmt
 	}
 	for i := p.rng.Intn(3); i > 0; i-- {
 		p.genDef()
@@ -1823,6 +1827,20 @@ func (p *progGen) freshGridOp(ctx *gctx, code string, fs []gfield, rows int) (st
 			break
 		}
 		return code + ` "` + f.name + `" gridRemoveCol`, withoutField(fs, f.name)
+	case 3:
+		if len(fs) >= 3 {
+			break
+		}
+		name := gFieldNames[len(fs)]
+		var out []gfield
+		for _, g := range fs {
+			if g.name == f.name {
+				g.name = name
+			}
+			out = append(out, g)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+		return code + ` "` + f.name + `" "` + name + `" gridRenameCol`, out
 	}
 	return code, fs
 }
@@ -1851,8 +1869,38 @@ func (p *progGen) gridStmt(ctx *gctx, blk *gblock) bool {
 	f := fs[p.rng.Intn(len(fs))]
 	plain := g.t.gridKind == gridPlain
 	n := p.name("g")
-	switch p.rng.Intn(14) {
-	case 0:
+	switch p.rng.Intn(20) {
+	case 14: // every cell, read at the join of the columns
+		var ts []*gty
+		for _, h := range fs {
+			ts = append(ts, h.t)
+		}
+		if j := unionOf(ts...); j != nil {
+			return p.try(blk, at+" gridValues "+p.consume(ctx, listOf(listOf(j)), 3), false, nil)
+		}
+		return p.try(blk, at+" gridValues len drop", false, nil)
+	case 15: // joins with another grid, on a key
+		if f.t.k != gInt && f.t.k != gStr {
+			return false
+		}
+		word := p.pick([]string{"join", "leftJoin", "outerJoin"})
+		right := p.gridLit(ctx, []gfield{{name: "x", t: f.t}, {name: "y", t: tStr}}, 1+p.rng.Intn(2))
+		return p.try(blk, at+" "+right+` ("`+f.name+`" get) ("x" get) `+word+" gridRows drop", false, nil)
+	case 16: // pivot
+		if len(fs) < 2 || (fs[0].t.k != gInt && fs[0].t.k != gStr) || (fs[1].t.k != gStr) {
+			return false
+		}
+		return p.try(blk, at+` ["`+fs[0].name+`"] "`+fs[1].name+`" (len) pivot gridValues len drop`, false, nil)
+	case 17: // map rows to new dicts
+		u := p.immutableCol()
+		nfs := []gfield{{name: "a", t: u}}
+		return p.try(blk, at+" (drop {a: "+p.expr(ctx, u, 1)+"}) map "+n+"!", false, func() { sc.add(n, gridOf(gridPlain, nfs)) })
+	case 18: // a view made a grid
+		if plain {
+			return false
+		}
+		return p.try(blk, at+" gridCompact "+n+"!", false, func() { sc.add(n, gridOf(gridPlain, fs)) })
+	case 0, 19:
 		return p.try(blk, at+" "+n+"!", false, func() { sc.add(n, g.t) })
 	case 1: // updateCol in place, at the column's type or (risky) another
 		if !f.t.immutable() || !plain {
@@ -2239,4 +2287,132 @@ func (p *progGen) genericStmt(ctx *gctx, blk *gblock) bool {
 	}
 	p.try(blk, "@"+n+" "+p.consume(ctx, out, 3), false, nil)
 	return true
+}
+
+// ---- Loops that carry values, shuffled quotes, quote parameters,
+// unknown contents, equality, format strings ----
+
+func (p *progGen) miscStmt(ctx *gctx, blk *gblock) bool {
+	sc := ctx.sc
+	n := p.name("v")
+	switch p.rng.Intn(9) {
+	case 0, 1: // a loop that carries a value on the stack
+		t := p.randType(2)
+		c := p.name("c")
+		var body []string
+		risky := false
+		for i := 0; i < 1+p.rng.Intn(3); i++ {
+			switch p.rng.Intn(5) {
+			case 0: // replace it
+				body = append(body, "drop "+p.expr(ctx, t, 1))
+			case 1: // store it and load it again
+				x := p.name("x")
+				body = append(body, x+"! @"+x)
+				defer func(x string) { sc.add(x, t).set = false }(x)
+			case 2: // write through it
+				if w := p.writeOutside(ctx, "dup", p.widen(t), t); w != "" && p.risky() {
+					body = append(body, w)
+					risky = true
+				} else if t.k == gList {
+					body = append(body, "dup "+p.expr(ctx, t.elem, 1)+" append drop")
+				}
+			case 3: // widen it (risky unless new)
+				if t.written() {
+					body = append(body, "as "+p.widen(t).src())
+					risky = true
+				}
+			default: // a copy in its place
+				body = append(body, "deepCopy")
+			}
+		}
+		code := p.expr(ctx, t, 2) + " as " + t.src() + " 0 " + c + "! ( @" + c + " 2 >= if break end @" + c + " 1 + " + c + "! " +
+			strings.Join(body, " ") + " ) loop " + p.consume(ctx, t, 3)
+		return p.try(blk, code, risky, func() { sc.add(c, tInt).counter = true })
+	case 2: // a quote literal moved before the word that takes it
+		l := p.pickVar(ctx, func(v *gvar) bool { return v.t.k == gList })
+		if l == nil {
+			return false
+		}
+		u := p.randType(1)
+		t := listOf(u)
+		q := "(drop " + p.expr(ctx, u, 1) + ")"
+		code := p.pick([]string{
+			q + " @" + l.name + " swap map",
+			"@" + l.name + " " + q + " 5 drop map",
+			q + " @" + l.name + " over drop swap map",
+		})
+		return p.try(blk, code+" as "+t.src()+" "+n+"!", false, func() { sc.add(n, t) })
+	case 3: // a def that takes a quote, given a literal, a stored quote or one that never returns
+		d := p.name("qd")
+		def := &gnode{text: "def " + d + " (int (int -- int) -- int) x end"}
+		p.defs = append(p.defs, def)
+		arg := p.pick([]string{"(1 +)", "(dup *)", `(drop "a" str len)`, "(drop 0 exit)"})
+		if !p.try(blk, p.expr(ctx, tInt, 1)+" "+arg+" "+d+" 1 + drop", false, nil) {
+			p.defs = p.defs[:len(p.defs)-1]
+			return false
+		}
+		return true
+	case 4: // unknown contents: an undeclared key of an open shape, taken apart by kind
+		s := p.pickVar(ctx, func(v *gvar) bool { return v.t.k == gShape })
+		if s == nil {
+			return false
+		}
+		acc := p.pickVar(ctx, func(v *gvar) bool { return v.t.k == gList })
+		escape := ""
+		risky := false
+		if acc != nil && p.risky() {
+			// Store a value of the unknown element type outside the arm.
+			escape = " dup len 0 > if :0: @" + acc.name + " swap append drop else drop end"
+			risky = true
+		}
+		code := "@" + s.name + ` "z" "" + get match just u1 :> ? match list :> len drop` + escape + ", _ : , end, none : , end"
+		if escape == "" {
+			code = "@" + s.name + ` "z" "" + get match just :> ? match list :> len drop, dict :> keys len drop, _ : , end, none : , end`
+		}
+		if !p.try(blk, code, risky, nil) {
+			return false
+		}
+		if acc != nil {
+			p.try(blk, "@"+acc.name+" "+p.consume(ctx, acc.t, 3), false, nil)
+		}
+		return true
+	case 5: // equality
+		t := p.randType(1)
+		return p.try(blk, p.expr(ctx, t, 1)+" "+p.expr(ctx, t, 1)+" "+p.pick([]string{"=", "!="})+" not drop", false, nil)
+	case 6: // a format string
+		v := p.pickVar(ctx, func(v *gvar) bool { return v.t.written() })
+		if v == nil {
+			return false
+		}
+		return p.try(blk, `$"[{@`+v.name+`}] {1 2 +}" "" + drop`, false, nil)
+	case 7: // a join of a new arm and a stored one
+		v := p.pickVar(ctx, func(v *gvar) bool { return v.t.written() && v.t.k != gQuote })
+		if v == nil {
+			return false
+		}
+		if !p.try(blk, p.expr(ctx, tBool, 1)+" if @"+v.name+" else "+p.expr(ctx, v.t, 2)+" end "+n+"!", false,
+			func() { sc.add(n, v.t) }) {
+			return false
+		}
+		p.exploit(ctx, blk, "@"+n, v.t, v.t, v)
+		return true
+	default: // tryAs on a partly new value
+		v := p.pickVar(ctx, func(v *gvar) bool { return v.t.written() && !v.t.immutable() })
+		if v == nil {
+			return false
+		}
+		w := p.widen(v.t)
+		t := shapeOf(gfield{name: "a", t: w})
+		m := p.name("t")
+		code := "{a: @" + v.name + "} tryAs " + t.src() + " match just " + m + " : @" + m + " :a? " +
+			strings.TrimPrefix(p.writeOutside(ctx, "", w, v.t), " ") + ", none : , end"
+		if p.writeOutside(ctx, "", w, v.t) == "" {
+			return false
+		}
+		if !p.try(blk, code, true, func() { sc.add(m, t).set = false }) {
+			return false
+		}
+		p.try(blk, "@"+v.name+" "+p.consume(ctx, v.t, 3), false, nil)
+		return true
+	}
 }

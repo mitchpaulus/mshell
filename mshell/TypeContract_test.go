@@ -1,10 +1,14 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
 	"fmt"
 	"io"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,6 +52,9 @@ var contractTokens = map[TokenType]string{
 
 type contractGen struct {
 	rng  *rand.Rand
+	// strs and paths are the values str and path inputs take: the
+	// contract* pools, and the fixture files' names.
+	strs, paths []string
 	c    *coreChecker
 	ar   *TypeArena
 	pool []TypeId // types a generic may be instantiated with
@@ -98,15 +105,15 @@ func (g *contractGen) value(b *strings.Builder, t TypeId, depth int) bool {
 		case TidFloat:
 			b.WriteString(g.pick(contractFloats))
 		case TidStr:
-			b.WriteString(mshStr(g.pick(contractStrs)))
+			b.WriteString(mshStr(g.pick(g.strs)))
 		case TidBool:
 			b.WriteString(g.pick([]string{"true", "false"}))
 		case TidPath:
-			b.WriteString(g.pick(contractPaths))
+			b.WriteString(g.pick(g.paths))
 		case TidDateTime:
 			b.WriteString(g.pick(contractDates))
 		case TidBytes:
-			b.WriteString(mshStr(g.pick(contractStrs)) + " utf8Bytes")
+			b.WriteString(mshStr(g.pick(g.strs)) + " utf8Bytes")
 		case TidNull:
 			b.WriteString("null")
 		case TidUnknown:
@@ -558,7 +565,8 @@ func envTrials(name string, def int) int {
 func newContractGen(seed int64) (*contractGen, *CoreBase) {
 	base := NewCoreBase(nil, nil)
 	c := base.newChecker()
-	g := &contractGen{rng: rand.New(rand.NewSource(seed)), c: c, ar: c.arena}
+	g := &contractGen{rng: rand.New(rand.NewSource(seed)), c: c, ar: c.arena,
+		strs: append([]string(nil), contractStrs...), paths: append([]string(nil), contractPaths...)}
 	for _, src := range []string{"int", "str", "float", "bool", "path", "datetime", "[int]", "[str]", "{str: int}",
 		"Maybe[int]", "int | str", "[[int]]", "{a: int, b?: str}", "Json", "Maybe[[str]]", "[int | str]"} {
 		ast := builtinSigAST("(" + src + " -- )")
@@ -691,9 +699,49 @@ type contractFailure struct {
 	word, sig, src, why string
 }
 
+// contractFixtures writes files the file-reading builtins can read, and
+// returns their names.
+func contractFixtures(t *testing.T) []string {
+	dir := t.TempDir()
+	write := func(name string, data []byte) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	names := []string{
+		write("data.txt", []byte("hello\nworld\n")),
+		write("data.json", []byte(`{"a": [1, 2], "b": "x"}`)),
+		write("data.csv", []byte("a,b\n1,2\n3,4\n")),
+	}
+	if xlsx, err := os.ReadFile("../tests/success/excel_test_file.xlsx"); err == nil {
+		names = append(names, write("book.xlsx", xlsx))
+	}
+	var zb bytes.Buffer
+	zw := zip.NewWriter(&zb)
+	if w, err := zw.Create("x.txt"); err == nil {
+		w.Write([]byte("abc"))
+	}
+	zw.Close()
+	names = append(names, write("arch.zip", zb.Bytes()))
+	var tb bytes.Buffer
+	tw := tar.NewWriter(&tb)
+	tw.WriteHeader(&tar.Header{Name: "x.txt", Mode: 0o644, Size: 3})
+	tw.Write([]byte("abc"))
+	tw.Close()
+	names = append(names, write("arch.tar", tb.Bytes()))
+	return names
+}
+
 func TestBuiltinContracts(t *testing.T) {
 	trials := envTrials("MSH_CONTRACT_TRIALS", 12)
 	g, base := newContractGen(1)
+	for _, f := range contractFixtures(t) {
+		g.strs = append(g.strs, f)
+		g.paths = append(g.paths, "`"+f+"`")
+	}
+	g.strs = append(g.strs, "x.txt", `<https://a.example/x?page=2>; rel="next", <https://a.example/x>; rel="first"`)
 	env := &runtimeTypes{c: g.c}
 	cases := contractCases(g)
 	var failures []contractFailure
