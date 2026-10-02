@@ -106,6 +106,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `chunk` with a size of 0 or less exits with an error. Previously it never finished.
+- `ssh` completion after an option it has no list for offers the options and hosts. Previously it gave back a quotation instead of a list.
+- `loop` on a stored quotation runs it in the variables it captured, as `x` and `each` do.
+  Previously it read and wrote the variables of the code around the loop.
+- `=` and `!=` on two `Maybe`s that hold values of different kinds, such as `null` and an int from a `Maybe[int | null]`, give false.
+  Previously one order was an error.
 - A slice of a pipe (`@p 1:`) is a new list. Previously it shared storage with the pipe, so `setAt` or `append` on the slice could change the pipe.
 - `=` and `!=` on two `Maybe` values compare their contents. Previously every comparison of two `Maybe`s was false, including `none none =`.
 - `str` and `toJson` on a list or dict that contains itself are an error. Previously they crashed with a Go stack overflow or never finished.

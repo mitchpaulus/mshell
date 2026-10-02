@@ -1,0 +1,35 @@
+# map on a Maybe, bind and map2 run their quote on the current stack, so a
+# break or continue in a literal quote leaves the loop around the word with
+# the stack below the word's arguments, then what the quote pushed so far.
+0 i! 0 n!
+(
+  @i 1 + i!
+  @i 5 > if break end
+  @i just (dup 2 mod 0 = if drop continue end 10 *) map
+  ? @n + n!
+) loop
+@n wl
+
+0 i!
+( @i 1 + i!  @i just 1 just (+ dup 3 >= if drop break end) map2 drop ) loop
+@i wl
+
+# Nested: a break in bind inside map on a Maybe.
+0 i!
+( @i 1 + i!  @i just (just (drop break) bind) map drop ) loop
+@i wl
+
+# Inside each the child stack is discarded, as for any child-stack body.
+0 i!
+( @i 1 + i!  [1 2] (just (drop break) map drop) each ) loop
+@i wl
+
+# A loop in a quote typed on its own: the quote's input is part of the
+# loop's stack.
+( ( 1 + dup 10 > if break end dup just (drop break) map drop ) loop ) q!
+0 @q x wl
+
+# What the quote pushed stays on the loop's stack.
+0 n! 0
+( 1 + dup 5 > if break end dup just (2 mod 0 = if @n 1 + n! continue end 0) map drop ) loop
+drop @n wl

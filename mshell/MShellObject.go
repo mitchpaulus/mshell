@@ -243,6 +243,11 @@ func (m Maybe) Equals(other MShellObject) (bool, error) {
 	if m.obj == nil || o.obj == nil {
 		return m.obj == nil && o.obj == nil, nil
 	}
+	// Values of different kinds inside are unequal, as in a dict or an
+	// enum payload: Maybe(5) and Maybe(null) included.
+	if m.obj.TypeName() != o.obj.TypeName() {
+		return false, nil
+	}
 	return equalsIter(m.obj, o.obj)
 }
 

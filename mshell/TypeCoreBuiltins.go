@@ -409,6 +409,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	mapSigs := t.name(res.names.Intern("map"))
 	mapSigs[0].newListOut = 1
 	mapSigs[0].child = true
+	mapSigs[1].current = true
 
 	// ----- Maybe -----
 
@@ -418,6 +419,12 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// These run their quote on the current stack.
 	b.reg("bind", "(Maybe[a] (a -- Maybe[b]) -- Maybe[b])")
 	b.reg("map2", "(Maybe[a] Maybe[b] (a b -- c) -- Maybe[c])")
+	for _, name := range []string{"bind", "map2"} {
+		sigs := t.name(res.names.Intern(name))
+		for i := range sigs {
+			sigs[i].current = true
+		}
+	}
 
 	// ----- Comparisons and aggregates -----
 
@@ -459,6 +466,8 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("tempFile", "( -- path)")
 	b.reg("tempFileExt", "(str | path -- path)")
 	b.reg("pwd", "( -- str)")
+	// ~ is the home directory, as a string.
+	b.reg("~", "( -- str)")
 	b.reg("psub", "(str -- str)")
 
 	// Files. Lists read from the file system are new lists of paths.

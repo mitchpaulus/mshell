@@ -1,0 +1,2 @@
+# The runtime runs a pipeline of commands; a pipe is not a command.
+[[echo hi]] | p!  [@p] | ;

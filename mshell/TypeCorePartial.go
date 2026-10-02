@@ -114,6 +114,20 @@ func (c *coreChecker) markBelow(m coreMark, got, want TypeId) (ok, kept bool) {
 	if mem, ok := c.unionMemberOfKind(got, want); ok && c.msub(m, got, mem) {
 		return true, false
 	}
+	// A recursive alias is retyped to through its body, then committed:
+	// ss_m to the body, ss_m_forget, and the body is below the alias. So
+	// a new node holding stored children, `{name: @n, kids: @ks}`, is a
+	// Person. msub itself never unfolds one, so a partly new value is
+	// never kept at a recursive type.
+	if wn := c.arena.Node(want); wn.Kind == TKAlias && c.aliasRecursive(wn.A) {
+		body := c.unfold(want)
+		if c.msub(m, got, body) {
+			return true, false
+		}
+		if mem, ok := c.unionMemberOfKind(got, body); ok && c.msub(m, got, mem) {
+			return true, false
+		}
+	}
 	return c.rel.Sub(got, want), false
 }
 

@@ -92,7 +92,13 @@ func (c *coreChecker) unknownContents(t TypeId) bool {
 
 // unfold looks through aliases at the top of t.
 func (c *coreChecker) unfold(t TypeId) TypeId {
-	for i := 0; c.arena.nodes[t].Kind == TKAlias && i < 64; i++ {
+	// Declarations refuse alias cycles that pass no constructor, so this
+	// ends within one step per alias; the bound only guards against a bug,
+	// and what is left is then unknown contents.
+	for i := 0; c.arena.nodes[t].Kind == TKAlias; i++ {
+		if i > len(c.arena.aliases) {
+			return TidUnknown
+		}
 		t = c.arena.aliases[c.arena.nodes[t].A].Body
 	}
 	return t

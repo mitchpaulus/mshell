@@ -303,6 +303,7 @@ Where a program needs a copy, the error says so, and the program writes <code>de
 Some words change a value's type where it is: a redirect changes where a command's output goes, and <code>updateCol</code> can change a grid column's type.
 These need a new value.
 Writing the redirect straight after the list literal, or updating a grid straight from <code>parseCsv</code> and <code>toGrid</code>, is new; on a stored value they are errors that suggest <code>deepCopy</code>.
+The literal may hold stored values, such as a stored list of arguments (<code>[grep @flags "x"] *</code>): the redirect changes only the new list.
 </p>
 
 <pre><code>[echo "hi"] * ; out!            # ok: the literal is new
@@ -504,6 +505,8 @@ Quotation parameters of definitions have written types, so this is only a questi
 <p>
 <code>break</code> and <code>continue</code> are allowed only where they are checked: in a <code>loop</code> body, and in a quotation literal given to <code>each</code>, <code>map</code> or a similar word inside one.
 A stored quotation cannot break: it could be run where no loop is running.
+<code>each</code>, <code>map</code> on a list, and the other words that run a quotation once per element give it a stack of its own, which a <code>break</code> throws away.
+<code>map</code> on a Maybe, <code>bind</code> and <code>map2</code> run it on the current stack, so the loop is left with what the quotation pushed so far, and that must match the loop's stack.
 </p>
 
 <h1 id="type-system-control-flow">Control Flow <a class="section-link" href="#type-system-control-flow" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>

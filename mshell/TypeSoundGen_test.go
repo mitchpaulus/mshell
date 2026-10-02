@@ -859,7 +859,26 @@ func (p *progGen) stmtOnce(ctx *gctx, blk *gblock) bool {
 		}
 		return true
 	case r < 72 && ctx.loop:
-		return p.try(blk, p.expr(ctx, tBool, 1)+" if "+p.pick([]string{"break", "continue"})+" end", false, nil)
+		brk := p.expr(ctx, tBool, 1) + " if " + p.pick([]string{"break", "continue"}) + " end"
+		if p.rng.Intn(3) > 0 {
+			return p.try(blk, brk, false, nil)
+		}
+		// In a quote run on the current stack, what the quote pushed so
+		// far stays on the loop's stack: pushing a value first is risky.
+		extra, risky := "", false
+		if p.risky() {
+			extra, risky = p.expr(ctx, p.randType(1), 1)+" ", true
+		}
+		body := extra + brk
+		if extra != "" {
+			body += " drop"
+		}
+		code := p.pick([]string{
+			"1 just (drop " + body + " 2) map drop",
+			"1 just (drop " + body + " none) bind drop",
+			"1 just 2 just (drop drop " + body + " 3) map2 drop",
+		})
+		return p.try(blk, code, risky, nil)
 	case r < 78:
 		return p.ifStmt(ctx, blk)
 	case r < 83:

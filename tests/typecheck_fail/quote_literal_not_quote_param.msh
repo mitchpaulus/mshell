@@ -1,0 +1,3 @@
+# A quote literal given where the word takes something else: wl takes
+# int | str, not a quote.
+(1) wl

@@ -571,6 +571,11 @@ func equalsIter(a, b MShellObject) (bool, error) {
 			}
 			x, y = xm.obj, ym.obj
 		}
+		// Values of different kinds inside a Maybe are unequal, as in a
+		// dict or a payload: Maybe(5) and Maybe(null) included.
+		if x != nil && x.TypeName() != y.TypeName() {
+			return false, nil
+		}
 		switch xv := x.(type) {
 		case nil:
 		case *MShellDict:

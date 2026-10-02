@@ -3,7 +3,9 @@
 # type numeric int | float
 
 def chunk ([a] int -- [[a]])
-    [] chunkAcc
+    n!
+    @n 0 <= if $"chunk: the chunk size must be positive, got {@n}" wle 1 exit end
+    @n [] chunkAcc
 end
 
 def chunkAcc([a] int [[a]] -- [[a]])
@@ -272,7 +274,7 @@ def tjoin ([str] -- str)  tab join end
 def cjoin ([str] -- str) "," join end
 
 # Build an SVG path "d" string from [x y] pairs.
-def toSvgPathStr ([[numeric]] -- str)
+def toSvgPathStr ([[int | float]] -- str)
     points!
     @points len 0 = if
         ""
@@ -866,7 +868,12 @@ def __sshCompletion { 'complete': ['ssh'] } ([str] -- [str])
         '-J' @last = if
             __sshHosts
         else
-            __sshOptionArgs @last get (__sshDefaultOptions __sshHosts extend) maybe
+            # A match, not maybe: maybe would give the quote itself back, and
+            # the hosts are only looked up when needed.
+            __sshOptionArgs @last get match
+                just optionArgs : @optionArgs,
+                none : __sshDefaultOptions __sshHosts extend
+            end
         end
     else
         __sshDefaultOptions __sshHosts extend

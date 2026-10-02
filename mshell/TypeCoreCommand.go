@@ -71,7 +71,16 @@ func (c *coreChecker) commandWord(tok Token) bool {
 	case LITERAL:
 		switch tok.Lexeme {
 		case "e", "es", "ec":
-			return c.capture(tok)
+			if !c.capture(tok) {
+				// No other form: these only capture a command's output.
+				top := "an empty stack"
+				if len(c.stack) > c.floor {
+					top = c.format(c.subst.Apply(c.arena, c.stack[len(c.stack)-1].t))
+				}
+				c.cmdError(tok, "'"+tok.Lexeme+"' captures a command's output; it needs a command (a list), got "+top)
+				c.abandoned = true
+			}
+			return true
 		}
 	}
 	return false
@@ -110,9 +119,12 @@ func (c *coreChecker) cmdError(tok Token, hint string) {
 }
 
 // setStates replaces a command operand's type after a change of its stream
-// states; the list must be fresh.
+// states; the list must be new. It may hold stored values (`[echo @files]`):
+// the change is to the list's own type, as `set` on a new dict holding
+// stored values changes the dict's (tw_setk_m), and the stored values keep
+// theirs.
 func (c *coreChecker) setStates(i int, tok Token, argv TypeId, out, errs CommandCaptureMode) {
-	if !c.stack[i].fresh {
+	if !c.stack[i].fresh && c.stack[i].part == 0 {
 		c.cmdError(tok, "'"+tok.Lexeme+"' changes where a command's output goes, which is part of its type, "+
 			"so the list must be new, and this one may be shared (stored or duplicated); "+
 			"write the redirect right after the list literal, or deepCopy the list first")
@@ -147,6 +159,9 @@ func (c *coreChecker) redirect(tok Token) bool {
 			c.cmdError(tok, "only '<' takes bytes; '"+tok.Lexeme+"' needs a file name (str or path)")
 		}
 	default:
+		if c.redirectTarget(target, tok.Type == LESSTHAN) {
+			break
+		}
 		if quote || c.arena.nodes[target].Kind != TKPrim {
 			c.mismatch(tok, 1, c.arena.MakeUnion([]TypeId{TidStr, TidPath}), target)
 		} else {
@@ -275,7 +290,9 @@ func (c *coreChecker) merge(tok Token) bool {
 
 // commandLineable reports whether every value of t can be a command-line
 // argument: a string, path, number or date.
-// A list of such values is flattened into the command line.
+// A list of such values is flattened into the command line. A type
+// variable not solved yet passes; the caller checks again once the unit is
+// solved (argsLineable).
 func (c *coreChecker) commandLineable(t TypeId) bool {
 	return c.commandLineableIn(t, nil)
 }
@@ -324,12 +341,14 @@ func (c *coreChecker) run(tok Token) bool {
 	elem := c.listElem(argv)
 	if c.isPipe(ot) {
 		for _, m := range c.listMembers(elem) {
-			a, _, _, _ := c.commandParts(m)
-			if !c.commandLineable(c.listElem(a)) {
+			a, _, _, ok := c.commandParts(m)
+			if !ok || c.isPipe(m) {
+				c.cmdError(tok, "each element of a pipeline must be a command, not "+c.format(m))
+			} else if !c.argsLineable(c.listElem(a), tok) {
 				c.cmdError(tok, "a command's arguments must be strings, paths, numbers or dates; this pipeline has "+c.format(m))
 			}
 		}
-	} else if !c.commandLineable(elem) {
+	} else if !c.argsLineable(elem, tok) {
 		c.cmdError(tok, "a command's arguments must be strings, paths, numbers or dates, not "+c.format(elem))
 	}
 	c.stack = c.stack[:n-1]
@@ -347,6 +366,40 @@ func (c *coreChecker) run(tok Token) bool {
 	push(errs)
 	if tok.Type == QUESTION {
 		c.push(TidInt, true)
+	}
+	return true
+}
+
+// redirectTarget reports whether every value of t, a union or an alias,
+// names a redirect's target: a str or path, or bytes for '<' (input).
+func (c *coreChecker) redirectTarget(t TypeId, input bool) bool {
+	var ms []TypeId
+	if !c.members(c.plainAlias(t), &ms) {
+		return false
+	}
+	for _, m := range ms {
+		switch c.plainAlias(m) {
+		case TidStr, TidPath:
+		case TidBytes:
+			if !input {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// argsLineable is commandLineable for the arguments of a command that runs
+// at tok. A type with variables not solved yet is checked again when the
+// unit is solved: `(v! [@v] ;) q!  true @q x` runs a command with a bool.
+func (c *coreChecker) argsLineable(t TypeId, tok Token) bool {
+	if !c.commandLineable(t) {
+		return false
+	}
+	if c.hasVars(c.subst.Apply(c.arena, t)) {
+		c.deferKey(tok, t, ruleCommandArg)
 	}
 	return true
 }
@@ -377,12 +430,17 @@ func (c *coreChecker) pipe(tok Token) bool {
 	}
 	t = argv
 	for _, m := range c.listMembers(c.listElem(t)) {
-		if _, _, _, ok := c.commandParts(m); !ok {
+		if _, _, _, ok := c.commandParts(m); !ok || c.isPipe(m) {
 			c.cmdError(tok, "'|' needs a list of commands, but an element is "+c.format(m))
 			return true
 		}
 	}
 	c.stack[n-1].t = c.makeCommand(true, t, out, errs)
+	if s := &c.stack[n-1]; !s.fresh && s.part == 0 {
+		// The pipe is a new object over the list's commands, which stay
+		// shared: a new pipe of stored commands.
+		s.part = c.newPart(corePart{list: true, elem: markShared})
+	}
 	return true
 }
 

@@ -1,0 +1,3 @@
+# A break inside a list literal throws the literal's own stack away: the
+# 7 is not left for the loop, whose stack holds an int.
+5 (drop [7 break]) loop 1 + wl

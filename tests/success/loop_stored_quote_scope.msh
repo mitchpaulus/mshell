@@ -1,0 +1,4 @@
+# loop runs a stored quote in the variables it captured, as x and each do.
+def mk ( -- ( -- )) "s" v! (@v len str wl 0 exit) end
+5 v!
+mk loop

@@ -343,7 +343,7 @@ Unsetting a variable that does not exist is not an error.
 
 When the variable name is not known statically,
 an environment variable can be set with the `setenv` built-in,
-which takes the value then the name as strings.
+which takes the name, then the value, as strings.
 
 Use `envInspect` to get the change history for an environment variable.
 It returns events from oldest to newest with `dt`, `kind`, `source`, and `changed` fields.
@@ -365,8 +365,8 @@ $MY_ENV_VAR? if "MY_ENV_VAR exists" else "MY_ENV_VAR does not exist" end wl
 # Removing an environment variable
 "MSHELL_VAR" unsetenv
 
-# Setting with a dynamic name, value then name
-"Hello, World!" "MSHELL_VAR" setenv
+# Setting with a dynamic name: the name, then the value
+"MSHELL_VAR" "Hello, World!" setenv
 
 # Inspecting recent changes
 "MSHELL_VAR" envInspect
@@ -740,7 +740,7 @@ A literal around a stored value is new only on the outside: `{a: @xs} as {a: [in
 ```
 
 `deepCopy` copies every list, dict and grid inside a value, once per path; strings and numbers are shared; a value that contains itself is an error.
-Words that change a type in place need a new value: a redirect (`[cmd] *` is fine; `@c *` on a stored list is an error, use `@c deepCopy *`), a type-changing `updateCol`, `gridAddCol`, `gridRemoveCol`, `gridRenameCol`, and an `extend` that widens a column.
+Words that change a type in place need a new value: a redirect (`[cmd] *` and `[cmd @args] *` are fine; `@c *` on a stored list is an error, use `@c deepCopy *`), a type-changing `updateCol`, `gridAddCol`, `gridRemoveCol`, `gridRenameCol`, and an `extend` that widens a column.
 
 A def output marked `new` is fresh for callers (`def load ( -- new Json)`).
 The mark must match the body exactly: missing on an output that is new on every path, or present on one that may be shared, is an error.
@@ -783,6 +783,7 @@ A quotation literal given to a word (`map`, `filter`, `each`, a def's quotation 
 A stored quotation is typed on its own; an overloaded word in it is decided by its later use, or needs an annotation.
 `x` needs the quotation's arity known.
 `break` and `continue` are allowed only in a `loop` body and in quotation literals given to `each`, `map` and similar words inside one.
+`map` on a Maybe, `bind` and `map2` run the quotation on the current stack, so a `break` there leaves the loop with what the quotation pushed so far, which must match the loop's stack.
 
 ### Control flow and variables
 
@@ -1232,7 +1233,7 @@ end wl # Output: 11
 - `env`: Write all environment variables to stderr in sorted order (--)
 - `envInspect`: Get the session-local change history for an environment variable, oldest to newest. Each event contains `dt`, `kind`, `source`, and `changed`. Only the latest 256 events per variable are retained, and values are never included. `(str -- [{dt: datetime, kind: str, source: str, changed: bool}])`
 - `completionDefs`: Push a dictionary of completion definitions. Keys are command names, values are lists of quotations. `( -- dict)`
-- `setenv`: Set an environment variable by name, value then name. Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
+- `setenv`: Set an environment variable by name: the name, then the value. Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
 - `unsetenv`: Remove an environment variable by name. Unsetting a variable that does not exist is not an error. `(str -- )`
 - `dup`: Duplicate (a -- a a)
 - `swap`: Swap (a b -- b a)
@@ -1273,7 +1274,6 @@ end wl # Output: 11
   Regular files, pipes, captures, and non-file streams return false.
   Redirections and symlinks are classified by their opened target, so one that resolves to a terminal returns true.
   `( -- bool)`
-- `::`: Drop stdin onto the stack and split by lines `( -- [str])`. This is a shorthand for `stdin lines`.
 - `foldl`: Fold left. `(quote initial list -- result)`
 - `wt`: "Whitespace table", puts stdin split by lines and whitespace on the stack. `( -- [[str]])`
 - `ttFile`: "Tab table" from file, puts content from file name split by lines and tabs on the stack. `(str -- [[str]])`
@@ -1448,7 +1448,7 @@ end wl # Output: 11
 - `uniq`: Remove duplicate elements from list. Works for all non-compound types. `([a] -- [a])`
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 - `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
-- `toSvgPathStr`: Build an SVG path `d` string from a list of `[x y]` pairs. First pair uses `M`, remaining pairs use `L`. `([[numeric]] -- str)`
+- `toSvgPathStr`: Build an SVG path `d` string from a list of `[x y]` pairs. First pair uses `M`, remaining pairs use `L`. `([[int | float]] -- str)`
 - `scaleLinear`: Build a linear scaler from a domain/range pair; returns a quotation that maps input values. `([float] [float] -- (float -- float))`
 - `cartesian`: Extends each list in an accumulator with every element of a new list, producing the Cartesian product. Designed for chaining: start with the identity `[[]]` and apply `cartesian` once per list. `([[a]] [a] -- [[a]])`
 - `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string.
@@ -1456,7 +1456,7 @@ end wl # Output: 11
 - `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
 - `take`: Take the first `n` number of elements from list, or first n characters of string. `([a] int -- [a])` / `(str int -- str)`
 - `repeat`: Build a list by repeating the value the requested number of times. `(a int -- [a])`
-- `chunk`: Group a list into consecutive sublists of size `n`. The final chunk may be shorter if the list length isn't divisible by `n`. `([a] int -- [[a]])`
+- `chunk`: Group a list into consecutive sublists of size `n`. The final chunk may be shorter if the list length isn't divisible by `n`. A size of 0 or less is an error. `([a] int -- [[a]])`
 - `pop`: Remove the final element from the list in place and return it as a Maybe (`none` for the empty list). The list is mutated, not pushed. `([a] -- Maybe[a])`
 
 ## Grid Functions

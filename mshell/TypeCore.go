@@ -799,6 +799,11 @@ func (c *coreChecker) word(tok Token) {
 		c.unsupported(tok, "the builtin '"+tok.Lexeme+"'")
 		return
 	}
+	if strings.HasPrefix(tok.Lexeme, "~/") {
+		// A path under the home directory, as a string.
+		c.push(TidStr, true)
+		return
+	}
 	if c.listDepth > 0 {
 		// A bare word in a list literal is a string: `[ls -l]`.
 		c.push(TidStr, true)
@@ -819,7 +824,9 @@ func (c *coreChecker) widenForAppend() {
 	n := len(c.stack)
 	li, vi := n-2, n-1
 	if t := c.subst.Apply(c.arena, c.stack[n-1].t); c.arena.nodes[t].Kind == TKList {
-		if b := c.subst.Apply(c.arena, c.stack[n-2].t); c.arena.nodes[b].Kind != TKList {
+		// The list is the one below when that is a list, through an alias
+		// too (`[[1]] as LL [5] append`).
+		if b := c.unfold(c.subst.Apply(c.arena, c.stack[n-2].t)); c.arena.nodes[b].Kind != TKList {
 			li, vi = n-1, n-2
 		}
 	}
@@ -1335,6 +1342,9 @@ func (c *coreChecker) equality(tok Token) bool {
 		return false
 	}
 	n := len(c.stack)
+	// A quote literal is typed first: the join would otherwise fix its
+	// type to the other side's without checking its body.
+	c.forceTop(2)
 	j, ok := c.joinSlot(c.stack[n-2], c.stack[n-1])
 	if !ok || !c.equatable(c.subst.Apply(c.arena, j.t), false) {
 		return false
@@ -1438,16 +1448,25 @@ func (c *coreChecker) equatableIn(t TypeId, inDict bool, visiting []TypeId) bool
 func (c *coreChecker) distribute(sigs []coreSig, tok Token) bool {
 	top := c.topSlots(sigs)
 	idx := -1
+	var u TypeId
 	for i, s := range top {
-		if c.waiting(s) == nil && c.arena.nodes[c.subst.Apply(c.arena, s.t)].Kind == TKUnion {
-			idx = len(c.stack) - len(top) + i
+		if c.waiting(s) != nil {
+			continue
+		}
+		// An alias of a union is split as the union is (`type N = int |
+		// float`); a recursive one, such as Json, is not.
+		t := c.subst.Apply(c.arena, s.t)
+		if c.arena.nodes[t].Kind == TKAlias {
+			t = c.plainAlias(t)
+		}
+		if c.arena.nodes[t].Kind == TKUnion {
+			idx, u = len(c.stack)-len(top)+i, t
 			break
 		}
 	}
 	if idx < 0 {
 		return false
 	}
-	u := c.subst.Apply(c.arena, c.stack[idx].t)
 	members := c.arena.unionMembers[c.arena.nodes[u].Extra]
 	// Inputs a quote typed on its own gains in one arm go below, so the
 	// union's slot is found from the top.
@@ -1585,10 +1604,12 @@ func (c *coreChecker) argsFit(sig *coreSig) bool {
 			return
 		}
 		if c.waiting(c.stack[base+i]) != nil {
-			// A quote literal fits a quote parameter, or a generic; its
-			// body is checked once a candidate is chosen.
+			// A quote literal fits a quote parameter, or a bare generic;
+			// its body is checked once a candidate is chosen. A parameter
+			// that only mentions a generic ([t], Maybe[a]) is not a quote.
 			w := c.subst.Apply(c.arena, want)
-			ok = c.arena.nodes[w].Kind == TKQuote || c.hasVars(w)
+			k := c.arena.nodes[w].Kind
+			ok = k == TKQuote || k == TKVar
 			return
 		}
 		ok = c.check(c.stack[base+i], want)
@@ -1687,7 +1708,7 @@ func (c *coreChecker) apply(sig *coreSig, tok Token) {
 	base := len(c.stack) - n
 	c.eachInput(sig, gens, c.stackArg(base), func(i int, want TypeId) {
 		if s := c.stack[base+i]; c.waiting(s) != nil {
-			c.checkPending(s.pq, want, sig.child, base, tok)
+			c.checkPending(s.pq, want, sig.child, sig.current, base, tok)
 			c.stack[base+i].pq = 0
 			return
 		}
@@ -1855,7 +1876,12 @@ func (c *coreChecker) childIn(items []MShellParseItem, inList bool) (start int, 
 	if inList {
 		c.listDepth = 1
 	}
+	// A break or continue throws the literal's own stack away, as a
+	// child-stack word's: the loop is left with the stack under it.
+	brk, cont := c.brk, c.cont
+	c.brk, c.cont = c.bodyLoopCtx(brk, c.floor, true), c.bodyLoopCtx(cont, c.floor, true)
 	c.walk(items)
+	c.brk, c.cont = brk, cont
 	c.listDepth = depth
 	return c.floor, outerFloor
 }

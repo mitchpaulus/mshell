@@ -1110,7 +1110,7 @@ func (c *coreChecker) groupBySpecs(l *MShellParseList, tok Token) bool {
 				col.Type = c.subst.FreshVar(c.arena)
 				c.pushQuote(q.Items, q.StartToken)
 				top := len(c.stack) - 1
-				c.checkPending(c.stack[top].pq, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{view}, Outputs: []TypeId{col.Type}}), true, n-2, tok)
+				c.checkPending(c.stack[top].pq, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{view}, Outputs: []TypeId{col.Type}}), true, false, n-2, tok)
 				c.stack = c.stack[:top]
 				c.deferNotContainer(tok, col.Type)
 			case "name", "meta":
@@ -1296,6 +1296,9 @@ const (
 	// one kind of int, float, str, datetime or bool, with none last and a
 	// Maybe looked through once (compareGridGenericCells).
 	ruleSortKey
+	// ruleCommandArg: an argument of a command that runs, whose type had
+	// unsolved variables when it ran (commandLineable).
+	ruleCommandArg
 )
 
 // deferKey records that a value of type t must be one the runtime takes
@@ -1311,6 +1314,9 @@ func (c *coreChecker) deferJoinKey(tok Token, t TypeId)      { c.deferKey(tok, t
 // runtime takes under rule. A type not known is refused: it may be a
 // container.
 func (c *coreChecker) keyAllowed(t TypeId, rule keyRule) bool {
+	if rule == ruleCommandArg {
+		return c.commandLineable(t)
+	}
 	t = c.unfold(c.subst.Apply(c.arena, t))
 	if rule == ruleSortKey {
 		_, ok := c.sortKind(t, TidBottom, true)
@@ -1341,7 +1347,7 @@ func (c *coreChecker) keyAllowed(t TypeId, rule keyRule) bool {
 			return c.keyAllowed(inner, ruleJoinKey)
 		}
 		return c.keyAllowed(inner, rule)
-	case TKRecord, TKGrid, TKGridView, TKGridRow, TKCommand, TKVar, TKAbstract, TKRigid:
+	case TKRecord, TKGrid, TKGridView, TKGridRow, TKCommand, TKVar, TKAbstract, TKRigid, TKAlias:
 		return false
 	}
 	return true
@@ -1384,6 +1390,8 @@ func keyRuleText(rule keyRule) string {
 		return "a grouping key: not a list, dict or grid, also inside a Maybe"
 	case ruleSortKey:
 		return "a column it can sort: one of int, float, str, datetime or bool, or a Maybe of one"
+	case ruleCommandArg:
+		return "command arguments that are strings, paths, numbers or dates, or lists of them"
 	}
 	return "a join key: a value that is not a dict or grid, or a list of such values that are not lists"
 }

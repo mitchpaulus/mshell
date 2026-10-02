@@ -51,6 +51,10 @@ type coreSig struct {
 	// child says the word runs its quote arguments on a child stack, as
 	// each and map do, which decides where they may break.
 	child bool
+	// current says the word runs its quote arguments on the current stack,
+	// as map on a Maybe, bind and map2 do: a break or continue in a literal
+	// quote leaves the enclosing loop with what the quote pushed so far.
+	current bool
 	// freeOut is set for a standard library def whose outputs mention a
 	// generic that no input mentions. Its body is not checked, so nothing
 	// says what that output is; a call is an error (TypeCore.go).

@@ -107,6 +107,12 @@ func (r *coreResolver) declareHtmlNode() {
 func (r *coreResolver) resolveSig(ins, outs []MShellParseItem) coreSigParts {
 	r.gens, r.inSig, r.anon = r.gens[:0], true, 0
 	var p coreSigParts
+	// A signature's inputs and outputs are tracked in 64-bit masks.
+	for _, side := range [][]MShellParseItem{ins, outs} {
+		if len(side) > 64 {
+			r.errorf(side[64].GetStartToken(), "a signature takes at most 64 inputs and gives at most 64 outputs")
+		}
+	}
 	p.ins = make([]TypeId, 0, len(ins))
 	for _, it := range ins {
 		p.ins = append(p.ins, r.resolve(it))

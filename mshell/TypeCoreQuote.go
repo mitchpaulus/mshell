@@ -36,13 +36,19 @@ type coreLoopKind uint8
 
 const (
 	loopNone  coreLoopKind = iota // no loop: break is an error
-	loopExact                     // in a loop body: break leaves the loop's stack
-	loopChild                     // in a child-stack body in a loop: the stack is discarded
+	loopExact                     // in a loop: break leaves the loop's stack
 )
 
 type coreLoopCtx struct {
 	kind  coreLoopKind
 	stack savedRun // the loop's stack, for loopExact
+	// below is, in a literal quote a word runs inside the loop, the stack
+	// under the word's arguments: a break leaves the loop with below, then
+	// the quote's own stack. A word that runs the quote on a child stack
+	// (each, map on a list) throws that stack away (discard), so the loop
+	// is left with below alone.
+	below   savedRun
+	discard bool
 	// da is 1 + the index of the loop's definite-assignment record in
 	// daLoops, or 0.
 	da int
@@ -110,8 +116,26 @@ func (c *coreChecker) inferPending(pq uint32) {
 	items, tok, placeholder := p.items, p.tok, p.t
 	t := c.inferQuote(items, tok)
 	if t != TidNothing {
-		c.uni.Unify(placeholder, t)
+		c.settle(placeholder, t, tok, false)
 	}
+}
+
+// settle gives a quote literal that was waiting the type it was checked
+// at. Nothing may have fixed its placeholder before: that would have
+// decided the literal's type without checking its body. If something did,
+// the program is rejected here rather than trusted. inline says the body
+// ran inline (x, iff, loop, and/or), where t only marks the literal as
+// used.
+func (c *coreChecker) settle(placeholder, t TypeId, tok Token, inline bool) {
+	if c.uni.Unify(placeholder, t) {
+		return
+	}
+	hint := "this quote is " + c.format(t)
+	if inline {
+		hint = "this quote runs inline here"
+	}
+	c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
+		Hint: hint + ", but it is used as " + c.format(c.subst.Apply(c.arena, placeholder)) + " before"})
 }
 
 // coreFrame is the state saved around a body checked on its own stack.
@@ -185,25 +209,33 @@ func (c *coreChecker) inferQuote(items []MShellParseItem, tok Token) TypeId {
 
 // checkPending checks a waiting quote's body against want, a quote type, as
 // the argument of a word that takes a quote. child says the word runs the
-// quote on a child stack (each, map, ...); outerBase is the stack height
+// quote on a child stack (each, map, ...), current that it runs it on the
+// current stack (map on a Maybe, bind, map2); outerBase is the stack height
 // once the word has taken its arguments, for the break context.
-func (c *coreChecker) checkPending(pq uint32, want TypeId, child bool, outerBase int, tok Token) bool {
+func (c *coreChecker) checkPending(pq uint32, want TypeId, child, current bool, outerBase int, tok Token) bool {
 	p := &c.pending[pq-1]
 	want = c.subst.Apply(c.arena, want)
 	if c.arena.nodes[want].Kind != TKQuote {
+		placeholder, qtok := p.t, p.tok
 		c.inferPending(pq)
-		return c.check(coreSlot{t: p.t}, want)
+		if !c.check(coreSlot{t: placeholder}, want) {
+			c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: qtok,
+				Hint: "'" + tok.Lexeme + "' takes " + c.format(c.subst.Apply(c.arena, want)) + " here, not the quote " +
+					c.format(c.subst.Apply(c.arena, placeholder))})
+			return false
+		}
+		return true
 	}
 	p.done = true
 	sig := c.arena.quoteSigs[c.arena.nodes[want].Extra]
 	items, placeholder := p.items, p.t
 
-	brk := coreLoopCtx{}
-	if child {
-		brk = c.childLoopCtx(outerBase)
+	brk, cont := coreLoopCtx{}, coreLoopCtx{}
+	if child || current {
+		brk, cont = c.bodyLoopCtx(c.brk, outerBase, child), c.bodyLoopCtx(c.cont, outerBase, child)
 	}
 	f := c.enterBody()
-	c.brk, c.cont = brk, brk
+	c.brk, c.cont = brk, cont
 	for _, in := range sig.Inputs {
 		c.stack = append(c.stack, coreSlot{t: in})
 	}
@@ -257,24 +289,30 @@ func (c *coreChecker) checkPending(pq uint32, want TypeId, child bool, outerBase
 	abandoned := c.abandoned
 	c.leaveBody(f)
 	c.abandoned = abandoned
-	c.uni.Unify(placeholder, want)
+	c.settle(placeholder, want, p.tok, false)
 	return ok
 }
 
-// childLoopCtx is the break context of a literal quote run on a child stack
-// (the Each rule): break is allowed when the enclosing context allows it in
-// a child body, or when the stack the loop sees after the word took its
-// arguments is the loop's stack.
-func (c *coreChecker) childLoopCtx(outerBase int) coreLoopCtx {
-	switch c.brk.kind {
-	case loopChild:
-		return coreLoopCtx{kind: loopChild, da: c.brk.da}
-	case loopExact:
-		if c.stackFits(c.stack[:outerBase], c.brk.stack) {
-			return coreLoopCtx{kind: loopChild, da: c.brk.da}
-		}
+// bodyLoopCtx is the break or continue context of a literal quote a word
+// runs (the Each and Bind rules): the enclosing one, with the stack under
+// the word's arguments (its first outerBase slots) added to below. child
+// says the word runs the quote on a child stack, which a break throws
+// away. Whether the stack a break leaves fits the loop's is decided at the
+// break, so a word with no break in its quote constrains nothing.
+func (c *coreChecker) bodyLoopCtx(ctx coreLoopCtx, outerBase int, child bool) coreLoopCtx {
+	if ctx.kind != loopExact || ctx.discard {
+		// No loop, or the stack here is thrown away at a break already.
+		return ctx
 	}
-	return coreLoopCtx{}
+	// Padded here: the body is not the quote being typed on its own, so
+	// nothing pads the loop's stack inside it.
+	ctx.stack = c.padRun(ctx.stack)
+	below := savedRun{start: len(c.saved)}
+	c.saved = append(c.saved, c.saved[ctx.below.start:ctx.below.end]...)
+	c.saved = append(c.saved, c.stack[:outerBase]...)
+	below.end = len(c.saved)
+	ctx.below, ctx.discard = below, child
+	return ctx
 }
 
 // stackFits reports whether the slots fit the saved stack want, slot by
@@ -304,7 +342,7 @@ func (c *coreChecker) interpret(tok Token) {
 	top := c.stack[len(c.stack)-1]
 	if p := c.waiting(top); p != nil {
 		p.done = true
-		c.uni.Unify(p.t, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{}}))
+		c.settle(p.t, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{}}), p.tok, true)
 		c.stack = c.stack[:len(c.stack)-1]
 		c.walkInline(p.items)
 		return
@@ -365,7 +403,7 @@ func (c *coreChecker) iff(tok Token) {
 		c.daRestore(daMark)
 		if p := c.waiting(q); p != nil {
 			p.done = true
-			c.uni.Unify(p.t, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{}}))
+			c.settle(p.t, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{}}), p.tok, true)
 			c.walkInline(p.items)
 		} else {
 			c.runQuoteValue(q, tok)
@@ -411,7 +449,7 @@ func (c *coreChecker) andOr(tok Token) bool {
 		return false
 	}
 	p.done = true
-	c.uni.Unify(p.t, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{}, Outputs: []TypeId{TidBool}}))
+	c.settle(p.t, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{}, Outputs: []TypeId{TidBool}}), p.tok, true)
 	c.stack = c.stack[:n-1]
 	if !c.popBool(tok) {
 		return true
@@ -516,7 +554,7 @@ func (c *coreChecker) loop(tok Token) {
 		return
 	}
 	p.done = true
-	c.uni.Unify(p.t, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{}}))
+	c.settle(p.t, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{}}), p.tok, true)
 	c.forceWaiting()
 	for i := c.floor; i < len(c.stack); i++ {
 		s := &c.stack[i]
@@ -577,11 +615,32 @@ func (c *coreChecker) breakOrContinue(tok Token) {
 		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
 			Hint: "'" + tok.Lexeme + "' is allowed only in a loop body, or in a literal quote given to each, map or a similar word inside one"})
 	case loopExact:
-		c.forceTop(len(c.stack) - c.floor)
-		if !c.stackFits(c.stack, ctx.stack) {
+		got := c.stack
+		if ctx.discard {
+			got = nil
+		} else {
+			c.forceTop(len(c.stack) - c.floor)
+		}
+		if ctx.below.end > ctx.below.start {
+			// A literal below the word still waiting for its consumer is
+			// typed on its own first, as on the body's stack: comparing
+			// would otherwise fix its type without checking its body.
+			for i := ctx.below.start; i < ctx.below.end; i++ {
+				if c.waiting(c.saved[i]) != nil {
+					c.inferPending(c.saved[i].pq)
+				}
+				c.saved[i].pq = 0
+			}
+			got = append(append([]coreSlot(nil), c.saved[ctx.below.start:ctx.below.end]...), got...)
+		}
+		if !c.stackFits(got, ctx.stack) {
 			want := c.padRun(ctx.stack)
+			left := "leaves " + c.formatSlots(got) + ","
+			if ctx.discard {
+				left = "leaves the loop with the stack under the literal or the word that runs this quote, " + c.formatSlots(got) + ","
+			}
 			c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
-				Hint: "'" + tok.Lexeme + "' leaves " + c.formatSlots(c.stack) + ", but the loop's stack is " +
+				Hint: "'" + tok.Lexeme + "' " + left + " but the loop's stack is " +
 					c.formatSlots(c.saved[want.start:want.end])})
 		}
 	}

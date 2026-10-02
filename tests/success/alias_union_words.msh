@@ -1,0 +1,17 @@
+# An alias of a union is split per member, as the union is.
+type N = int | float
+5 as N abs str wl
+2.5 as N toFloat str wl
+type S = str | path
+"abc" as S upper str wl
+# A redirect target may be a union or alias of str and path.
+[cat] "from a str" as S < ;
+"" wl
+[cat] true if "either" else `/dev/null` end < ;
+"" wl
+# ~ and ~/rest are strings under the home directory.
+~/foo "/foo" endsWith str wl
+~ len 0 > str wl
+# append looks through an alias of a list of lists.
+type LL = [[int]]
+[[1]] as LL [5] append str wl

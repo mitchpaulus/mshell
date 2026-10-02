@@ -55,7 +55,7 @@ Reading a missing environment variable with <code><span class="mshellVARRETRIEVE
 Environment variables are always exported to subprocesses, so setting them affects subsequent command executions.
 Remove one with the <code>unsetenv</code> built-in, which takes the name as a string.
 Unsetting a variable that does not exist is not an error.
-When the variable name is not known statically, set one with the <code>setenv</code> built-in, which takes the value then the name.
+When the variable name is not known statically, set one with the <code>setenv</code> built-in, which takes the name, then the value.
 </p>
 
 <p>
@@ -69,7 +69,7 @@ Only the latest 256 events per variable are retained, older events are discarded
 
 <pre>
 <code><span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellLITERAL">unsetenv</span>
-<span class="mshellSTRING">"info"</span> <span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellLITERAL">setenv</span>
+<span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellSTRING">"info"</span> <span class="mshellLITERAL">setenv</span>
 <span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellLITERAL">envInspect</span></code>
 </pre>
 

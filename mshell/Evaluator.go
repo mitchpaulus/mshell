@@ -2245,8 +2245,9 @@ func (state *EvalState) processLoop(t *Token, frame *EvaluationFrame) *EvalResul
 		state.popFrame()
 		return state.checkedPtr(err.Error())
 	}
-	// The body shares the variables of the code around the loop.
-	child.Context.Variables = parent.Context.Variables
+	// The body runs in the quotation's own variables, as with x and each.
+	// A literal at the loop was made in the code around it, so for one
+	// that is the same scope.
 	child.Objects = quotation.Tokens
 	child.Stack = stack
 	child.FrameType = FRAME_LOOP

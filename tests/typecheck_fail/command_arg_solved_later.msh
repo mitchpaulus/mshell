@@ -1,0 +1,3 @@
+# The quote's input type is not known where the command runs; it is a bool
+# once the script is solved, which is not a command argument.
+(v! [@v] ;) q!  true @q x
