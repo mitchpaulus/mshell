@@ -231,6 +231,10 @@ func (c *coreChecker) merge(tok Token) bool {
 		c.cmdError(tok, fmt.Sprintf("Cannot apply '%s' to a %s; expected a list or quotation.", tok.Lexeme, c.format(ot)))
 		return true
 	}
+	if c.isPipe(ot) {
+		c.cmdError(tok, fmt.Sprintf("Cannot apply '%s' to a Pipe. Add it to a command in the pipeline.", tok.Lexeme))
+		return true
+	}
 	argv, out, errs, _ := c.commandParts(ot)
 	if tok.Type == STDERRTOSTDOUT {
 		switch {
@@ -364,8 +368,10 @@ func (c *coreChecker) background(tok Token) bool {
 	if !c.need(1, tok) {
 		return true
 	}
-	if _, quote, ok := c.operand(len(c.stack) - 1); !ok || quote {
+	if ot, quote, ok := c.operand(len(c.stack) - 1); !ok || quote {
 		c.cmdError(tok, "'&' needs a command")
+	} else if c.isPipe(ot) {
+		c.cmdError(tok, "'&' runs one command in the background, not a Pipe")
 	}
 	return true
 }

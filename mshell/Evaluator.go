@@ -1047,6 +1047,22 @@ func (state *EvalState) checkedPtr(message string) *EvalResult {
 	return &result
 }
 
+func (state *EvalState) failPtrKind(kind FailureKind, message string) *EvalResult {
+	result := state.Fail(kind, message)
+	return &result
+}
+
+// redirectConflictKind is the kind of a redirect that conflicts with one
+// obj already has. The checker tracks the streams of a list or pipe, but a
+// quote's redirects are not part of its type, and a stored quote keeps the
+// redirects earlier code gave it.
+func redirectConflictKind(obj MShellObject) FailureKind {
+	if _, ok := obj.(*MShellQuotation); ok {
+		return CheckedFailure
+	}
+	return TypeMismatch
+}
+
 func (state *EvalState) failErrPtr(err error, message string) *EvalResult {
 	result := state.Fail(errKind(err), message)
 	return &result
@@ -12194,7 +12210,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					stack.Push(obj2Typed)
 				case *MShellQuotation:
 					if desc := obj2Typed.StdoutDestinationDesc(); desc != "" {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
 					}
 					obj2Typed.StandardOutputFile = path
 					obj2Typed.AppendOutput = true
@@ -12363,7 +12379,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					stack.Push(obj2Typed)
 				case *MShellQuotation:
 					if desc := obj2Typed.StderrDestinationDesc(); desc != "" {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
 					}
 					obj2Typed.StandardErrorFile = redirectFile
 					obj2Typed.AppendError = t.Type == STDERRAPPEND
@@ -12393,10 +12409,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				appendMode := t.Type == STDOUTANDSTDERRAPPEND
 
 				if desc := stdoutDestinationDescOf(obj2); desc != "" {
-					return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					return state.Fail(redirectConflictKind(obj2), fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
 				}
 				if desc := stderrDestinationDescOf(obj2); desc != "" {
-					return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					return state.Fail(redirectConflictKind(obj2), fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
 				}
 
 				switch obj2Typed := obj2.(type) {
@@ -12464,11 +12480,11 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 				if t.Type == STDERRTOSTDOUT {
 					if desc := stderrDestinationDescOf(obj); desc != "" {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+						return state.Fail(redirectConflictKind(obj), fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
 					}
 				} else {
 					if desc := stdoutDestinationDescOf(obj); desc != "" {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+						return state.Fail(redirectConflictKind(obj), fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
 					}
 				}
 
@@ -12496,12 +12512,12 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case *MShellQuotation:
 					if t.Type == STDERRTOSTDOUT {
 						if objTyped.StdoutToStderr {
-							return state.TypeMismatch(fmt.Sprintf(circularMsg, t.Line, t.Column, t.Lexeme, "1>&2"))
+							return state.CheckedFailure(fmt.Sprintf(circularMsg, t.Line, t.Column, t.Lexeme, "1>&2"))
 						}
 						objTyped.StderrToStdout = true
 					} else {
 						if objTyped.StderrToStdout {
-							return state.TypeMismatch(fmt.Sprintf(circularMsg, t.Line, t.Column, t.Lexeme, "2>&1"))
+							return state.CheckedFailure(fmt.Sprintf(circularMsg, t.Line, t.Column, t.Lexeme, "2>&1"))
 						}
 						objTyped.StdoutToStderr = true
 					}
@@ -13119,7 +13135,7 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 	} else {
 		if t.Type == GREATERTHAN {
 			if desc := stdoutDestinationDescOf(obj2); desc != "" {
-				return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+				return state.failPtrKind(redirectConflictKind(obj2), fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
 			}
 		}
 		switch obj1.(type) {

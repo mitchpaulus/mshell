@@ -94,9 +94,13 @@ func newCoreSig(ar *TypeArena, p coreSigParts) coreSig {
 type coreTable struct {
 	byName  [][]coreSig
 	byToken [][]coreSig
-	// index is the indexer `:n:`; slice is `n:`, `:n`, `a:b` and a list of
-	// indexers, which concatenates.
+	// index is the indexer `:n:`; slice is `n:`, `:n` and `a:b`.
 	index, slice []coreSig
+	// multi is a list of indexers (`:0:,2:`), whose parts the runtime
+	// concatenates, which only lists, strings, paths and bytes do.
+	// multiIndex is a list of `:n:` indexers only, which on a pipe gives a
+	// pipe of those commands.
+	multi, multiIndex []coreSig
 	appendBelow  coreSig
 	// urlEncodeLists are the list types a dict given to urlEncode may hold
 	// (TypeCoreDict.go).

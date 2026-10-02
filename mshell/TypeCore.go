@@ -615,7 +615,14 @@ func (c *coreChecker) step(item MShellParseItem) {
 		c.gridLiteral(it)
 	case *MShellIndexerList:
 		sigs := c.table.slice
-		if len(it.Indexers) == 1 && it.Indexers[0].(Token).Type == INDEXER {
+		if len(it.Indexers) > 1 {
+			sigs = c.table.multiIndex
+			for _, ix := range it.Indexers {
+				if ix.(Token).Type != INDEXER {
+					sigs = c.table.multi
+				}
+			}
+		} else if it.Indexers[0].(Token).Type == INDEXER {
 			sigs = c.table.index
 		}
 		c.call(sigs, it.GetStartToken())
@@ -689,9 +696,15 @@ func (c *coreChecker) token(tok Token) {
 	case ENVCHECK:
 		c.push(TidBool, true)
 	case ENVSTORE:
+		// The runtime exports a str, a path or an int.
 		if c.need(1, tok) {
 			c.forceTop(1)
-			c.stack = c.stack[:len(c.stack)-1]
+			i := len(c.stack) - 1
+			want := c.arena.MakeUnion([]TypeId{TidStr, TidPath, TidInt})
+			if !c.check(c.stack[i], want) {
+				c.mismatch(tok, 0, want, c.stack[i].t)
+			}
+			c.stack = c.stack[:i]
 		}
 	case LITERAL:
 		c.word(tok)
@@ -1879,7 +1892,12 @@ func (c *coreChecker) ifBlock(b *MShellParseIfBlock) {
 				c.daSet(n)
 			}
 		}
+		// The runtime refuses a break or continue in an else-if
+		// condition, so the condition is walked outside the loop.
+		brk, cont := c.brk, c.cont
+		c.brk, c.cont = coreLoopCtx{}, coreLoopCtx{}
 		c.walk(ei.Condition)
+		c.brk, c.cont = brk, cont
 		if c.diverged || c.abandoned || !c.condition(tok) {
 			c.diverged = false
 			break

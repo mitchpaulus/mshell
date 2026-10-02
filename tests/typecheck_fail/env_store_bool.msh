@@ -1,0 +1,2 @@
+# $NAME! exports a str, path or int; the runtime refuses a bool.
+true $MSH_TEST_FLAG!

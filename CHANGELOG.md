@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A number too large to read, in a literal, an index such as `:99999999999999999999:`, or a positional argument, is an error when the script is read, not when that code runs.
+  A slice like `1:99999999999999999999` used to crash.
 - The type checker (`--check-types`, `--type-check-only` and the language server) is new.
   It is built so that a script it accepts never stops with a type mismatch at run time,
   and it rejects code that the old checker accepted and that then failed. In particular:

@@ -328,6 +328,8 @@ func (c *coreChecker) gridWord(tok Token) bool {
 		return c.gridJoin(tok)
 	case "pivot":
 		return c.gridPivot(tok)
+	case "groupBy":
+		return c.gridGroupBy(tok)
 	}
 	return false
 }
@@ -981,12 +983,17 @@ func (c *coreChecker) gridPivot(tok Token) bool {
 	c.stack = c.stack[:len(c.stack)-1]
 	c.deferNotContainer(tok, a)
 	// The colKey column must hold strings: they name the new columns.
+	var colT TypeId
 	if name := col.key(); name != NameNone {
-		t, ok := c.columnRead(rec, col, tok)
-		if !ok {
+		if colT, ok = c.columnRead(rec, col, tok); !ok {
 			return true
 		}
-		c.deferCheck(tok, coreSlot{t: t}, TidStr)
+	} else if colT, ok = c.anyColumn(rec, tok); !ok {
+		return true
+	}
+	c.deferCheck(tok, coreSlot{t: colT}, TidStr)
+	if !c.deferKeyColumns(tok, rec, keys) {
+		return true
 	}
 	names, lit := c.litNames(keys)
 	at := c.subst.Apply(c.arena, a)
@@ -997,12 +1004,7 @@ func (c *coreChecker) gridPivot(tok Token) bool {
 	}
 	fields := make([]RecordField, 0, len(names))
 	for _, name := range names {
-		t, status := c.labelRead(rec, name)
-		if status == FieldAbsent {
-			c.noColumn(tok, rec, name)
-			return true
-		}
-		c.deferKey(tok, t, ruleGroupKey)
+		t, _ := c.labelRead(rec, name)
 		fields = append(fields, RecordField{Name: name, Status: FieldRequired, Type: t})
 	}
 	c.pushNewGrid(c.arena.MakeRecord(fields, RecordField{Status: FieldOptional, Type: cell.t}))
@@ -1107,6 +1109,9 @@ func (c *coreChecker) groupBySpecs(l *MShellParseList, tok Token) bool {
 		}
 		aggs = append(aggs, col)
 	}
+	if !c.deferKeyColumns(tok, rec, keys) {
+		return true
+	}
 	names, lit := c.litNames(keys)
 	c.stack = c.stack[:n-2]
 	if !lit || !known {
@@ -1115,12 +1120,7 @@ func (c *coreChecker) groupBySpecs(l *MShellParseList, tok Token) bool {
 	}
 	fields := make([]RecordField, 0, len(names)+len(aggs))
 	for _, name := range names {
-		t, status := c.labelRead(rec, name)
-		if status == FieldAbsent {
-			c.noColumn(tok, rec, name)
-			return true
-		}
-		c.deferKey(tok, t, ruleGroupKey)
+		t, _ := c.labelRead(rec, name)
 		fields = append(fields, RecordField{Name: name, Status: FieldRequired, Type: t})
 	}
 	fields = append(fields, aggs...)
@@ -1134,6 +1134,74 @@ func (c *coreChecker) groupBySpecs(l *MShellParseList, tok Token) bool {
 	}
 	c.pushNewGrid(c.arena.MakeRecord(fields, RecordField{Status: FieldAbsent}))
 	return true
+}
+
+// gridGroupBy checks a grid groupBy whose spec list is not written at the
+// call (groupBySpecs takes that case): every agg quote gives one type a,
+// which the runtime refuses when it is a container, and the result's
+// columns are not known.
+func (c *coreChecker) gridGroupBy(tok Token) bool {
+	n := len(c.stack)
+	if n-c.floor < 3 {
+		return false
+	}
+	kind, rec, ok := c.gridOf(n - 3)
+	if !ok || kind == TKGridRow {
+		return false
+	}
+	keys := c.stack[n-2]
+	a := c.subst.FreshVar(c.arena)
+	spec := c.arena.MakeRecord([]RecordField{
+		{Name: c.names.Intern("agg"), Status: FieldRequired,
+			Type: c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{c.arena.MakeGridOf(TKGridView, rec)}, Outputs: []TypeId{a}})},
+		{Name: c.names.Intern("name"), Status: FieldOptional, Type: TidStr},
+		{Name: c.names.Intern("meta"), Status: FieldOptional, Type: c.res.unknownSchema()},
+	}, RecordField{Status: FieldOpen})
+	sig := coreSig{ins: []TypeId{c.stack[n-3].t, c.arena.MakeList(TidStr), c.arena.MakeList(spec)}, outs: []TypeId{TidUnknown}}
+	c.apply(&sig, tok)
+	if c.abandoned || c.diverged {
+		return true
+	}
+	c.stack = c.stack[:len(c.stack)-1]
+	c.deferNotContainer(tok, a)
+	if c.deferKeyColumns(tok, rec, keys) {
+		c.pushNewGrid(c.res.unknownSchema())
+	}
+	return true
+}
+
+// deferKeyColumns checks the key columns a groupBy or pivot groups by: the
+// columns named, when keys is a list of literal names, and otherwise every
+// column of rec, since a name known only at run time may be any of them.
+// It reports false after an error.
+func (c *coreChecker) deferKeyColumns(tok Token, rec TypeId, keys coreSlot) bool {
+	if names, lit := c.litNames(keys); lit {
+		for _, name := range names {
+			t, status := c.labelRead(rec, name)
+			if status == FieldAbsent {
+				c.noColumn(tok, rec, name)
+				return false
+			}
+			c.deferKey(tok, t, ruleGroupKey)
+		}
+		return true
+	}
+	t, ok := c.anyColumn(rec, tok)
+	if ok {
+		c.deferKey(tok, t, ruleGroupKey)
+	}
+	return ok
+}
+
+// anyColumn is the type of a column of rec named only at run time: the
+// join of every column's type (Get-Key), unknown when the schema is not
+// known.
+func (c *coreChecker) anyColumn(rec TypeId, tok Token) (TypeId, bool) {
+	t, ok := c.keyRead(rec)
+	if !ok {
+		c.gridError(tok, "the columns of "+c.format(rec)+" have no common type, so a column named only at run time has none; use a literal list of names")
+	}
+	return t, ok
 }
 
 // ---------------------------------------------------------------------------

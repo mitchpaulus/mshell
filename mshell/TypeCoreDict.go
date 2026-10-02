@@ -78,13 +78,15 @@ func (c *coreChecker) dictArg(i int, tok Token) (TypeId, bool) {
 	if rec := c.recordOf(t); rec != TidNothing {
 		return rec, true
 	}
-	if u := c.unfold(t); u == TidUnknown || c.arena.nodes[u].Kind == TKAbstract || c.arena.nodes[u].Kind == TKRigid {
-		// Unknown contents: any dict, read only.
-		return c.arena.MakeRecord(nil, RecordField{Status: FieldOpen}), true
-	}
+	// A value of unknown contents may not be a dict at all.
 	hint := "'" + tok.Lexeme + "' needs a dict, got " + c.format(t)
-	if c.arena.nodes[c.unfold(t)].Kind == TKUnion {
+	switch u := c.unfold(t); c.arena.nodes[u].Kind {
+	case TKUnion, TKAbstract, TKRigid:
 		hint += "; take the dict out first with `match dict d :`"
+	default:
+		if u == TidUnknown {
+			hint += "; take the dict out first with `match dict d :`"
+		}
 	}
 	c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok, Hint: hint})
 	c.abandoned = true

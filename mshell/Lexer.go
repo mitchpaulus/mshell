@@ -426,6 +426,10 @@ func (l *Lexer) curLexeme() string {
 
 func (l *Lexer) makeToken(tokenType TokenType) Token {
 	lexeme := l.curLexeme()
+	if msg := numberLexemeError(tokenType, lexeme); msg != "" {
+		return Token{Line: l.startLine, Column: l.startCol + 1, Start: l.start, Type: ERROR,
+			Lexeme: fmt.Sprintf("%d:%d: %s", l.startLine, l.startCol+1, msg)}
+	}
 
 	return Token{
 		Line:   l.startLine,
@@ -435,6 +439,37 @@ func (l *Lexer) makeToken(tokenType TokenType) Token {
 		Type:   tokenType,
 		Value:  literalValue(tokenType, lexeme),
 	}
+}
+
+// numberLexemeError checks the numbers in a number, index or positional
+// token, as the evaluator reads them, so a number that does not fit (or
+// digits strconv does not read, such as Arabic-Indic ones) is an error in
+// the program text rather than when it runs.
+func numberLexemeError(tokenType TokenType, lexeme string) string {
+	var err error
+	switch tokenType {
+	case INTEGER:
+		_, err = parseIntLiteral(lexeme)
+	case FLOAT:
+		_, err = strconv.ParseFloat(lexeme, 64)
+	case INDEXER:
+		_, err = strconv.Atoi(lexeme[1 : len(lexeme)-1])
+	case ENDINDEXER, POSITIONAL:
+		_, err = strconv.Atoi(lexeme[1:])
+	case STARTINDEXER:
+		_, err = strconv.Atoi(lexeme[:len(lexeme)-1])
+	case SLICEINDEXER:
+		start, end, _ := strings.Cut(lexeme, ":")
+		if _, err = strconv.Atoi(start); err == nil {
+			_, err = strconv.Atoi(end)
+		}
+	default:
+		return ""
+	}
+	if err == nil {
+		return ""
+	}
+	return fmt.Sprintf("'%s' is not a number mshell can read: %s.", lexeme, err)
 }
 
 // literalValue decodes the lexeme of a literal token into the value it

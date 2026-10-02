@@ -1,0 +1,2 @@
+# 2>&1 goes on a command in the pipeline, not on the pipe.
+[[echo hi] [cat]] | 2>&1 ;

@@ -690,6 +690,8 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	t.slice = b.sigs(append([]string{"([a] -- [a])", "(str -- str)", "(path -- path)", "(bytes -- bytes)"},
 		gridForms("(G_s -- GridView_s)")...))
 	t.slice[0].newListOut = 1
+	t.multi = b.sigs([]string{"([a] -- [a])", "(str -- str)", "(path -- path)", "(bytes -- bytes)"})
+	t.multi[0].newListOut = 1
 	// A pipe: an element is one of its commands; a slice is a new list of
 	// them.
 	{
@@ -698,6 +700,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		gens := []NameId{res.names.Intern("a")}
 		t.index = append(t.index, coreSig{ins: []TypeId{pipe}, outs: []TypeId{cmd}, gens: gens, genIn: 1, genOut: 1})
 		t.slice = append(t.slice, coreSig{ins: []TypeId{pipe}, outs: []TypeId{ar.MakeList(cmd)}, gens: gens, genIn: 1, genOut: 1})
+		t.multiIndex = append(t.multi[:len(t.multi):len(t.multi)], coreSig{ins: []TypeId{pipe}, outs: []TypeId{pipe}, gens: gens, genIn: 1, genOut: 1})
 	}
 
 	return t
