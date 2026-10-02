@@ -454,6 +454,18 @@ Every mshell value carries its runtime kind. A union is well-formed only when it
   Type variables, abstract types and $bot$ have no kind and cannot be union members.
 ]
 
+*A generic in a union (found 2026-10-01, fifth session).* The checker enforced distinct kinds in
+declarations but not in def signatures, so `def g (a b -- a | b) swap drop end` was accepted, and
+`[1] ["x"] g match list l : @l 0 nth 1 + wl, _ : end` checked and then added 1 to `"x"`: at
+`a = [int]`, `b = [str]` the union has two list members, and the pattern took the first. A generic is now
+rejected as a union member in a signature and in a type written in a body. This is not forced by
+soundness: the core's kind pattern binds the union of _every_ member of the tested kind (`kind_then`),
+which is sound at every instance. It is forced by the checker's shortcut that a kind picks one member.
+Allowing generics in unions would need either that, or a check at each call, once solved, that the
+instance's members have distinct kinds. *Decided (2026-10-01):* generics stay out of unions.
+`2tuple` in `lib/std.msh` is `(a a -- [a])`: a generic that is several bare inputs is set to the join of
+the arguments, so `5 "a" 2tuple` is a `[int | str]` (`tests/success/two_tuple_mixed.msh`).
+
 So `int | float | str | null`, `int | [str]` and the recursive `Json` are fine, while
 `[int] | [str]`, `{a: int} | {b: str}`, `{str: int} | {a: int}` and `(int -- int) | (str -- str)`
 are rejected: two members of the same kind. Write an enum for those
@@ -803,15 +815,26 @@ change nothing else:
   [`NumFmtOptions`], [`numFmt`],
   [`Link`], [`parseLinkHeader`],
   [`EnvEvent`], [`envInspect`],
+  [`CompletionResult`], [`completionDefs`: `( -- new {str: [([str] -- CompletionResult)]})`],
 )
+
+*Completion definitions (2026-10-01, fifth session).* `completionDefs` gives each def with `complete`
+metadata as a quote of type `([str] -- CompletionResult)`, built from its body, where
+`type CompletionResult = [str] | {values?: [str], preferredFiles?: str | [str], files?: str | [str], dirs?: bool, binaries?: bool}`.
+So every such def, in the startup files or the script, must have a signature below that quote type;
+otherwise it is an error at the def. A `getDef` whose default fits the stored values' type as an
+argument would (a new `{}` default on a `{str: Json}`) gives that type; otherwise the join of the two.
 
 Retyping a partly new value (@sec-partial) looks through an alias that is not recursive, which is the
 same type as its body; a recursive alias is not unfolded there.
 A width step needs no guess, so it is not asked for: when equality fails between an argument and a
 parameter with unsolved variables, records are matched label by label (the per-label rule, with the
 types it needs equal unified) and covariant enum arguments recursively, and the full $<=$ (or
-$subset.sq.eq$ for a fresh argument) is checked once the def or script is solved. Only a union step is
-a guess, and it still asks for an annotation.
+$subset.sq.eq$ for a fresh argument) is checked once the def or script is solved. A union step is
+taken only by kind (2026-10-01, fifth session): union members have distinct kinds, so a value of one kind can
+belong to one member at most, and taking that member is no guess. `[] as Json` matches `[T]` against
+`[Json]`, and `[]` in one arm of an `if` whose other arm is a `CompletionResult` gives a `CompletionResult`.
+Any other union step is a guess, and it still asks for an annotation.
 
 == Quotes, definitions, control flow
 
@@ -868,6 +891,13 @@ Remarks.
   mention no type variables; and a rigid type variable is treated conservatively everywhere a rule
   asks a question about a type. It is not immutable (@sec-fresh), a kind pattern treats it as unknown
   contents (@sec-unknown), and it cannot be a `tryAs` target (@sec-tryas).
+- *A type written in a def body may name the def's generics* (2026-10-01, fifth session): they are the
+  rigid types the body is checked with, so `{"item": @a, "index": @i} as {"item": a, "index": int}` in
+  `def enumerate ([a] -- [{"item": a, "index": int}])` is an ordinary `as`. Without it, a body could
+  not say the type of a literal that holds a generic value. `tryAs a` is still an error.
+  *Mechanized:* `as` is subsumption in the core, so this is `t_sub` at a type mentioning the def's
+  type variable, which `soundness_generic` already covers. `item_gdefs_ok` in `Examples.v` checks such a
+  body once, generically; `item_use_never_stuck` calls it at `a = [int]` and writes through the result.
 
 == Variable scopes
 
@@ -898,7 +928,9 @@ the core (`if_join`).
 
 + Equal types join to themselves. $bot$ joins to the other side.
 + A slot with an unsolved type variable is *unified*, never joined, so the answer cannot depend on
-  checking order.
+  checking order. When unification fails and the other slot has no unsolved variable, the slot is
+  matched against it as at a checking position (by kind through a union, @sec-infer), and the join is
+  the other side; it is checked in full once the def or script is solved.
 + Different kinds join to their union: `int` and `float` give `int | float`; `str` and `null` give
   `str | null`. Each enum is its own kind, so two different enums join to their union
   (`Shape | LoadError`; clarified 2026-09-30). If one side is already a union, the member of the same kind (if any) is joined with
@@ -945,6 +977,16 @@ the core (`if_join`).
   below are `join_*` in `Recursive.v`, and `alg_join_*` in `Decide.v` with that procedure.
   `tjoin` in `Join.v` is the whole join: `tjoin_core` looks inside the two types, and when it finds no
   join, `tjoin` tries whether one side is below the other.
++ *A new arm takes a shared arm's type (2026-10-01, fifth session).* When the join above finds nothing
+  and one arm is new (or partly new) and the other shared, the shared arm's type is the join if the new
+  value can be retyped to it: a new `{values: [...], binaries: true}` and a stored `CompletionResult`
+  give a shared `CompletionResult`. This is two subsumption steps, `ss_dp` (or `ss_m`) then
+  `ss_forget` (or `ss_m_forget`), which `t_sub` allows one after the other; `join_slot` alone uses
+  $<=$ there, so the checker tries this after it, and the relations compared with the oracle are unchanged.
+  *Mechanized:* `join_slot2` in `Join.v` is the checker's join, `join_slot`'s then this; `join_slot2_ub`
+  shows each arm reaches the result in two steps, and `if_join2` (`if_join2_alg` in `Decide.v`, with the
+  proved procedure for $<=$ and $subset.sq.eq$) that an `if` joined this way checks. It assumes only that
+  the checker's retype of a new or partly new value is right when it says yes.
 
 The arms must still leave the same number of stack items (as today). Arms that diverge are ignored
 (@sec-diverge).
@@ -1386,6 +1428,9 @@ holding a stored cookie jar can be passed where its other keys are optional.
 one, and, for a new list or dict, its own type changed as a new value's may (the per-label rule of
 $subset.sq.eq$), with each element or label checked by its own mark. A label that holds a partly new value
 is not made `open`: the value would then have type unknown, which says nothing about its parts.
+A partly new value may also be retyped position by position to the member of a union with its kind, and
+then committed at the union (`ss_m`, then `ss_m_forget`: the member is below the union). So
+`{values: @l, binaries: true}` fits `CompletionResult` (2026-10-01, fifth session).
 Committing is always allowed: a partly new value is committed (Forget then As) wherever it cannot be
 retyped position by position, and is then a stored value.
 

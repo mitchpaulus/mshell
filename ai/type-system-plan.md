@@ -38,6 +38,7 @@ Current:
 - `formal-ver/`: the Rocq proof of the core.
 - `formal-ver/oracle/`: the proved decision procedures for `≤` and `⊑` and the branch join, extracted to an OCaml program, for comparing with the Go port (stage 2).
 - `ai/check_survey.sh`: runs `--check-types` over the test corpus; useful for stage 0.
+- `tests/typecheck_test.sh`: every `tests/success` program must pass the checker, and every `tests/typecheck_fail` program must fail it. Since stage 6 there is one checker and no skip lists.
 
 Removed 2026-09-29 as superseded (recoverable from git):
 `ai/type-checker-enhancements-design.md`, `ai/type-checker-enhancements-plan.md`, `ai/type_checker.md` (the plan for the current checker), `ai/mutation-effects-exploration.html` (an approach to mutation that was not taken).
@@ -166,7 +167,7 @@ The same applies to runtime work: `deepCopy`, the cycle-safe walkers and `valida
 
 Each stage lists its work, its tests, and when it is done.
 
-Status (end of 2026-10-01): done: stages 0, 2, 3 (two gaps, listed in the progress log's last section), 4, 5, and stage 1 items 1-4. Next: stage 6; stage 1 item 5 any time before stage 7.
+Status (end of 2026-10-01, fifth session): done: stages 0, 2, 3 (two gaps, listed in the progress log), 4, 5, 6, and stage 1 items 1-4. Next: stage 1 item 5 (runtime error classification), then stage 7; stage 8 alongside.
 Stages 2–5 depend on each other in order. Runtime groundwork is independent and can land any time. The soundness oracle can start after the core checker.
 
 ### Stage 0: Baseline and measurements
@@ -343,6 +344,8 @@ Tests: R6 as written is rejected; R6 with `deepCopy` passes and prints the right
 Done when: those pass under the core checker.
 
 ### Stage 6: Switch over, then delete the old checker
+
+Done 2026-10-01 (fifth session). See the progress log.
 
 - Make the core checker the default for `--check-types`, `--type-check-only` and the LSP.
 - Update the programs on stage 3's list of intended rejections, and the tests listed as changing.

@@ -538,3 +538,98 @@ Found: the design doc's H2 example uses `getAt`, which is not an mshell word (in
   - Test runs: `MSHINIT=` (empty) still loads `~/.config/msh/.../init.msh`, whose `f` and `g` collide with test programs; point `MSHINIT` at an empty file. The test scripts already do.
   - `tests/typecheck_core_test.sh` runs `mshell/msh`, `tests/test.sh` runs `mshell/mshell`: build both (`cd mshell && ./build.sh`).
   - The design doc's H2 example uses `getAt`, which is not an mshell word (indexing is `:n:`); left as is.
+
+## Stage 6: switch over and delete the old checker (2026-10-01, fifth session)
+
+Not committed. Suites: `test.sh` 325 passed, 1 failed (`fail/json_number_range.msh`, question 10: Go 1.27 changed `encoding/json`'s error text, which the test pins); `typecheck_test.sh` 374 passed, 0 failed (the one script now); `go test ./...` ok; `typst compile ai/type-core-calculus.typ` ok. `formal-ver/` unchanged.
+Toolchain on this machine is now Go 1.27.0.
+
+### Performance first
+
+Benchmarks at the start were 4x slower than recorded; the cause is the machine or toolchain, not the code: the end-of-stage-3 commit (`41d50c8`) also takes 56-70 ms on its corpus now (17 ms then), and the current code on that same corpus allocates the same (26.1 MB, 54,400). The corpus has grown from 330 to 520 programs since. GC was 44% of the time, so allocation was the target:
+
+- `vars` was indexed by `NameId` and grew one entry at a time to the size of the whole name table, 96 bytes an entry (a `Token` in each). Now 12-byte entries, sized once; first reads go in a per-unit list.
+- `NameTable.Overlay` clipped the base's names, so the first local name copied all of them. An overlay now holds only its own names, numbered from the base's length.
+- The overlays' hash-consing maps were made with room for 64 entries; now empty until used.
+- Assumption sets were a map per `Sub`/`Retype` query (a third of all allocations). Now one buffer per `Relations`, used as a stack: a query's set is the tail from its start, searched linearly, with a map past 64 pairs; a query started inside another (`Retype` asks `Sub`) takes the buffer above it and gives it back. 150,000 oracle questions agree, with the threshold at 64 and at 1 (every set a map).
+- Generics of an instantiation are on a stack with a release mark (no copy per call); `MakeVar` finds a variable's `TypeId` in a slice; `Apply` writes a path-compression entry only when it changes.
+
+| Benchmark (FX-8350, Go 1.27) | Session start | Now |
+|---|---|---|
+| `BenchmarkCoreCheckCorpus` (520 programs + msh-scripts) | 117-122 ms, 45.4 MB, 96,800 allocs | 50-63 ms, 9.1 MB, 49,700 allocs |
+| `BenchmarkCoreCheckEmpty` | 13.5 µs, 10.1 KB, 25 allocs | 4.1 µs, 2.2 KB, 15 allocs |
+| `BenchmarkCoreBase` (once per process) | 1.15 ms | 1.23 ms (a few more entries) |
+| `BenchmarkLSPDiagnostics/setdiff2way.msh` (parse + check, per edit) | old checker | 2.4 ms, 238 KB |
+
+### `lib/std.msh` checks
+
+Std's bodies are checked as a file (`MSHSTDLIB` empty, `--type-check-only lib/std.msh`); everything passes except questions 8 and 9. Changes:
+
+- Bodies: `enumerate`/`enumerateN` say the type of the record they build (`as {"item": a, "index": int}`); `listToDict` starts from `{} as {str: b}`.
+- Signatures: `new` on the outputs that are new on every path (`sl`, `tsplit`, and 15 completion helpers), as the design requires.
+- The read-only list functions were already generic; the ones with a concrete element type call builtins that need it (`join` on `[str]`).
+
+Checker changes this needed (design doc updated for each):
+
+- `completionDefs` is typed `( -- new {str: [([str] -- CompletionResult)]})`, with the built-in alias `CompletionResult`; every def with `complete` metadata (startup files or script) must have a signature below `([str] -- CompletionResult)` (`completionSigError`).
+- `getDef`'s default is checked against the stored values' type as an argument would be, before the join (`{} getDef` on a `{str: Json}`).
+- A union is entered by kind at a checking position with unsolved variables (`matchSub`): `[] as Json` now checks (a known gap from the third session). Joins use the same when unification fails and the other side is solved.
+- A join of a new (or partly new) arm and a shared arm takes the shared arm's type when the new value retypes to it (`ss_dp`/`ss_m`, then `ss_forget`/`ss_m_forget`); `Relations.JoinSlot` is unchanged, the checker tries this after it.
+- A partly new value may be retyped to the union member of its kind and committed at the union (`markBelow`).
+- A type written in a def body may name the def's generics (the rigid types; `coreResolver.bodyGens`). Question 11 asks Mitchell to confirm this and the join rule.
+
+### The switch
+
+- `--check-types`, `--type-check-only` and the LSP use the core checker; `MSH_CHECKER` is gone. The LSP's hover signatures come from the core table (`formatCoreSig`, with `new` marks) and, for words the walker types itself, `coreWalkerSigs`; in-file def signatures resolve with the file's own declarations.
+- The 8 programs on the expected-rejections list were rewritten as listed there; each checks and prints the same output. `dicts.msh` also had a line relying on string-literal types through a variable (`"count" ckey! @rec @ckey get? 2 +`); it now matches `int`. `zip_pack.msh`, `tar_pack.msh` use `as [PackEntry]`.
+- `tests/typecheck_test.sh` is the one script; `typecheck_core_test.sh` and the four list files are deleted.
+- Gaps closed instead of "not checked yet": `soe` (`STOP_ON_ERROR`, `( -- )`), `nth` on a `GridRow` (`unknown`, as `:n:`), a grid `groupBy` whose spec list is not written at the call (`[{agg: (GridView_s -- a), name?: str, meta?: {}}]`, result `Grid` with unknown columns), a quotation pattern on unknown contents (an error that says why). The "unsupported" kind remains only for a construct with no rule, worded as a checker gap to report.
+- Ported from the old checker: the info diagnostic for a `?` that can only fail (`Maybe[⊥]` once the unit is solved; the LSP shows info diagnostics, `CoreBase.Diagnostics`), and `dbg`'s snapshot of the stack and variables, with the final types (printed by `--type-check-only` too).
+- CLI help text for the two flags no longer says "Phase 10 preview". Changelog: Changed, one grouped entry.
+
+Tests changed by the switch: `TestHoverRequestForBuiltin` (`swap :: (a b -- b a)`, was `(T0 T1 -- T1 T0)`); `TestGetLiteralKeyThroughVariable` became `TestGetKeyThroughVariableIsRuntimeKey` (the design removes string-literal types); `OptionalDictKeys_test.go`, `TypeExpr_test.go`, `TypeUnify_test.go`, `Type_test.go` run against the core (old kinds replaced by records and the `Maybe` enum); new `TestNameTableOverlay`.
+
+### Deleted
+
+`TypeChecker.go`, `TypeCheckProgram.go`, `TypeOverload.go`, `TypeQuote.go`, `TypeBuiltins.go`, `TypeBranch.go`, `TypeCast.go` and their tests (6,553 lines of code and 3,132 of tests; 11,473 lines deleted in all, 1,104 added); the old resolver in `TypeExpr.go`; the kinds `TKMaybe`, `TKDict`, `TKShape`, `TKOverloadedQuote`, `TKBrand`, `TKStrLit`, union brands, the old grid schema tables, `QuoteSig.Bindings`/`Generics` and the rewriter's skip sets, and seven error kinds nothing produced. Helpers the runtime and parser use moved (`builtinSigAST` to `TypeCoreBuiltins.go`, `streamStateDesc` to `TypeCoreCommand.go`, pattern helpers to `Parser.go`). `deadcode` finds nothing left in the type files.
+
+### `tests/msh-scripts`
+
+135 of 150 pass. The 15 that fail, each a real problem or a rule of the design:
+
+- run-time failures the checker catches: `[sort '-V']` and `[clip]` in list literals run the builtin on an empty stack (`pathbins`, `sch`); `unlines` on `[path]` (`eq_type_set_diff`; the runtime refuses paths there);
+- raw `Json` used without a check (`gg`, `ph_tag_list`); `str | datetime` claimed `datetime` with `as` (`last_influx_data`);
+- one variable stored as `str` and `path` (`docx2pdf`, `fixofficelensdates`); redirect on a stored list (`epdoc`, `oj`); a def returning a new list without `new` (`gitchanges`);
+- `dict` in a signature read as `{str: T}` with a generic `T` the body then fixes (`fg_fpt`, `github_repos_msh`, `setdiff2way.msh`);
+- `tsv2typ` does not parse.
+
+### Left open
+
+Questions 8-11 in the plan. Stage 3's two small gaps (`new` across mutual recursion; naming the branch each member of a join's union came from). `gofmt` not run. Next by the plan: stage 1 item 5 (runtime error classification), then stage 7.
+
+## Questions 8-11 (2026-10-01, fifth session, continued)
+
+Answered by Mitchell: 8 (`datetime`, the precise type), 10 (our own message), 11 (prove it formally). Suites after: `test.sh` 326 passed, 0 failed; `typecheck_test.sh` 375 passed, 0 failed; `go test ./...` ok; `make check` in `formal-ver/`: every main theorem closed under the global context, `if_join2_alg` added to the list; `typst compile` ok.
+
+- 8: `isoDateFmt`, `isoDateTimeFmt` are `(datetime -- str)` in `lib/std.msh`, `doc/mshell.md` and `doc/functions.inc.html` (other `date` signatures in `functions.inc.html` describe builtins informally; not changed).
+- 10: an out-of-range JSON number reports "the number 1e400 is out of range for a float" (`jsonNumberOutOfRange`); `tests/fail/json_number_range.msh.stderr` updated.
+- 11, proved in Rocq:
+  - the join: `join_slot2` (the proved `join_slot`, then a new or partly new arm taking a non-new arm's type through the checker's retype `rt`), `join_slot2_ub` (each arm reaches the result in two `slot_sub` steps), `if_join2`, and `if_join2_alg` in `Decide.v` with the proved `<=`/retype procedure. The only hypothesis is that `rt` is right when it says yes, stated in the model's relations (`rsub` for a new value; `msub` to a type below the target, or `sub`, for a partly new one).
+  - a type in a def body naming the def's generics: `as` is `t_sub`, so `soundness_generic` covers it. `item_gdefs_ok` in `Examples.v` checks `def item (a int -- {item: a, index: int})` once, generically, with the body's `as` at a type naming `TVar 0` (`ss_m`, then `ss_m_forget`); `item_use_never_stuck` calls it at `a = [int]` and appends through the result; `item_use_runs` runs it. Also `maybe_ctors_wf`.
+  - Go unit tests in `TestCoreChecker` for this session's rules (kind-directed union steps, the join, `getDef`'s default, body generics, completion definitions, `nth` on a row, `soe`).
+
+Question 9 ("is there a fundamental reason `(a b -- [a | b])` isn't possible?") led to a hole, not from this session: the resolver checked distinct kinds in declarations but not in def signatures, so `def g (a b -- a | b) swap drop end  [1] ["x"] g match list l : @l 0 nth 1 + wl, _ : end` checked and then added 1 to `"x"` (the pattern took the first list member of `[int] | [str]`). Fixed: a generic (signature or rigid) cannot be a union member (`unionKindsError`, `genericName`); test `tests/typecheck_fail/union_generic_member.msh`. `2tuple` (used by `grid_join.msh` and `zip.msh`, which an earlier search missed) is `(a a -- [a])`, typing both uses as before (same output). Also: a startup file's signature that does not resolve is now reported with its file instead of silently becoming an empty type. Question 9 stays open in the plan with the options.
+- Question 9 decided (Mitchell): `2tuple` stays `(a a -- [a])`, as long as `5 "a" 2tuple` works; it checks as `[int | str]`. Test `tests/success/two_tuple_mixed.msh`. No open questions.
+
+## Where things stand (end of 2026-10-01, fifth session)
+
+- Branch `type-checker-enhancements`, HEAD `725c60f`, 3 commits ahead of `origin` (not pushed). **Everything from the fifth session is uncommitted** (stage 6, the questions, the Rocq additions); see `git status`. Old-checker files are deleted with `git rm` (staged); everything else is unstaged.
+- Suites: `tests/test.sh` 327 passed, 0 failed; `tests/typecheck_test.sh` 376 passed, 0 failed (the only type-check script now, one checker, no skip lists); `go test ./...` ok (`go vet` has one old warning, `UnreadByte` in `Main.go`); `make check` in `formal-ver/` closed under the global context for every listed theorem (now including `if_join2_alg`); `typst compile ai/type-core-calculus.typ` ok; docs rebuilt (`cd doc && msh build.msh`). `make -C formal-ver/oracle test` not rerun: `Decide.v`'s extracted functions did not change.
+- Go is 1.27.0 on this machine. Benchmarks here are about 4x slower than the numbers recorded in earlier sessions for the same code; compare against a checkout of an older commit (a `git worktree` in the scratchpad) rather than against recorded numbers.
+- `gofmt` has not been run on any changed Go file (not permitted without asking).
+- Open questions in the plan: none.
+- Stages done: 0, 2, 3 (two small gaps below), 4, 5, 6; stage 1 items 1-4. Not done: stage 1 item 5, stages 7, 8.
+- Stage 3 gaps still open: `new` marks across mutually recursive defs (only the "missing `new`" error is lost); naming the branch each member of a join's union came from.
+- Next, by the plan: stage 1 item 5 (runtime error classification: every `FailWithMessage` in `Evaluator.go` gets a kind, *type mismatch* or *checked error*, plus an option or environment variable that makes the runtime report the kind), then stage 7 (soundness oracle: run `tests/success` and `tests/msh-scripts` and fail on any type mismatch; generated programs; per-builtin contract tests). Stage 8 (docs: `doc/type_system.inc.html`, `doc/mshell.md`'s Type System section, editor grammars) can go alongside; the changelog already has the switch-over entry.
+- Where to start reading the checker: `mshell/TypeCore.go` (walker, units, `joinSlot`, `check`/`matchSub`), `TypeCoreBuiltins.go` (the table, aliases, `coreWalkerSigs` for hover), `TypeCoreResolve.go` (type expressions, `unionKindsError`), `TypeRelations.go` (the proved relations; compared with `formal-ver/oracle` by `TestRelationsAgreeWithOracle`).
+- Working notes: point `MSHINIT` at an empty file when running tests by hand (the user's init defines names that collide); `tests/test.sh` runs `mshell/mshell` and `typecheck_test.sh` runs `mshell/msh`, so build both with `cd mshell && ./build.sh`; `--type-check-only lib/std.msh` with an empty `MSHSTDLIB` checks std's bodies (it passes).
