@@ -474,7 +474,8 @@ Each line becomes a test file; the name in brackets is a suggestion.
 ```
 cd mshell && ./build.sh                                  # builds mshell and copies it to msh; the test scripts use both names
 cd tests && ./test.sh && ./typecheck_test.sh
-cd mshell && go test
+cd mshell && go test                                     # includes TestBuiltinContracts and TestGeneratedProgramsSound (60 programs)
+cd tests && ./soundness_test.sh                          # runs every checked program in success/ and fail/, fails on a type mismatch
 cd formal-ver && make check                              # needs Rocq 9.1
 cd formal-ver/oracle && make test                        # the extracted oracle; needs OCaml from the same opam switch
 typst compile ai/type-core-calculus.typ                  # needs Typst 0.14+
