@@ -275,7 +275,20 @@ func TestCoreChecker(t *testing.T) {
 		{`{a: [1]} (drop true) filter as {str: [int | str]} drop`, false, "'as' needs evidence"},
 		{`{a: 1} (drop true) filter as {str: int | str} drop`, true, ""},
 		{`[1 2] xs! {q: "a", n: 2, l: @xs} urlEncode wl`, true, ""},
-		{`{a: 1.5} urlEncode wl`, false, "a str, int or path, or a list of them"},
+		{`{a: 1.5} urlEncode wl`, false, "the values must be UrlEncodable"},
+		// A new literal may be given {str: UrlEncodable}; a stored dict is
+		// read at one type.
+		{`{data: ["a"], r: [3 4]} urlEncode wl`, true, ""},
+		{`["a"] as [str | path | int] d! {data: @d, r: [3 4]} urlEncode wl`, true, ""},
+		{`["a"] d! {data: @d, r: [3 4]} urlEncode wl`, false, "the values must be UrlEncodable"},
+		{`{data: ["a"], r: [3 4]} as {UrlEncodable} p! @p urlEncode wl`, true, ""},
+		{`["a"] as UrlEncodable v! {a: @v} urlEncode wl`, true, ""},
+
+		// `as` on a new literal around a stored value names the stored value.
+		{`["a"] d! {data: @d, r: [3 4]} as {UrlEncodable} drop`, false,
+			"`data` is a stored [str], which cannot become [int | str | path]"},
+		{`[1] xs! {o: {a: @xs}} as {o: {a: [int | str]}} drop`, false, "`a` in `o` is a stored [int]"},
+		{`[1] xs! [@xs [2]] as [[int | str]] drop`, false, "an element is a stored [int]"},
 
 		// Grids: a schema is a record of columns; a literal's is exact.
 		{`[| a, b; 1, "x"; 2, "y" |] "a" gridCol sum wl`, true, ""},

@@ -106,9 +106,13 @@ type coreTable struct {
 	// pipe of those commands.
 	multi, multiIndex []coreSig
 	appendBelow  coreSig
-	// urlEncodeLists are the list types a dict given to urlEncode may hold
+	// urlEncodeValues are the types a dict given to urlEncode may hold, read
+	// at one type: UrlEncodable, and one form per other stored list type
 	// (TypeCoreDict.go).
-	urlEncodeLists []TypeId
+	urlEncodeValues []TypeId
+	// urlEncodeDict is {str: UrlEncodable}, which a new dict literal may be
+	// given before its values are read.
+	urlEncodeDict TypeId
 	// completion is ([str] -- CompletionResult): every def with `complete`
 	// metadata must be below it, since completionDefs gives its body as a
 	// quote of that type.

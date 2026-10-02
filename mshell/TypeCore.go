@@ -1773,6 +1773,7 @@ func (c *coreChecker) ascribe(a *MShellAsCast) {
 	}
 	c.forceTop(1)
 	s := &c.stack[len(c.stack)-1]
+	var blockers []storedBlocker
 	if s.part != 0 && !c.hasVars(s.t) {
 		// Retyped position by position, it stays partly new; committed, it
 		// is shared.
@@ -1783,12 +1784,17 @@ func (c *coreChecker) ascribe(a *MShellAsCast) {
 			s.t = target
 			return
 		}
+		blockers = c.storedBlockers(slotMark(*s), c.subst.Apply(c.arena, s.t), target, "")
 		s.share()
 	}
 	if !c.check(*s, target) {
 		got := c.subst.Apply(c.arena, s.t)
 		hint := "'as' needs evidence: " + c.format(got) + " is not below " + c.format(target)
-		if !s.fresh && !c.rel.Immutable(got) && c.rel.Retype(got, target) {
+		if len(blockers) > 0 {
+			// A new literal around stored values: say which stored value
+			// is in the way.
+			hint += "; " + c.blockersHint(blockers)
+		} else if !s.fresh && !c.rel.Immutable(got) && c.rel.Retype(got, target) {
 			hint += "; a shared value keeps its type, so make a new one first with deepCopy"
 		} else {
 			hint += "; to check data from outside, use tryAs"

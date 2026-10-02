@@ -591,7 +591,10 @@ Saving and restoring the list also saves session cookies; discard those records 
 
         <tr> <td><code>urlEncode</code></td> 
             <td>
-            <p> URL encode a string or dictionary of parameters. An example of using this in a POST request would be: </p>
+            <p> URL encode a string or dictionary of parameters. A list value gives its key once per element.
+            Each value of a dictionary must be an <code>UrlEncodable</code>: <code>str | path | int | [str | path | int]</code>.
+            A dictionary written as a literal where it is passed gets that type; a stored one needs it where it is made, <code>{...} as {UrlEncodable} params!</code>.
+            An example of using this in a POST request would be: </p>
             <pre><code>
 <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">&#34;param1&#34;</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">10</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">&#34;param2&#34;</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;example&#34;</span><span class="mshellCOMMA">,</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellVARSTORE">data!</span>
 <span class="mshellLEFT_CURLY">{</span>

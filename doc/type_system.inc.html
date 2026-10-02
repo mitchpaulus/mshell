@@ -201,6 +201,7 @@ Some aliases are built in.
 <code>HtmlNode</code> is what <code>parseHtml</code> gives.
 The dictionaries other built-in functions take and give have names too, so a stored one can be given its type where it is made:
 <code>HttpRequest</code>, <code>HttpResponse</code>, <code>Cookie</code>, <code>PackEntry</code>, <code>TarDest</code>, <code>ExtractOptions</code>, <code>ExtractEntryOptions</code>, <code>ZipEntryInfo</code>, <code>TarEntryInfo</code>, <code>NumFmtOptions</code>, <code>Link</code>, <code>EnvEvent</code> and <code>CompletionResult</code>.
+<code>UrlEncodable</code>, <code>str | path | int | [str | path | int]</code>, is what <code>urlEncode</code> writes from each value of a dictionary.
 </p>
 
 <pre><code>[`a.txt` {path: "b.txt", archivePath: "docs/b.txt"}] as [PackEntry] entries!

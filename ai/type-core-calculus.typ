@@ -818,6 +818,7 @@ change nothing else:
   [`Link`], [`parseLinkHeader`],
   [`EnvEvent`], [`envInspect`],
   [`CompletionResult`], [`completionDefs`: `( -- new {str: [([str] -- CompletionResult)]})`],
+  [`UrlEncodable`], [`urlEncode`'s dict form, `({str: UrlEncodable} -- str)`, where `type UrlEncodable = str | path | int | [str | path | int]`. A new dict is given that type; any other dict's values are read at one type (Get-Key), which must be an `UrlEncodable` or, since lists are invariant, `str | int | path` with a `[str]`, `[int]` or `[path]` (2026-10-02)],
 )
 
 *Completion definitions (2026-10-01, fifth session).* `completionDefs` gives each def with `complete`

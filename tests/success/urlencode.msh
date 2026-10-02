@@ -7,3 +7,9 @@
 {"tag": ["a" "b" "c"]} urlEncode wl
 {"n": [1 2 3]} urlEncode wl
 {"q": "a&b=c"} urlEncode wl
+# Lists of different element types in one dict literal, and a stored list
+# given its wide type where it is made.
+{"data": ["a" "b"], "report_type": [3 4]} urlEncode wl
+["x" "y"] as [str | path | int] cols!
+{"data": @cols, "year": 2026, "report_type": [3 4]} as {UrlEncodable} params!
+@params urlEncode wl

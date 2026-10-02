@@ -91,6 +91,9 @@ func (b *coreTableBuilder) builtinAliases() {
 		"decimalPoint?: str | path, thousandsSep?: str | path, grouping?: [int]}")
 	b.alias("Link", "{url: str, rel: str, params: {str: str}}")
 	b.alias("EnvEvent", "{dt: datetime, kind: str, source: str, changed: bool}")
+	// What urlEncode writes as a string: one value, or a list of them,
+	// which gives the key once per element.
+	b.alias("UrlEncodable", "str | path | int | [str | path | int]")
 	b.alias("PackEntry", "str | path | {path: str | path, archivePath?: str | path, mode?: int}")
 	b.alias("TarDest", "str | path | {path: str | path, compress?: bool}")
 	b.alias("ExtractOptions", "{overwrite?: bool, skipExisting?: bool, preservePermissions?: bool, "+
@@ -306,12 +309,13 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("uuid", "( -- str)")
 	b.reg("uuid7", "( -- str)")
 	b.reg("urlEncode", "(str -- str)")
-	// The dict form writes each value as a string: a str, int or path, or a
-	// list of them, which gives the key once per element. Lists are
-	// invariant, so each stored list type has its own form (TypeCoreDict.go).
-	for _, src := range []string{"[str]", "[int]", "[path]", "[str | int | path]"} {
-		t.urlEncodeLists = append(t.urlEncodeLists, b.typ(src))
+	// The dict form writes each value as a string: an UrlEncodable. Lists are
+	// invariant, so a stored [str], [int] or [path] has a form of its own
+	// (TypeCoreDict.go).
+	for _, src := range []string{"UrlEncodable", "str | int | path | [str]", "str | int | path | [int]", "str | int | path | [path]"} {
+		t.urlEncodeValues = append(t.urlEncodeValues, b.typ(src))
 	}
+	t.urlEncodeDict = b.typ("{str: UrlEncodable}")
 
 	// A path names a file; a str (a bare word in a list literal too) is the text.
 	b.reg("parseJson", "(str | path | bytes -- new Json)")
@@ -732,6 +736,7 @@ var coreWalkerSigs = map[string][]string{
 	"get":           {"(dict str -- Maybe[T])", "(Grid str -- [T])", "(GridRow str -- T)"},
 	"getDef":        {"(dict str T -- T)"},
 	"values":        {"(dict -- [T])"},
+	"urlEncode":     {"({str: UrlEncodable} -- str)"},
 	"keyValues":     {"(dict -- [{k: str, v: T}])"},
 	"toDict":        {"(GridRow -- new {...})"},
 	"gridCol":       {"(Grid str -- [T])", "(GridView str -- [T])"},

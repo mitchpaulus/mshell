@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -179,9 +180,13 @@ func buildHoverIndex(base *CoreBase, stdlibDefs []MShellDefinition) (map[string]
 			builtinSigs[name] = formatted
 		}
 	}
+	// A word typed partly by the table and partly by the walker (the dict
+	// form of urlEncode) shows both.
 	for name, sigs := range coreWalkerSigs {
-		if _, ok := builtinSigs[name]; !ok {
-			builtinSigs[name] = sigs
+		for _, s := range sigs {
+			if !slices.Contains(builtinSigs[name], s) {
+				builtinSigs[name] = append(builtinSigs[name], s)
+			}
 		}
 	}
 	return builtinSigs, stdlibHover

@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // Partly new values (ai/type-core-calculus.typ, "Freshness, per object";
 // formal-ver/Partial.v).
 //
@@ -196,6 +198,83 @@ func (c *coreChecker) fieldMsub(m coreMark, f, g RecordField) bool {
 		return true
 	}
 	return false
+}
+
+// storedBlocker is a stored value inside a partly new one that keeps it
+// from being retyped: where it is ("`data`", "an element"), its type, and
+// the type it would need.
+type storedBlocker struct {
+	where     string
+	got, want TypeId
+}
+
+// storedBlockers finds the stored values inside a partly new value with
+// mark m that keep it from being retyped from got to want: positions that
+// would fit if they were new, but are stored, so only Sub applies there.
+// The type needed is the union member of the value's kind when want is a
+// union (a [str] needs the list member of UrlEncodable).
+func (c *coreChecker) storedBlockers(m coreMark, got, want TypeId, path string) []storedBlocker {
+	if m < 2 {
+		return nil
+	}
+	p := &c.parts[m-2]
+	ar := c.arena
+	got, want = c.plainAlias(got), c.plainAlias(want)
+	gn, wn := ar.Node(got), ar.Node(want)
+	blocked := func(m coreMark, f, g RecordField, at string) []storedBlocker {
+		switch {
+		case m >= 2:
+			if (f.Status == FieldRequired || f.Status == FieldOptional) && g.Status != FieldOpen && g.Status != FieldAbsent {
+				return c.storedBlockers(m, f.Type, g.Type, at)
+			}
+		case m == markShared && !c.fieldMsub(markShared, f, g) && c.fieldMsub(markNew, f, g):
+			need := g.Type
+			if mem, ok := c.unionMemberOfKind(f.Type, g.Type); ok {
+				need = mem
+			}
+			return []storedBlocker{{where: at, got: f.Type, want: need}}
+		}
+		return nil
+	}
+	var out []storedBlocker
+	if p.list {
+		if gn.Kind == TKList && wn.Kind == TKList {
+			at := "an element"
+			if path != "" {
+				at = "an element in " + path
+			}
+			e := RecordField{Status: FieldRequired, Type: TypeId(gn.A)}
+			w := RecordField{Status: FieldRequired, Type: TypeId(wn.A)}
+			out = append(out, blocked(p.elem, e, w, at)...)
+		}
+		return out
+	}
+	if gn.Kind != TKRecord || wn.Kind != TKRecord {
+		return nil
+	}
+	x, y := ar.records[gn.Extra], ar.records[wn.Extra]
+	for _, f := range x.Fields {
+		name := "`" + c.names.Name(f.Name) + "`"
+		if path != "" {
+			name = name + " in " + path
+		}
+		out = append(out, blocked(p.labelMark(f.Name), f, y.FieldAt(f.Name), name)...)
+	}
+	return out
+}
+
+// blockersHint says which stored values keep a partly new value from being
+// retyped, and how to fix it.
+func (c *coreChecker) blockersHint(bs []storedBlocker) string {
+	parts := make([]string, len(bs))
+	for i, b := range bs {
+		parts[i] = b.where + " is a stored " + c.format(b.got) + ", which cannot become " + c.format(b.want)
+	}
+	fix := "give each that type where it is made, or deepCopy them here"
+	if len(bs) == 1 {
+		fix = "give it that type where it is made (`... as " + c.format(bs[0].want) + "`), or deepCopy it here"
+	}
+	return strings.Join(parts, ", and ") + ": a stored value keeps its type, so " + fix
 }
 
 // listPart is the mark of a list literal whose elements are not all new:

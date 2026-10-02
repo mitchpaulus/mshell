@@ -341,6 +341,16 @@ func escapeMshellString(input string) string {
 
 // containsNullByte checks if a string contains a null byte, which typically indicates
 // the string was incorrectly built from UTF-16 data instead of UTF-8.
+// quoteLeftMessage reports a quote run on the current stack (map on a
+// Maybe, bind) that did not leave exactly one value in place of the one it
+// was given; left is how many it left, negative when it took values below.
+func quoteLeftMessage(t Token, word string, left int) string {
+	if left < 0 {
+		return fmt.Sprintf("%d:%d: The function in '%s' took values from below the one it was given.\n", t.Line, t.Column, word)
+	}
+	return fmt.Sprintf("%d:%d: The function in '%s' did not return a single value, found %d values.\n", t.Line, t.Column, word, left)
+}
+
 // maxAllocCount bounds sizes a builtin computes from an int argument, so
 // that an absurd count is a checked failure, not a Go panic.
 const maxAllocCount = 1 << 40
@@ -10795,7 +10805,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 								return result
 							}
 							if len(*stack) != preStackLen {
-								return state.TypeMismatch(fmt.Sprintf("%d:%d: The function in 'map' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack)-preStackLen))
+								return state.TypeMismatch(quoteLeftMessage(t, "map", len(*stack)-preStackLen+1))
 							}
 							mapResult, _ := stack.Pop()
 							stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
@@ -11293,7 +11303,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 							return result
 						}
 						if len(*stack) != preStackLen {
-							return state.TypeMismatch(fmt.Sprintf("%d:%d: The function in 'bind' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack)-preStackLen))
+							return state.TypeMismatch(quoteLeftMessage(t, "bind", len(*stack)-preStackLen+1))
 						}
 						mapResult, _ := stack.Pop()
 

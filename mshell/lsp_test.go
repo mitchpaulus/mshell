@@ -1759,3 +1759,18 @@ func TestCodeActionFixesNewMarks(t *testing.T) {
 		t.Fatalf("expected one fix-all action with two edits, got %+v", actions)
 	}
 }
+
+// A word the table types in one form and the walker in another (the dict
+// form of urlEncode) shows both on hover.
+func TestHoverIndexMergesWalkerForms(t *testing.T) {
+	sigs, _ := buildHoverIndex(NewCoreBase(nil, nil), nil)
+	got := strings.Join(sigs["urlEncode"], " | ")
+	for _, want := range []string{"(str -- str)", "({str: UrlEncodable} -- str)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("urlEncode hover is %q, missing %q", got, want)
+		}
+	}
+	if len(sigs["swap"]) != 1 {
+		t.Errorf("swap hover has %d forms, want 1: %v", len(sigs["swap"]), sigs["swap"])
+	}
+}

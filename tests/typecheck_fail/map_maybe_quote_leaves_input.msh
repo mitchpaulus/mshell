@@ -1,0 +1,3 @@
+# map gives its quote the value inside the Maybe: (now date) leaves it and a
+# second date, two values where map wants one.
+2026-10-02 just (now date) map

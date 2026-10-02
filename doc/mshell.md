@@ -722,7 +722,7 @@ A generic cannot be a union member.
 `match` takes a union apart by kind (`int n :`, `list xs :`), binding the member's own type.
 
 `type Name = T` is an alias, interchangeable with `T`; it may be recursive through a list, dict, field, quotation or enum (`type Person = {name: str, friends: [Person]}`).
-Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {str: Json}`, what `parseJson` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`.
+Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {str: Json}`, what `parseJson` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`; and `UrlEncodable` (`str | path | int | [str | path | int]`), the values `urlEncode` takes in a dict.
 
 ### New and stored values
 
@@ -1295,7 +1295,7 @@ end wl # Output: 11
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. A count of 0 or less produces an empty list. `(int -- [int])`
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
 - `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
-- `urlEncode`: URL-encode a string or dictionary of parameters. `(str|dict -- str)`
+- `urlEncode`: URL-encode a string or dictionary of parameters; a list value gives its key once per element. `(str -- str)`, `({str: UrlEncodable} -- str)`. A dict literal is given that type where it is passed; a stored dict needs it where it is made (`{...} as {UrlEncodable} params!`), with any stored list in it typed `[str | path | int]` where that list is made.
 - `deepCopy`: Copy a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original. A list reached through two places is copied twice; immutable values and quotes are shared. A value that contains itself is an error. `(a -- a)`
 - `toJson`: Serialize any value to a JSON string. Binary is base64 encoded; typed wrappers like path, date, Maybe, and pipe preserve their shape. Types that map directly to JSON types round-trip; extended types (like path or date) do not. `(a -- str)`
 - `sleep`: Sleep for a floating-point number of seconds. `(numeric -- )`

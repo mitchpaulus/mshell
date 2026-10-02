@@ -277,9 +277,10 @@ func (c *coreChecker) dictMapFilter(tok Token) bool {
 	return true
 }
 
-// urlEncodeDict checks `dict urlEncode`: every value, read at the type of
-// Get-Key, must be one the runtime writes as a string. It reports false
-// when the receiver is not a dict.
+// urlEncodeDict checks `dict urlEncode`: the dict is a {str: UrlEncodable}
+// (a new literal may be given that type, as at any checking position), or
+// else every value, read at the type of Get-Key, is one the runtime writes
+// as a string. It reports false when the receiver is not a dict.
 func (c *coreChecker) urlEncodeDict(tok Token) bool {
 	n := len(c.stack)
 	if n-c.floor < 1 {
@@ -289,14 +290,19 @@ func (c *coreChecker) urlEncodeDict(tok Token) bool {
 	if rec == TidNothing {
 		return false
 	}
-	v, ok := c.keyRead(rec)
-	ar := c.arena
 	fits := false
-	if ok {
+	cp := c.checkpoint()
+	if c.check(c.stack[n-1], c.table.urlEncodeDict) {
+		fits = true
+	} else {
+		c.rollback(cp)
+	}
+	v, ok := c.keyRead(rec)
+	if ok && !fits {
 		read := coreSlot{t: v, fresh: c.stack[n-1].fresh}
-		for _, list := range c.table.urlEncodeLists {
+		for _, form := range c.table.urlEncodeValues {
 			cp := c.checkpoint()
-			if c.check(read, ar.MakeUnion([]TypeId{TidStr, TidInt, TidPath, list})) {
+			if c.check(read, form) {
 				fits = true
 				break
 			}
@@ -304,8 +310,13 @@ func (c *coreChecker) urlEncodeDict(tok Token) bool {
 		}
 	}
 	if !fits {
-		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
-			Hint: "'urlEncode' writes each value of a dict as a string: a str, int or path, or a list of them; got " + c.format(rec)})
+		hint := "'urlEncode' writes each value of a dict as a string, so the values must be UrlEncodable " +
+			"(str | path | int | [str | path | int]), all read at one type; got " + c.format(rec)
+		if got := c.subst.Apply(c.arena, c.stack[n-1].t); !c.stack[n-1].fresh && !c.hasVars(got) &&
+			c.rel.Retype(got, c.table.urlEncodeDict) {
+			hint += "; a stored dict keeps its type, so give it the type where it is made (`{...} as {UrlEncodable} params!`)"
+		}
+		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok, Hint: hint})
 		c.abandoned = true
 		return true
 	}

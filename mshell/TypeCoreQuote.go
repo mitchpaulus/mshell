@@ -219,14 +219,36 @@ func (c *coreChecker) checkPending(pq uint32, want TypeId, child bool, outerBase
 				Hint: "'" + tok.Lexeme + "' wants a quote that never returns, but this one can return"})
 			ok = false
 		} else if len(c.stack) != len(sig.Outputs) {
-			c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: p.tok,
-				Hint: "'" + tok.Lexeme + "' wants a quote " + c.format(want) + ", but this one leaves " +
-					strconv.Itoa(len(c.stack)) + " value(s) " + c.formatSlots(c.stack)})
+			hint := "'" + tok.Lexeme + "' wants a quote " + c.format(want) + ", but this one leaves " +
+				strconv.Itoa(len(c.stack)) + " value(s) " + c.formatSlots(c.stack)
+			if len(sig.Inputs) > 0 {
+				// The usual mistake: forgetting that the quote starts with
+				// its inputs on its stack.
+				ins := make([]coreSlot, len(sig.Inputs))
+				for i, in := range sig.Inputs {
+					ins[i] = coreSlot{t: in}
+				}
+				hint += "; it starts with " + c.formatSlots(ins) + " on its stack, given by '" + tok.Lexeme + "'"
+				if len(c.stack) > len(sig.Outputs) {
+					if len(ins) == 1 {
+						hint += " (if the quote should not use that value, start it with drop)"
+					} else {
+						hint += " (if the quote should not use those values, start it with drops)"
+					}
+				}
+			}
+			c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: p.tok, Hint: hint})
 			ok = false
 		} else {
 			for i, out := range sig.Outputs {
 				if !c.check(c.stack[i], out) {
-					c.mismatch(p.tok, i, out, c.stack[i].t)
+					wantOut, got := c.subst.Apply(c.arena, out), c.subst.Apply(c.arena, c.stack[i].t)
+					hint := "'" + tok.Lexeme + "' wants a quote " + c.format(want) + ", but this one leaves " +
+						c.formatSlots(c.stack) + "; output " + strconv.Itoa(i) + " should be " + c.format(wantOut)
+					if !c.hasVars(wantOut) && !c.hasVars(got) && c.rel.Retype(got, wantOut) {
+						hint += "; " + storedHint
+					}
+					c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: p.tok, Hint: hint})
 					ok = false
 				}
 			}
