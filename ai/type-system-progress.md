@@ -633,3 +633,35 @@ Question 9 ("is there a fundamental reason `(a b -- [a | b])` isn't possible?") 
 - Next, by the plan: stage 1 item 5 (runtime error classification: every `FailWithMessage` in `Evaluator.go` gets a kind, *type mismatch* or *checked error*, plus an option or environment variable that makes the runtime report the kind), then stage 7 (soundness oracle: run `tests/success` and `tests/msh-scripts` and fail on any type mismatch; generated programs; per-builtin contract tests). Stage 8 (docs: `doc/type_system.inc.html`, `doc/mshell.md`'s Type System section, editor grammars) can go alongside; the changelog already has the switch-over entry.
 - Where to start reading the checker: `mshell/TypeCore.go` (walker, units, `joinSlot`, `check`/`matchSub`), `TypeCoreBuiltins.go` (the table, aliases, `coreWalkerSigs` for hover), `TypeCoreResolve.go` (type expressions, `unionKindsError`), `TypeRelations.go` (the proved relations; compared with `formal-ver/oracle` by `TestRelationsAgreeWithOracle`).
 - Working notes: point `MSHINIT` at an empty file when running tests by hand (the user's init defines names that collide); `tests/test.sh` runs `mshell/mshell` and `typecheck_test.sh` runs `mshell/msh`, so build both with `cd mshell && ./build.sh`; `--type-check-only lib/std.msh` with an empty `MSHSTDLIB` checks std's bodies (it passes).
+
+## Stage 1, item 5: runtime failure kinds (2026-10-01, sixth session)
+
+- `Evaluator.go`: `FailWithMessage`/`failPtr` are gone. Every site calls `TypeMismatch` (a failure the checker must prevent; errors that mean the interpreter is wrong count here) or `CheckedFailure` (one a checked program may meet), or `failErr(err, msg)` for a helper that can fail either way: such a helper marks its checked errors with `checkedErrorf`/`asChecked`, and an unmarked error is a mismatch, so a wrong guess is a false alarm, never a hidden hole. The kind is kept in `EvalState.FailureKind`; with `MSH_ERROR_KIND` set the runtime prints `msh error kind: <kind>` after the message.
+- The 939 sites were classified by six subagents against `ai/failure-kinds/SPEC.md` (the test: "can a program the checker accepts reach it?"); their tables and notes are in `ai/failure-kinds/`, applied by `apply.py`. I read every checked site. Result: 721 mismatch, 199 checked, 19 by helper (index/slice range errors, `validateValue`'s budget, the `numFmt` grouping, zip/tar extract options, `toGrid`, `extend`'s column check, cookie-jar values). A redirect that conflicts with one a quote already has is checked (`redirectConflictKind`): a quote's redirects are not part of its type.
+- `tests/soundness_test.sh` (stage 7, first part): runs every program in `tests/success` and `tests/fail` that passes the checker, as `test_file.sh` does, and fails on a mismatch or a Go panic. Now: 266 run, 0 mismatches. The 19 `tests/fail` programs that pass the checker all stop with a checked failure or an exit. `tests/msh-scripts` are not run (plan question 13). `FailureKind_test.go` pins a sample of kinds, one per helper.
+- Fixed on the way: a nil error dereference when a slice index did not parse (`[1 2 3] 1:99999999999999999999` crashed).
+
+### The audit's runtime fixes were never merged
+
+The twelve commits from decision 4 (2026-10-01, first session) sat on `worktree-agent-a062315c2b5cacf54`. Merged (`95ae869`): bare list words in `lines`, `toInt`, `toFloat`, `md5`, `base64decode`, `utf8Bytes`, `parseLinkHeader`; `and`/`or` with a quote; `mod`; `parseCsv`/`parseHtml` on bad input; `null` equality both ways; `toFixed` with negative places; `toJson` of NaN; `leftPad`; bare words in `>`/`<`; `binPaths`; `psub`; function names in messages. Two of their tests needed the core checker:
+- `and`/`or` with a literal quote run it inline (`andOr` in `TypeCoreQuote.go`, the elaboration `b if q else false end`), so a `break` in it leaves the loop.
+- A top-level union of one scalar kind and `null` is equatable (the runtime compares `null` with any scalar, both ways). `null_equality.msh` uses `int | null` instead of raw `Json`, which has no operations.
+
+### Checker holes the classification found (each a `tests/typecheck_fail` file now)
+
+- Dict reads (`get`, `getDef`, `values`) on a value of unknown contents read it as any dict (`dictArg`); it may not be a dict.
+- `break`/`continue` in an `else*` condition (the runtime refuses them there).
+- `$NAME!` took any type (the runtime exports str, path, int).
+- `&`, `2>&1`, `1>&2` on a pipe.
+- A list of indexers on a grid (rows and views do not concatenate), or with a slice on a pipe; a list of `:n:` alone on a pipe gives a pipe (`table.multi`, `table.multiIndex`).
+- `groupBy` and `pivot` key columns named only at run time were not checked; now every column must be a valid key (`deferKeyColumns`, `anyColumn`). A `groupBy` whose spec list is not written at the call had no check on its aggregation result (`gridGroupBy`).
+- `sortBy` on a column mixing kinds, or of paths (`ruleSortKey`, `sortKind`).
+- A number token that does not fit (literal, index, slice, positional, including non-ASCII digits like `$٣`) is a lexing error (`numberLexemeError`). Changelog: Changed.
+
+Not fixed, decision needed: bare words in list literals (plan question 12).
+Found, not changed: `~/.config/msh/init.msh` fails the checker (a generic in a union, line 52), so `--type-check-only` without `MSHINIT` fails on every file; `pivot` does not check duplicate row-key names or a column key that is also a row key, even when literal (checked failures at run time); a literal quote redirected twice is not caught statically (a checked failure).
+
+Performance: same corpus for both (the current tests), `go test -bench`, 8 runs: corpus check 73 ms against 74 ms at `c512c3e`, 9.42 MB, 51,180 allocations against 50,975 (the new deferred checks); parsing the corpus 40.5 ms either way (a temporary benchmark: the number check in the lexer costs nothing measurable).
+
+Suites: `test.sh` 0 failed; `typecheck_test.sh` 393 passed, 0 failed; `soundness_test.sh` 0 mismatches; `go test ./...` ok; `typst compile` ok.
+Commits: `69f89a0` (classification), `95ae869` (merge), `d8e6f7b` (holes), `f9931e5` (`sortBy`).

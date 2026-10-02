@@ -26,7 +26,8 @@ put the answer in the Typst design doc and remove the row.
 
 | # | Question | Context |
 |---|---|---|
-| — | None right now. | |
+| 12 | A bare word in a list literal (`[abc]`) is a `str` to the checker, but the runtime keeps it as its own kind, `Literal`. Should the runtime make it a `str` when the list is built? | Where the two disagree the checker is wrong, and checked programs fail at run time: a `str s` pattern does not match a bare word (the `_` arm runs); `del` with a bare-word key, `dateFmt`'s format, `zipPack`/`tarPack` entries, `sortBy`/`pivot` names, `uniq`, `take`/`skip` on one, `parseJson`/`parseCsv`/`parseHtml` refuse it (about 20 sites; the audit fixes covered `lines`, `toInt`, `toFloat`, `md5`, `base64decode`, `utf8Bytes`, `parseLinkHeader`). (a) Make it a `str` at the list literal: one change, right everywhere by construction; it reverses half of the audit fix `e27e81e`: `@word <` would feed the word's text as input instead of reading the file it names (`>` already takes a string as a file name). (b) Keep `Literal`, and give each of the ~20 sites and the `str` pattern a literal case. I recommend (a). |
+| 13 | May the soundness run (`tests/soundness_test.sh`) also run `tests/msh-scripts`? | The plan says to run them, but they are your own scripts: they move and delete files, touch git repos, open Office documents, deploy. Running them unattended in the repository could do real damage. Options: skip them (only the type check is run on them), or run only a list you approve. |
 
 ## 3. Files
 
@@ -167,7 +168,7 @@ The same applies to runtime work: `deepCopy`, the cycle-safe walkers and `valida
 
 Each stage lists its work, its tests, and when it is done.
 
-Status (end of 2026-10-01, fifth session): done: stages 0, 2, 3 (two gaps, listed in the progress log), 4, 5, 6, and stage 1 items 1-4. Next: stage 1 item 5 (runtime error classification), then stage 7; stage 8 alongside.
+Status (end of 2026-10-01, sixth session): done: stages 0, 1, 2, 3 (two gaps, listed in the progress log), 4, 5, 6; stage 7's first part (the oracle on `tests/success` and `tests/fail`). Next: stage 7's generated programs and per-builtin contract tests; stage 8 alongside.
 Stages 2–5 depend on each other in order. Runtime groundwork is independent and can land any time. The soundness oracle can start after the core checker.
 
 ### Stage 0: Baseline and measurements

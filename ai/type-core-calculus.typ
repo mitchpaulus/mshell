@@ -1790,6 +1790,14 @@ its column sequences, so they are as invariant as the column types.
 - Quote results that the runtime refuses when they are a list, dict or grid (`updateCol`, `pivot`,
   `groupBy` aggregations), grouping keys and join keys are checked against exactly what the runtime
   refuses, once the def or script is solved.
+  So are the columns `sortBy` sorts by: the runtime orders the values of one kind of `int`, `float`,
+  `str`, `datetime` or `bool`, `none` last, a `Maybe` looked through once, so a column that mixes kinds
+  or holds paths is an error (2026-10-01, sixth session).
+  A key or sort column named only at run time may be any column, so every column of the schema must
+  pass, and with an unknown schema none can. The same holds for a `groupBy` whose spec list is not
+  written at the call: its one aggregation type is checked as well.
+- A list of indexers (`:0:, 2:`) concatenates its parts, which only lists, strings, paths and bytes
+  do; on a pipe, a list of `:n:` indexers alone gives a pipe of those commands.
 
 == Commands
 
@@ -2376,6 +2384,15 @@ The mechanized proof covers the core rules. It does not cover the Go code. Three
 
 + *Classify every runtime error.* Tag each error site in `Evaluator.go` as a _checked error_ or a
   _type mismatch_. Soundness is then testable: type-mismatch errors are unreachable in checked programs.
+  *Done (2026-10-01, sixth session).* Every failure the evaluator reports names its kind; a helper that
+  can fail either way marks its checked errors, and anything unmarked is a mismatch, so a wrong guess
+  shows up as a false alarm, never as a hidden hole. The test for a site is "can a program the checker
+  accepts reach it?". Errors that mean the interpreter is wrong count as mismatches. A number in the
+  program text that does not fit is a lexing error, not a run-time one. A redirect that conflicts with
+  one a quote already has is a checked error: a quote's redirects are not part of its type, and a stored
+  quote keeps what earlier code gave it. With `MSH_ERROR_KIND` set the runtime prints the kind, and
+  `tests/soundness_test.sh` runs every checked program in `tests/success` and `tests/fail` and fails on a
+  mismatch. Classifying the sites found eleven checker holes (each now a `tests/typecheck_fail` file).
 + *Soundness oracle.* Generate random well-typed programs by running the typing rules backwards,
   run them, and fail on any type-mismatch error. Bias generation toward aliasing: `dup`, stores,
   refinements of stored values, writes through every view. Also run every file in `tests/success`.
@@ -2433,7 +2450,14 @@ Each was checked against `Evaluator.go` on `main`, not only taken from the docs.
     [Sound, because a shared grid's column types never change in place.],
   [Is `break` lexically scoped?],
     [No. It leaves whatever `loop` is running, even from inside `each` or `map`.],
-    [Kept for literal quotes at the call site; rejected in stored quotes.],
+    [Kept for literal quotes at the call site; rejected in stored quotes. `b (q) and` and `b (q) or`
+     with a literal quote are `b if q else false end` and `b if true else q end`, so a `break` in `q`
+     leaves the loop (2026-10-01).],
+  [Which values does `=` compare?],
+    [Two scalars of one kind; `null` with any scalar, on either side (unequal); `Maybe`s, dicts and
+     enums by their contents, where values of different kinds are unequal. Anything else is an error.],
+    [The two sides join to an equatable type. At the top a union is equatable only when it is one
+     scalar kind and `null` (`int | null`), 2026-10-01.],
 )
 
 = References
