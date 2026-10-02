@@ -541,7 +541,7 @@ Found: the design doc's H2 example uses `getAt`, which is not an mshell word (in
 
 ## Stage 6: switch over and delete the old checker (2026-10-01, fifth session)
 
-Not committed. Suites: `test.sh` 325 passed, 1 failed (`fail/json_number_range.msh`, question 10: Go 1.27 changed `encoding/json`'s error text, which the test pins); `typecheck_test.sh` 374 passed, 0 failed (the one script now); `go test ./...` ok; `typst compile ai/type-core-calculus.typ` ok. `formal-ver/` unchanged.
+Committed in `92a84fa` and `f31afe8`. Suites: `test.sh` 325 passed, 1 failed (`fail/json_number_range.msh`, question 10: Go 1.27 changed `encoding/json`'s error text, which the test pins); `typecheck_test.sh` 374 passed, 0 failed (the one script now); `go test ./...` ok; `typst compile ai/type-core-calculus.typ` ok. `formal-ver/` unchanged.
 Toolchain on this machine is now Go 1.27.0.
 
 ### Performance first
@@ -623,7 +623,7 @@ Question 9 ("is there a fundamental reason `(a b -- [a | b])` isn't possible?") 
 
 ## Where things stand (end of 2026-10-01, fifth session)
 
-- Branch `type-checker-enhancements`, HEAD `725c60f`, 3 commits ahead of `origin` (not pushed). **Everything from the fifth session is uncommitted** (stage 6, the questions, the Rocq additions); see `git status`. Old-checker files are deleted with `git rm` (staged); everything else is unstaged.
+- Committed on `type-checker-enhancements` (not pushed): `92a84fa` (code, tests, user docs, Rocq), `f31afe8` (design doc, plan, progress log), and the commit that records these ids. Working tree clean after it.
 - Suites: `tests/test.sh` 327 passed, 0 failed; `tests/typecheck_test.sh` 376 passed, 0 failed (the only type-check script now, one checker, no skip lists); `go test ./...` ok (`go vet` has one old warning, `UnreadByte` in `Main.go`); `make check` in `formal-ver/` closed under the global context for every listed theorem (now including `if_join2_alg`); `typst compile ai/type-core-calculus.typ` ok; docs rebuilt (`cd doc && msh build.msh`). `make -C formal-ver/oracle test` not rerun: `Decide.v`'s extracted functions did not change.
 - Go is 1.27.0 on this machine. Benchmarks here are about 4x slower than the numbers recorded in earlier sessions for the same code; compare against a checkout of an older commit (a `git worktree` in the scratchpad) rather than against recorded numbers.
 - `gofmt` has not been run on any changed Go file (not permitted without asking).
