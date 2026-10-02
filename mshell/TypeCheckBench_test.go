@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -82,5 +83,57 @@ func BenchmarkLSPDiagnostics(b *testing.B) {
 				s.computeDiagnostics(text)
 			}
 		})
+	}
+}
+
+// generatedPrograms reads testdata/generated: programs the soundness
+// generator wrote (TypeSoundGen_test.go), denser in types, matches and
+// quotes than the test corpus. They are fixed files, so a change to the
+// generator does not change what the benchmarks measure.
+func generatedPrograms(tb testing.TB) []string {
+	tb.Helper()
+	paths, err := filepath.Glob("testdata/generated/*.msh")
+	if err != nil || len(paths) == 0 {
+		tb.Fatalf("no generated programs: %v", err)
+	}
+	var out []string
+	for _, p := range paths {
+		src, err := os.ReadFile(p)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		out = append(out, string(src))
+	}
+	return out
+}
+
+// BenchmarkCoreCheckGenerated checks the generated programs (about 50 KB).
+func BenchmarkCoreCheckGenerated(b *testing.B) {
+	base := NewCoreBase(nil, nil)
+	var files []*MShellFile
+	for _, src := range generatedPrograms(b) {
+		files = append(files, benchParse(b, src))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, f := range files {
+			if _, ok := base.Check(f); !ok {
+				b.Fatal("a generated program does not check")
+			}
+		}
+	}
+}
+
+// BenchmarkParseGenerated parses the same programs: the language server
+// parses before every check.
+func BenchmarkParseGenerated(b *testing.B) {
+	srcs := generatedPrograms(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, src := range srcs {
+			benchParse(b, src)
+		}
 	}
 }

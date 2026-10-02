@@ -1264,6 +1264,9 @@ func (c *coreChecker) call(sigs []coreSig, tok Token) {
 	}
 	fit, nfit := -1, 0
 	for i := range sigs {
+		if !c.mayFit(&sigs[i]) {
+			continue
+		}
 		cp := c.checkpoint()
 		if c.argsFit(&sigs[i]) {
 			fit, nfit = i, nfit+1
@@ -1481,6 +1484,43 @@ func (c *coreChecker) instantiate(sig *coreSig) (gens []TypeId, mark int) {
 }
 
 func (c *coreChecker) releaseGens(mark int) { c.genBuf = c.genBuf[:mark] }
+
+// mayFit is a quick test before argsFit: it is false when some argument
+// is of a kind its parameter cannot hold, comparing only the heads of the
+// two types, so a candidate that cannot fit costs no instantiation. It is
+// true whenever it cannot tell (a generic, a variable, a union, an alias,
+// ⊥, a waiting quote), so it never rejects a candidate argsFit accepts.
+func (c *coreChecker) mayFit(sig *coreSig) bool {
+	n := len(sig.ins)
+	if len(c.stack)-c.floor < n {
+		return false
+	}
+	base := len(c.stack) - n
+	for i, want := range sig.ins {
+		s := c.stack[base+i]
+		if s.pq != 0 {
+			continue
+		}
+		wk := c.arena.nodes[want].Kind
+		switch wk {
+		case TKParam, TKVar, TKRigid, TKUnion, TKAlias, TKAbstract:
+			continue
+		}
+		got := c.subst.Apply(c.arena, s.t)
+		gk := c.arena.nodes[got].Kind
+		switch gk {
+		case TKVar, TKRigid, TKUnion, TKAlias, TKAbstract:
+			continue
+		}
+		if wk != gk {
+			return false
+		}
+		if wk == TKPrim && got != want && got != TidBottom && want != TidUnknown {
+			return false
+		}
+	}
+	return true
+}
 
 // argsFit reports whether the stack's top fits sig's inputs, unifying as
 // it goes; the caller rolls back.
