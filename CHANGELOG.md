@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `return` at the top level of an interactive line exits the shell, as it ends a script. Previously it ended only the line.
 - A bare word in a list literal is a string, exactly as if it were quoted: `[ls -l]` is `["ls" "-l"]`.
   `typeof` gives `String`, a `str` match arm matches it, and every word that takes a string takes it.
   `<`, `parseCsv`, `parseHtml` and `parseJson` read a string as the text itself, so a bare word given to them is text, not a file name: write a path (`` `data.csv` ``) to name a file.

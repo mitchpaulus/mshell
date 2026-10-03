@@ -113,7 +113,6 @@ func (b *CoreBase) NewSession(stackLen int, vars ...string) *CoreSession {
 		c.declared = map[NameId]Token{}
 	}
 	c.beginUnit()
-	c.ret, c.retOuts = retLine, nil
 	for range stackLen {
 		c.stack = append(c.stack, coreSlot{t: TidUnknown})
 	}
@@ -296,7 +295,7 @@ func (s *CoreSession) tryDepth(d int) bool {
 	c.floor, c.listDepth = n-d, 0
 	c.brk, c.cont, c.brkSeen, c.infer = coreLoopCtx{}, coreLoopCtx{}, false, nil
 	c.later, c.assertive = 0, false
-	c.ret, c.retOuts = retLine, nil
+	c.ret, c.retOuts = retAny, nil
 	c.walk(s.file)
 	c.floor = 0
 	s.finishLine()

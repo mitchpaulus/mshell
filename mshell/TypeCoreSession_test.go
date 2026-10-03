@@ -85,10 +85,10 @@ func TestCoreSession(t *testing.T) {
 			Bad(`type T = int  "a" as T`, ""), L(`type T = str`), L(`"a" as T wl`),
 			Bad(`enum E = e1 | e2 end  e1 1 +`, ""), L(`enum E = e1 | e3 end`), L(`e3 drop`),
 		}},
-		{"return at the top of a line", []line{
-			Bad(`1 return`, "top level of an interactive line"),
-			Bad(`true if return end`, "top level of an interactive line"),
+		{"return at the top of a line ends the session, as it ends a script", []line{
 			L(`def f (int -- int) return end`), L(`1 f wl`),
+			L(`"a" false if return end wl`), Bad(`"a" true if return end 1 +`, "no matching overload"),
+			L(`[1] "x" return`), // any stack: nothing runs after it
 		}},
 		{"a runtime error keeps shared and immutable inputs", []line{
 			L(`[1 2] l!`),

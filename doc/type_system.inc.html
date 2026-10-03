@@ -69,7 +69,7 @@ What the line did to stored values and variables stays.
 </p>
 
 <p>
-<code>return</code> is not allowed at the top level of a line.
+<code>return</code> at the top level of a line ends the session, as it ends a script.
 The startup files are not checked: errors in their signatures are printed once when the shell starts, a line that uses a definition with such an error is refused, and a variable they set has a value of unknown type, which a <code>match</code> on its kind can narrow.
 Set <code>MSH_REPL_CHECK=0</code> to turn checking off for a session.
 </p>

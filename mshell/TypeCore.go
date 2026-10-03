@@ -268,10 +268,7 @@ type coreRetKind uint8
 const (
 	retNone  coreRetKind = iota // no return: a quote body or a `never` def
 	retExact                    // a def: return leaves exactly its outputs
-	retAny                      // top-level code: return ends the script
-	// retLine is the top level of a REPL line: return would end the line
-	// and keep a stack the next line could not know (plan question 23).
-	retLine
+	retAny                      // top-level code: return ends the script (or the REPL session)
 )
 
 // coreVar is a variable of the current scope. Its type is a unification
@@ -1075,9 +1072,6 @@ func (c *coreChecker) doReturn(tok Token) {
 	case retNone:
 		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
 			Hint: "'return' is not allowed in a def that never returns"})
-	case retLine:
-		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
-			Hint: "'return' is not allowed at the top level of an interactive line: it would end the line with a stack the next line could not know"})
 	case retExact:
 		c.forceTop(len(c.stack))
 		if len(c.stack) != len(c.retOuts) {

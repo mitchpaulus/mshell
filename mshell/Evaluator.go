@@ -499,6 +499,9 @@ type EvalState struct {
 	// StartupDecls are the `type` and `enum` declarations of the startup
 	// files, which the type checker sees as the script's own.
 	StartupDecls []MShellParseItem
+	// ReturnedAtTop is set when a `return` ended the code being evaluated
+	// rather than a def: the interactive shell exits on it, as a script ends.
+	ReturnedAtTop bool
 	// typeNames are the declared `type` names, declItems every `type` and
 	// `enum` declaration registered so far, and typeEnv the types tryAs and
 	// `is` validate against (Validate.go), made when first needed.
@@ -1361,6 +1364,7 @@ func (state *EvalState) handleReturn(base int) {
 			return
 		}
 	}
+	state.ReturnedAtTop = true
 }
 
 // finishLoopIteration checks the loop body left the stack as it found it,

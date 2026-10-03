@@ -3904,10 +3904,15 @@ ParseError:
 
 	if len(parsed.Items) > 0 {
 		state.initCallStackItem.MShellParseItem = parsed.Items[0]
+		state.evalState.ReturnedAtTop = false
 		result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem)
 
 		if result.ExitCalled {
 			return true, result.ExitCode
+		}
+		// A top-level return ends the session, as it ends a script.
+		if result.Success && state.evalState.ReturnedAtTop {
+			return true, 0
 		}
 
 		if !result.Success {
