@@ -26,7 +26,7 @@ put the answer in the Typst design doc and remove the row.
 
 | # | Question | Context |
 |---|---|---|
-| 21 | When a startup file (std or the init file) has a type error, does the REPL still check lines? Proposed: report the errors once at startup, check lines as usual, and refuse a line that calls a def whose signature has an error. | Your `~/.config/msh/init.msh` has one now (a generic in a union, line 52), so this decides whether checking works for you on day one. |
+| 21 | When a startup file (std or the init file) has a type error, does the REPL still check lines? Proposed: report the errors once at startup, check lines as usual, and refuse a line that calls a def whose signature has an error. | Only startup signatures and declarations matter here; the REPL does not check startup bodies. Mitchell's startup files have no such errors (checked 2026-10-03). |
 
 ## 3. Files
 
