@@ -35,6 +35,7 @@ msh --type-check-only script.msh</code></pre>
 <p>
 The checker checks every definition body in the file, and the code outside definitions.
 It reads the signatures of the standard library and the startup file, and trusts them.
+When the file being checked is the startup file itself, it is checked as the program, with only the standard library before it.
 The language server runs the same checker on every edit.
 </p>
 

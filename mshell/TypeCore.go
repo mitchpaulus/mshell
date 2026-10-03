@@ -77,6 +77,10 @@ func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBa
 		if table.name(id) != nil {
 			continue
 		}
+		if table.startupDefs == nil {
+			table.startupDefs = map[NameId]Token{}
+		}
+		table.startupDefs[id] = withFile(def.NameToken, def.File)
 		parts := res.resolveSig(def.Inputs, def.Outputs)
 		broken := len(res.errs) > 0
 		// A startup file's signature that does not resolve is reported with

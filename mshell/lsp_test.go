@@ -1883,7 +1883,7 @@ func TestRenameReachesEveryBody(t *testing.T) {
 // basic plane at the UTF-16 position of its token.
 func TestDiagnosticColumnsUTF16(t *testing.T) {
 	s := &lspServer{}
-	diags := s.computeDiagnostics("\"😀😀😀\" 1 +\n")
+	diags := s.computeDiagnostics("", "\"😀😀😀\" 1 +\n")
 	if len(diags) != 1 {
 		t.Fatalf("diagnostics: %+v", diags)
 	}
@@ -1901,8 +1901,48 @@ func TestDiagnosticsShowStartupErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &lspServer{startupDecls: declarationItems(parsed.Items), startupErrs: []string{"the init file x does not parse"}}
-	diags := s.computeDiagnostics("1 wl\n")
+	diags := s.computeDiagnostics("", "1 wl\n")
 	if len(diags) != 2 || !strings.Contains(diags[0].Message, "does not parse") || !strings.Contains(diags[1].Message, "init.msh") {
 		t.Fatalf("diagnostics: %+v", diags)
+	}
+}
+
+// TestDiagnosticsStartupFileItself: a document that is one of the startup
+// files is checked with only the files before it, as the command line runs
+// it, so its definitions do not collide with themselves. Any other document
+// still sees every startup file, and a collision names the file.
+func TestDiagnosticsStartupFileItself(t *testing.T) {
+	dir := t.TempDir()
+	stdPath, initPath := filepath.Join(dir, "std.msh"), filepath.Join(dir, "init.msh")
+	stdText := "def stdOne ( -- int) 1 end\n"
+	initText := "def initOne ( -- int) stdOne end\ntype InitT = int\n5 as InitT initOne + wl\n"
+	var files []lspStartupFile
+	for _, f := range []struct{ path, text string }{{stdPath, stdText}, {initPath, initText}} {
+		if err := os.WriteFile(f.path, []byte(f.text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := parseMShellInput(f.text, &TokenFile{f.path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, lspStartupFile{path: f.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items)})
+	}
+	s := &lspServer{startupFiles: files}
+	s.stdlibDefs, s.startupDecls = joinStartupFiles(files)
+	uri := func(p string) protocol.DocumentURI { return protocol.DocumentURI("file://" + filepath.ToSlash(p)) }
+
+	if diags := s.computeDiagnostics(uri(initPath), initText); len(diags) != 0 {
+		t.Fatalf("the init file itself: %+v", diags)
+	}
+	if diags := s.computeDiagnostics(uri(stdPath), stdText); len(diags) != 0 {
+		t.Fatalf("the standard library itself: %+v", diags)
+	}
+	other := filepath.Join(dir, "other.msh")
+	diags := s.computeDiagnostics(uri(other), "def initOne ( -- int) 2 end\n")
+	if len(diags) != 1 || !strings.Contains(diags[0].Message, initPath) {
+		t.Fatalf("another document: %+v", diags)
+	}
+	if diags := s.computeDiagnostics(uri(other), "initOne stdOne + wl\n"); len(diags) != 0 {
+		t.Fatalf("another document using the startup files: %+v", diags)
 	}
 }

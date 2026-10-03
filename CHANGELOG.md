@@ -117,6 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Pressing TAB to complete a command's arguments no longer changes the interactive shell's variables: completion definitions run in a scope of their own.
+- Running or type checking a startup file itself (the init file, or the standard library through `MSHSTDLIB`) no longer also loads it as a startup file first, which defined everything in it twice.
 
 - `map` on a grid, when a row the quotation gives lacks a column the first row has, is an error.
   Previously the cell was left empty, which crashed later or read as zero.

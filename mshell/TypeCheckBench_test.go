@@ -80,7 +80,7 @@ func BenchmarkLSPDiagnostics(b *testing.B) {
 		text := string(src)
 		b.Run(name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				s.computeDiagnostics(text)
+				s.computeDiagnostics("", text)
 			}
 		})
 	}

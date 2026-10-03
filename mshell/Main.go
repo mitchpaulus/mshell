@@ -60,6 +60,10 @@ type startupLoadOptions struct {
 	version            string
 	allowEnvOverrides  bool
 	requireInit        bool
+	// script is the path of the file being run or checked, or "". When it
+	// is one of the startup files, that file is the program: it and the
+	// files after it are not loaded (startupFilesBefore).
+	script string
 }
 
 func getStartupDataDir() (string, error) {
@@ -273,6 +277,10 @@ func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, cont
 	}
 
 	definitions := make([]MShellDefinition, 0)
+	n := startupFilesBefore(options.script, stdlibSpec.path, initSpec.path)
+	if n == 0 {
+		return definitions, nil
+	}
 	if err := loadStartupFile(stdlibSpec.path, stdlibSpec.description, stack, context, state, &definitions); err != nil {
 		initStatus := preflightStartupFile(initSpec)
 		return nil, &startupLoadError{
@@ -285,6 +293,9 @@ func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, cont
 		}
 	}
 
+	if n == 1 {
+		return definitions, nil
+	}
 	if err := loadStartupFile(initSpec.path, initSpec.description, stack, context, state, &definitions); err != nil {
 		if !initSpec.required && errors.Is(err, os.ErrNotExist) {
 			return definitions, nil
@@ -293,6 +304,27 @@ func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, cont
 	}
 
 	return definitions, nil
+}
+
+// startupFilesBefore is how many of the startup files, in the order they
+// load, come before script: all of them, unless script is one of them.
+// Then that file is the program being run or checked, and loading it as a
+// startup file too would define everything in it twice; the files after it
+// may use it, so they are left out as well.
+func startupFilesBefore(script string, paths ...string) int {
+	if script == "" {
+		return len(paths)
+	}
+	info, err := os.Stat(script)
+	if err != nil {
+		return len(paths)
+	}
+	for i, p := range paths {
+		if pi, err := os.Stat(p); err == nil && os.SameFile(info, pi) {
+			return i
+		}
+	}
+	return len(paths)
 }
 
 // formatStartupErrorMessage builds a multi-line explanation of how msh searches
@@ -856,6 +888,7 @@ func main() {
 		version:           effectiveVersion,
 		allowEnvOverrides: allowStartupEnvOverrides,
 		requireInit:       requireVersionedInit,
+		script:            inputFilePath,
 	}, &stack, context, &state)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, formatStartupErrorMessage(err, inputFilePath, file.Version, file.VersionLine, file.VersionCol))

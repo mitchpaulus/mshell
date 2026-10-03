@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"slices"
 	"sort"
@@ -54,6 +57,13 @@ type lspServer struct {
 	// first use and shared by every check.
 	coreBase     *CoreBase
 	coreBaseOnce sync.Once
+	// startupFiles are the startup files one by one, in load order. A
+	// document that is one of them is checked with only the files before it
+	// (startupFilesBefore), in a base of its own (prefixBases[n] for the
+	// first n files, built on first use).
+	startupFiles []lspStartupFile
+	prefixMu     sync.Mutex
+	prefixBases  map[int]*CoreBase
 	builtinSigs  map[string][]string // name -> formatted "(in -- out)" sigs from the type checker
 	stdlibHover  map[string][]string // name -> formatted sigs for stdlib defs
 
@@ -214,10 +224,11 @@ func RunLSP(in io.Reader, out io.Writer) error {
 		envNames:  make(map[string]struct{}),
 	}
 
-	if defs, decls, startupErrs, err := loadStartupFilesForLSP(); err != nil {
+	if files, startupErrs, err := loadStartupFilesForLSP(); err != nil {
 		logLSP(fmt.Sprintf("type-check diagnostics: stdlib unavailable (%v); proceeding without stdlib sigs", err))
 	} else {
-		server.stdlibDefs, server.startupDecls, server.startupErrs = defs, decls, startupErrs
+		server.startupFiles, server.startupErrs = files, startupErrs
+		server.stdlibDefs, server.startupDecls = joinStartupFiles(files)
 	}
 
 	server.builtinSigs, server.stdlibHover = buildHoverIndex(server.base(), server.stdlibDefs)
@@ -264,47 +275,70 @@ func buildHoverIndex(base *CoreBase, stdlibDefs []MShellDefinition) (map[string]
 	return builtinSigs, stdlibHover
 }
 
+// lspStartupFile is one startup file's definitions and declarations.
+type lspStartupFile struct {
+	path  string
+	defs  []MShellDefinition
+	decls []MShellParseItem
+}
+
 // loadStartupForLSP reads the startup files for their definitions and
 // declarations, as a script run from the command line sees them: the
 // standard library (honoring MSHSTDLIB), and the user's init file (honoring
 // MSHINIT) if it is there and parses. Bodies are not evaluated; the checker
 // needs only the signatures and declarations.
 func loadStartupForLSP() ([]MShellDefinition, []MShellParseItem, error) {
-	defs, decls, _, err := loadStartupFilesForLSP()
+	files, _, err := loadStartupFilesForLSP()
+	defs, decls := joinStartupFiles(files)
 	return defs, decls, err
 }
 
-// loadStartupFilesForLSP is loadStartupForLSP, also giving the error of
-// an init file that does not parse; the server goes on without it, and
-// shows the error on every document, as the command line fails on it.
-func loadStartupFilesForLSP() ([]MShellDefinition, []MShellParseItem, []string, error) {
+// joinStartupFiles puts files' definitions and declarations together, in
+// load order.
+func joinStartupFiles(files []lspStartupFile) ([]MShellDefinition, []MShellParseItem) {
+	var defs []MShellDefinition
+	var decls []MShellParseItem
+	for _, f := range files {
+		defs = append(defs, f.defs...)
+		decls = append(decls, f.decls...)
+	}
+	return defs, decls
+}
+
+// loadStartupFilesForLSP is loadStartupForLSP, file by file, also giving
+// the error of an init file that does not parse; the server goes on
+// without its definitions, and shows the error on every document, as the
+// command line fails on it. The init file is listed either way, so a
+// document that is the init file is still known as one.
+func loadStartupFilesForLSP() ([]lspStartupFile, []string, error) {
 	stdlibSpec, initSpec, err := getStartupFileSpecs(startupLoadOptions{
 		version:           mshellVersion,
 		allowEnvOverrides: true,
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	source, err := os.ReadFile(stdlibSpec.path)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	parsed, err := parseMShellInput(string(source), &TokenFile{stdlibSpec.path})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	defs, decls := parsed.Definitions, declarationItems(parsed.Items)
+	files := []lspStartupFile{{path: stdlibSpec.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items)}}
 	var startupErrs []string
 	if source, err := os.ReadFile(initSpec.path); err == nil {
+		init := lspStartupFile{path: initSpec.path}
 		if parsed, err := parseMShellInput(string(source), &TokenFile{initSpec.path}); err == nil {
-			defs = append(defs, parsed.Definitions...)
-			decls = append(decls, declarationItems(parsed.Items)...)
+			init.defs, init.decls = parsed.Definitions, declarationItems(parsed.Items)
 		} else {
 			logLSP(fmt.Sprintf("init file %s does not parse (%v); proceeding without it", initSpec.path, err))
 			startupErrs = append(startupErrs, fmt.Sprintf("the init file %s does not parse: %v", initSpec.path, err))
 		}
+		files = append(files, init)
 	}
-	return defs, decls, startupErrs, nil
+	return files, startupErrs, nil
 }
 
 func (s *lspServer) run() error {
@@ -583,8 +617,8 @@ func (s *lspServer) typeFixActions(doc *lspDocument, file *MShellFile, params pr
 	if !quick && !all {
 		return nil
 	}
-	errs, arena, names := s.coreErrors(file)
 	uri := params.TextDocument.URI
+	errs, arena, names := s.coreErrors(uri, file)
 	var actions []protocol.CodeAction
 	var every []protocol.TextEdit
 	for _, e := range errs {
@@ -935,7 +969,7 @@ func (s *lspServer) closeDiagnostics(uri protocol.DocumentURI) {
 
 func (s *lspServer) diagnosticsLoop(uri protocol.DocumentURI, st *lspDiagState, text string, version uint64) {
 	for {
-		diags, ok := s.safeDiagnostics(text)
+		diags, ok := s.safeDiagnostics(uri, text)
 		s.diagMu.Lock()
 		current := version == st.version && !st.closed
 		if current && ok {
@@ -959,14 +993,14 @@ func (s *lspServer) diagnosticsLoop(uri protocol.DocumentURI, st *lspDiagState, 
 
 // safeDiagnostics is computeDiagnostics, reporting a panic in the checker
 // instead of ending the server.
-func (s *lspServer) safeDiagnostics(text string) (diags []protocol.Diagnostic, ok bool) {
+func (s *lspServer) safeDiagnostics(uri protocol.DocumentURI, text string) (diags []protocol.Diagnostic, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			logLSP(fmt.Sprintf("diagnostics panicked: %v\n%s", r, debug.Stack()))
 			diags, ok = nil, false
 		}
 	}()
-	return s.computeDiagnostics(text), true
+	return s.computeDiagnostics(uri, text), true
 }
 
 // publishDiagnosticsFor parses the document text and runs the static
@@ -976,7 +1010,7 @@ func (s *lspServer) safeDiagnostics(text string) (diags []protocol.Diagnostic, o
 // the client. Runs on its own goroutine; it builds a private parser
 // so it doesn't race with handlers using s.parser.
 func (s *lspServer) publishDiagnosticsFor(uri protocol.DocumentURI, text string) {
-	s.publishDiagnostics(uri, s.computeDiagnostics(text))
+	s.publishDiagnostics(uri, s.computeDiagnostics(uri, text))
 }
 
 func (s *lspServer) publishDiagnostics(uri protocol.DocumentURI, diags []protocol.Diagnostic) {
@@ -1000,12 +1034,55 @@ func (s *lspServer) base() *CoreBase {
 	return s.coreBase
 }
 
-// coreErrors checks file.
-func (s *lspServer) coreErrors(file *MShellFile) ([]TypeError, *TypeArena, *NameTable) {
-	return s.base().Errors(file)
+// baseFor returns the base a document is checked with, and the startup
+// errors it shows. A document that is one of the startup files is the
+// program, not a startup file: it is checked with only the startup files
+// before it, as the command line runs it, so its own definitions are not
+// also loaded as the startup file's.
+func (s *lspServer) baseFor(uri protocol.DocumentURI) (*CoreBase, []string) {
+	paths := make([]string, len(s.startupFiles))
+	for i, f := range s.startupFiles {
+		paths[i] = f.path
+	}
+	n := startupFilesBefore(documentPath(uri), paths...)
+	if n == len(paths) {
+		return s.base(), s.startupErrs
+	}
+	s.prefixMu.Lock()
+	defer s.prefixMu.Unlock()
+	if b := s.prefixBases[n]; b != nil {
+		return b, nil
+	}
+	if s.prefixBases == nil {
+		s.prefixBases = map[int]*CoreBase{}
+	}
+	defs, decls := joinStartupFiles(s.startupFiles[:n])
+	b := NewCoreBase(defs, decls)
+	s.prefixBases[n] = b
+	return b, nil
 }
 
-func (s *lspServer) computeDiagnostics(text string) []protocol.Diagnostic {
+// documentPath is the file a document URI names, or "" for one that is
+// not a file.
+func documentPath(uri protocol.DocumentURI) string {
+	u, err := url.Parse(string(uri))
+	if err != nil || u.Scheme != "file" {
+		return ""
+	}
+	p := u.Path
+	if runtime.GOOS == "windows" && len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		p = p[1:] // /C:/x is C:/x
+	}
+	return filepath.FromSlash(p)
+}
+
+// coreErrors checks file, the text of the document uri.
+func (s *lspServer) coreErrors(uri protocol.DocumentURI, file *MShellFile) ([]TypeError, *TypeArena, *NameTable) {
+	base, _ := s.baseFor(uri)
+	return base.Errors(file)
+}
+
+func (s *lspServer) computeDiagnostics(uri protocol.DocumentURI, text string) []protocol.Diagnostic {
 	lexer := NewLexer(text, nil)
 	parser := NewMShellParser(lexer)
 	file, parseErr := parser.ParseFile()
@@ -1016,7 +1093,8 @@ func (s *lspServer) computeDiagnostics(text string) []protocol.Diagnostic {
 	}
 
 	var diags []protocol.Diagnostic
-	for _, msg := range append(s.startupErrs[:len(s.startupErrs):len(s.startupErrs)], s.base().StartupErrors()...) {
+	base, startupErrs := s.baseFor(uri)
+	for _, msg := range append(startupErrs[:len(startupErrs):len(startupErrs)], base.StartupErrors()...) {
 		diags = append(diags, protocol.Diagnostic{
 			Range:    protocol.Range{End: protocol.Position{Character: 1}},
 			Severity: protocol.DiagnosticSeverityError,
@@ -1024,7 +1102,7 @@ func (s *lspServer) computeDiagnostics(text string) []protocol.Diagnostic {
 			Message:  msg,
 		})
 	}
-	s.base().diagnose(file, func(errs []TypeError, arena *TypeArena, names *NameTable) {
+	base.diagnose(file, func(errs []TypeError, arena *TypeArena, names *NameTable) {
 		if len(errs) == 0 {
 			return
 		}

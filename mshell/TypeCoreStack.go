@@ -113,6 +113,9 @@ func genBit(i int) uint64 {
 // coreTable holds the builtin signatures, by name and by token type.
 type coreTable struct {
 	byName  [][]coreSig
+	// startupDefs are the startup files' definitions' names, with their
+	// files: a definition that takes one says where it is (checkDefName).
+	startupDefs map[NameId]Token
 	byToken [][]coreSig
 	// index is the indexer `:n:`; slice is `n:`, `:n` and `a:b`.
 	index, slice []coreSig

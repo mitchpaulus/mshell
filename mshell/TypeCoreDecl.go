@@ -75,6 +75,9 @@ func (c *coreChecker) declareAll(items []MShellParseItem, defNames map[string]To
 			declErr(tok, "'"+lex+"' is a built-in type, so "+what+" cannot have that name")
 		case patternWords[lex]:
 			declErr(tok, "'"+lex+"' has a meaning of its own in match patterns, so "+what+" cannot have that name")
+		case c.hasStartupDef(lex):
+			prev, _ := c.startupDef(lex)
+			declErr(tok, "'"+lex+"' is the name of the definition at "+tokenPosStr(prev)+", so "+what+" cannot have that name")
 		case c.isBuiltinName(lex):
 			declErr(tok, "'"+lex+"' is the name of a builtin, so "+what+" cannot have that name")
 		case isDef:
@@ -203,6 +206,8 @@ func (c *coreChecker) checkDefName(def MShellDefinition, defNames map[string]Tok
 		hint = "'" + def.Name + "' is already defined at " + tokenPosStr(prev)
 	} else if _, ok := BuiltInList[def.Name]; ok {
 		hint = "'" + def.Name + "' is the name of a builtin"
+	} else if prev, ok := c.startupDef(def.Name); ok {
+		hint = "'" + def.Name + "' is already defined at " + tokenPosStr(prev)
 	} else if c.isBuiltinName(def.Name) {
 		hint = "'" + def.Name + "' is already defined in the standard library"
 	} else if ct := c.ctorNamed(def.Name); ct != nil {
@@ -212,6 +217,22 @@ func (c *coreChecker) checkDefName(def MShellDefinition, defNames map[string]Tok
 		return
 	}
 	c.errs = append(c.errs, TypeError{Kind: TErrDeclaration, Pos: def.NameToken, Hint: hint})
+}
+
+// startupDef returns the name token, with its file, of the startup
+// files' definition named lex.
+func (c *coreChecker) startupDef(lex string) (Token, bool) {
+	id, ok := c.names.Lookup(lex)
+	if !ok {
+		return Token{}, false
+	}
+	tok, ok := c.table.startupDefs[id]
+	return tok, ok
+}
+
+func (c *coreChecker) hasStartupDef(lex string) bool {
+	_, ok := c.startupDef(lex)
+	return ok
 }
 
 // isBuiltinName reports whether a word is a builtin or a standard library
