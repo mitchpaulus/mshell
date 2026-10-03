@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Startup is faster on Linux and macOS: `msh` no longer reads every directory on `PATH` when it starts.
+  A command's path is looked up when it first runs, and the full list is read only for completion and `binPaths`.
+  A one-line script went from about 25 ms to 7 ms on a machine with 6,000 files on `PATH`.
 - Format string interpolations can hold any code: string literals, dictionaries, and nested format strings all work inside `{...}`.
   Interpolations are parsed once when the script is read, not each time the string is built,
   and errors inside them point at the right line and column.
