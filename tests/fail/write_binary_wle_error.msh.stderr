@@ -1,1 +1,1 @@
-type error at line 1, column 43: 'wle' expected int | str at argument 0, got bytes; bytes are not text with lines: write them with `w` or `we`, which add no newline
+type error at line 1, column 43: 'wle' expected int | str at argument 0, got binary; binary is not text with lines: write it with `w` or `we`, which add no newline

@@ -2305,7 +2305,7 @@ func formatPatternItem(it MShellParseItem) string {
 }
 
 // isTypeKeywordToken reports whether tok is one of the match type-keyword
-// patterns: int, float, str, bool, list, dict, path, date, quotation,
+// patterns: int, float, str, bool, list, dict, path, datetime, quotation,
 // maybe, binary.
 func isTypeKeywordToken(tok Token) bool {
 	switch tok.Type {
@@ -2313,7 +2313,7 @@ func isTypeKeywordToken(tok Token) bool {
 		return true
 	case LITERAL:
 		switch tok.Lexeme {
-		case "list", "dict", "path", "date", "quotation", "maybe", "binary":
+		case "list", "dict", "path", "datetime", "quotation", "maybe", "binary":
 			return true
 		}
 	}
@@ -2323,7 +2323,7 @@ func isTypeKeywordToken(tok Token) bool {
 // matchPatternFormsHint lists the legal match-arm pattern forms, used in
 // the diagnostic raised when an arm pattern is not recognized.
 const matchPatternFormsHint = "expected one of: `_`; a type keyword " +
-	"(int, float, str, bool, list, dict, path, date, quotation, maybe, binary), " +
+	"(int, float, str, bool, list, dict, path, datetime, quotation, maybe, binary), " +
 	"optionally followed by a binding name; a value literal (42, 1.5, \"text\", true, false, PATH); " +
 	"two or more value literals of the same kind (strings, ints, or paths) matched as OR alternatives; " +
 	"`none`; `just <name>`; an enum member followed by a name for each payload value; " +

@@ -149,7 +149,7 @@ loadConfig tryAs {name: str} ? :name? wl</code></pre>
 <h1 id="type-system-type-expressions">Type Expressions <a class="section-link" href="#type-system-type-expressions" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
-The base types are <code>int</code>, <code>float</code>, <code>bool</code>, <code>str</code>, <code>path</code>, <code>datetime</code>, <code>bytes</code> and <code>null</code>.
+The base types are <code>int</code>, <code>float</code>, <code>bool</code>, <code>str</code>, <code>path</code>, <code>datetime</code>, <code>binary</code> and <code>null</code>.
 <code>null</code> is the JSON null.
 It is different from <code>none</code>, the empty <code>Maybe</code>, which is a value and not a type.
 Use <code>int | null</code> for an integer or a JSON null, and <code>Maybe[int]</code> for an integer that may be missing.

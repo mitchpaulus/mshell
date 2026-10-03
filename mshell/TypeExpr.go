@@ -662,7 +662,7 @@ func (parser *MShellParser) applyMaybeArgs(node *TypeNamed, errs *[]TypeError) {
 // shape with that field name.
 func isPrimitiveLiteralType(lex string) bool {
 	switch lex {
-	case "bytes", "null", "Maybe", "Grid", "GridView", "GridRow":
+	case "binary", "null", "Maybe", "Grid", "GridView", "GridRow":
 		return true
 	}
 	return false

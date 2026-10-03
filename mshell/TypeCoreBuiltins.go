@@ -115,7 +115,7 @@ func (b *coreTableBuilder) builtinAliases() {
 		"body?: str | int | path, cookieJar?: [Cookie]}")
 	b.alias("CompletionResult", "[str] | {values?: [str], preferredFiles?: str | [str], files?: str | [str], "+
 		"dirs?: bool, binaries?: bool}")
-	b.alias("HttpResponse", "{status: int, reason: str, headers: {str: [str]}, body: bytes, cookieJar?: [Cookie]}")
+	b.alias("HttpResponse", "{status: int, reason: str, headers: {str: [str]}, body: binary, cookieJar?: [Cookie]}")
 }
 
 // typ resolves a type written in type syntax, with no generics.
@@ -235,7 +235,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		"(float float -- bool)",
 		"(str str -- bool)",
 		"(bool bool -- bool)",
-		"(bytes bytes -- bool)",
+		"(binary binary -- bool)",
 		"(path path -- bool)",
 		"(datetime datetime -- bool)",
 		"(null null -- bool)",
@@ -303,12 +303,12 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// String, regex, replacement.
 	b.reg("reReplace", "(str | path str | path str | path -- str)")
 
-	b.reg("base64encode", "(bytes -- str)")
-	b.reg("base64decode", "(str -- bytes)")
-	b.reg("utf8Str", "(bytes -- str)")
-	b.reg("utf8Bytes", "(str -- bytes)")
-	// A str or bytes is hashed as its content; a path names a file.
-	b.reg("md5", "(str | path | bytes -- str)")
+	b.reg("base64encode", "(binary -- str)")
+	b.reg("base64decode", "(str -- binary)")
+	b.reg("utf8Str", "(binary -- str)")
+	b.reg("utf8Bytes", "(str -- binary)")
+	// A str or binary is hashed as its content; a path names a file.
+	b.reg("md5", "(str | path | binary -- str)")
 	// Always names a file.
 	b.reg("sha256sum", "(str | path -- str)")
 	b.reg("uuid", "( -- str)")
@@ -323,7 +323,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	t.urlEncodeDict = b.typ("{str: UrlEncodable}")
 
 	// A path names a file; a str (a bare word in a list literal too) is the text.
-	b.reg("parseJson", "(str | path | bytes -- new Json)")
+	b.reg("parseJson", "(str | path | binary -- new Json)")
 	// The document node: tag "" with the <html> element as its child.
 	b.reg("parseHtml", "(str | path -- new HtmlNode)")
 	b.reg("parseLinkHeader", "(str -- new [Link])")
@@ -348,7 +348,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		"([a] int -- a)", "(int [a] -- a)",
 		"(str int -- str)", "(int str -- str)",
 		"(path int -- path)", "(int path -- path)",
-		"(bytes int -- bytes)", "(int bytes -- bytes)",
+		"(binary int -- binary)", "(int binary -- binary)",
 	}, gridForms("(G_s int -- GridRow_s)", "(int G_s -- GridRow_s)")...)...)
 	// Words that change their receiver in place and give it back.
 	b.reg("setAt", "([a] a int -- [a])")
@@ -477,10 +477,10 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// Files. Lists read from the file system are new lists of paths.
 	b.reg("readFile", "(str | path -- str)")
-	b.reg("readFileBytes", "(str | path -- bytes)")
+	b.reg("readFileBytes", "(str | path -- binary)")
 	// Content below, file path on top.
 	for _, name := range []string{"writeFile", "appendFile"} {
-		b.reg(name, "(str | path | bytes str | path -- )")
+		b.reg(name, "(str | path | binary str | path -- )")
 	}
 	// Source below, destination on top.
 	for _, name := range []string{"cp", "mv", "hardLink"} {
@@ -557,9 +557,9 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("deepCopy", "(a -- new a)")
 
 	// Writes to stdout (w, wl) or stderr (we, wle). Only str and int are
-	// printed; wl and wle add a newline and refuse bytes.
-	b.reg("w", "(str | int | bytes -- )")
-	b.reg("we", "(str | int | bytes -- )")
+	// printed; wl and wle add a newline and refuse binary.
+	b.reg("w", "(str | int | binary -- )")
+	b.reg("we", "(str | int | binary -- )")
 	b.reg("wl", "(str | int -- )")
 	b.reg("wle", "(str | int -- )")
 
@@ -605,7 +605,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	}
 	// archive, entry name; none when the entry does not exist.
 	for _, name := range []string{"zipRead", "tarRead"} {
-		b.reg(name, "(str | path str | path -- Maybe[bytes])")
+		b.reg(name, "(str | path str | path -- Maybe[binary])")
 	}
 
 	// HTTP. The request is read by key. The jar is written in place: expired
@@ -708,7 +708,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// Indexing. `:n:` gives an element (a row of a grid, a cell of a row);
 	// slices give a new list, or a view of the same grid.
-	t.index = b.sigs(append([]string{"([a] -- a)", "(str -- str)", "(path -- path)", "(bytes -- bytes)"},
+	t.index = b.sigs(append([]string{"([a] -- a)", "(str -- str)", "(path -- path)", "(binary -- binary)"},
 		gridForms("(G_s -- GridRow_s)")...))
 	// A row's cell by position: the column is not known.
 	anyRow := ar.MakeGridOf(TKGridRow, res.unknownSchema())
@@ -716,10 +716,10 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// nth on a row is the same read, with the index on either side.
 	nthRow := []coreSig{{ins: []TypeId{anyRow, TidInt}, outs: []TypeId{TidUnknown}}, {ins: []TypeId{TidInt, anyRow}, outs: []TypeId{TidUnknown}}}
 	t.setName(res.names.Intern("nth"), append(t.name(res.names.Intern("nth")), nthRow...))
-	t.slice = b.sigs(append([]string{"([a] -- [a])", "(str -- str)", "(path -- path)", "(bytes -- bytes)"},
+	t.slice = b.sigs(append([]string{"([a] -- [a])", "(str -- str)", "(path -- path)", "(binary -- binary)"},
 		gridForms("(G_s -- GridView_s)")...))
 	t.slice[0].newListOut = 1
-	t.multi = b.sigs([]string{"([a] -- [a])", "(str -- str)", "(path -- path)", "(bytes -- bytes)"})
+	t.multi = b.sigs([]string{"([a] -- [a])", "(str -- str)", "(path -- path)", "(binary -- binary)"})
 	t.multi[0].newListOut = 1
 	// A pipe: an element is one of its commands; a slice is a new list of
 	// them.

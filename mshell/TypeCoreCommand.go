@@ -156,7 +156,7 @@ func (c *coreChecker) redirect(tok Token) bool {
 	case TidStr, TidPath:
 	case TidBytes:
 		if tok.Type != LESSTHAN {
-			c.cmdError(tok, "only '<' takes bytes; '"+tok.Lexeme+"' needs a file name (str or path)")
+			c.cmdError(tok, "only '<' takes binary; '"+tok.Lexeme+"' needs a file name (str or path)")
 		}
 	default:
 		if c.redirectTarget(target, tok.Type == LESSTHAN) {
@@ -371,7 +371,7 @@ func (c *coreChecker) run(tok Token) bool {
 }
 
 // redirectTarget reports whether every value of t, a union or an alias,
-// names a redirect's target: a str or path, or bytes for '<' (input).
+// names a redirect's target: a str or path, or binary for '<' (input).
 func (c *coreChecker) redirectTarget(t TypeId, input bool) bool {
 	var ms []TypeId
 	if !c.members(c.plainAlias(t), &ms) {

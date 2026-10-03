@@ -58,7 +58,7 @@ func (c *coreChecker) patternKind(tok Token) (valueKind, bool) {
 			return valueKind{code: kindDict}, true
 		case "path":
 			return valueKind{code: uint32(TidPath)}, true
-		case "date":
+		case "datetime":
 			return valueKind{code: uint32(TidDateTime)}, true
 		case "quotation":
 			return valueKind{code: kindQuote}, true
@@ -75,6 +75,13 @@ func (c *coreChecker) patternKind(tok Token) (valueKind, bool) {
 		}
 	}
 	return valueKind{}, false
+}
+
+// notAKindHints are the kind words people reach for that a pattern spells
+// differently.
+var notAKindHints = map[string]string{
+	"date":  "write `datetime`",
+	"bytes": "write `binary`",
 }
 
 // unknownContents reports whether t is a type whose contents a kind
@@ -433,6 +440,9 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 			if _, isKind := c.patternKind(first); isKind {
 				return c.badPattern(first, "'"+first.Lexeme+"' is followed by one name, for the value")
 			}
+			if hint, ok := notAKindHints[first.Lexeme]; ok {
+				return c.badPattern(first, "'"+first.Lexeme+"' is not a kind: "+hint)
+			}
 			return c.badPattern(first, "'"+first.Lexeme+"' is not an enum member, an enum or a kind; "+
 				"a pattern of several words is a member and its payloads (`circle r`), a kind and a name (`int n`, `Shape s`), or `just v`")
 		}
@@ -458,6 +468,9 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 		default:
 			k, ok := c.patternKind(p)
 			if !ok {
+				if hint, ok := notAKindHints[p.Lexeme]; ok {
+					return c.badPattern(p, "'"+p.Lexeme+"' is not a kind: "+hint)
+				}
 				return c.badPattern(p, "")
 			}
 			a.kind, a.kindOK = k, true

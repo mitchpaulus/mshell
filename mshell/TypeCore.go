@@ -2229,7 +2229,7 @@ func (c *coreChecker) mismatch(tok Token, i int, want, got TypeId) {
 	if !c.hasVars(want) && !c.hasVars(got) && c.rel.Retype(got, want) {
 		e.Hint = storedHint
 	} else if got == TidBytes && (tok.Lexeme == "wl" || tok.Lexeme == "wle") {
-		e.Hint = "bytes are not text with lines: write them with `w` or `we`, which add no newline"
+		e.Hint = "binary is not text with lines: write it with `w` or `we`, which add no newline"
 	}
 	c.errs = append(c.errs, e)
 }

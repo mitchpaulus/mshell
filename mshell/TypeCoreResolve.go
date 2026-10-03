@@ -257,7 +257,7 @@ func (r *coreResolver) resolve(item MShellParseItem) TypeId {
 func (r *coreResolver) resolveNamed(n *TypeNamed) TypeId {
 	ar := r.arena
 	switch n.Name {
-	case "bytes":
+	case "binary":
 		return TidBytes
 	case "null":
 		return TidNull
@@ -370,7 +370,7 @@ var notATypeHints = map[string]string{
 	"boolean":   "write `bool`",
 	"double":    "write `float`",
 	"date":      "write `datetime`",
-	"binary":    "write `bytes`",
+	"bytes":     "write `binary`",
 	"quote":     "write the quote's type, such as `(int -- int)`",
 	"quotation": "write the quote's type, such as `(int -- int)`",
 	"function":  "write the quote's type, such as `(int -- int)`",

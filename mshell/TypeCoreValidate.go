@@ -252,7 +252,7 @@ func (c *coreChecker) kindWord(k valueKind) string {
 	case uint32(TidPath):
 		return "path"
 	case uint32(TidDateTime):
-		return "date"
+		return "datetime"
 	case uint32(TidBytes):
 		return "binary"
 	case uint32(TidNull):

@@ -209,7 +209,7 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 	case TidStr:
 		return "str"
 	case TidBytes:
-		return "bytes"
+		return "binary"
 	case TidNone:
 		return "none"
 	case TidNull:
@@ -391,7 +391,7 @@ func formatCommandCapture(mode CommandCaptureMode) string {
 	case CommandCaptureStr:
 		return "str"
 	case CommandCaptureBytes:
-		return "bytes"
+		return "binary"
 	case CommandCaptureLines:
 		return "[str]"
 	case CommandDestFile:

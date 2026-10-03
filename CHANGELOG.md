@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A script that the checker refuses must be fixed before it runs again; `msh --type-check-only` on your scripts shows what needs changing.
 - The type checker checks the standard library's and the startup file's definitions as well as the script's.
   A definition there with a type error stays defined, but code that calls it is refused, with the error; code that does not call it is checked as before.
+- The match pattern for a date/time is `datetime`, the same as the type name: `datetime d : ...`. Previously it was `date`.
 - `return` at the top level of an interactive line exits the shell, as it ends a script. Previously it ended only the line.
 - A bare word in a list literal is a string, exactly as if it were quoted: `[ls -l]` is `["ls" "-l"]`.
   `typeof` gives `String`, a `str` match arm matches it, and every word that takes a string takes it.

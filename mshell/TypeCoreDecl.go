@@ -28,7 +28,7 @@ type coreCtor struct {
 // reservedTypeNames are names the language already gives a type, or
 // nothing a declaration may take.
 var reservedTypeNames = map[string]bool{
-	"bytes": true, "null": true, "path": true, "datetime": true, "Grid": true, "GridView": true,
+	"binary": true, "null": true, "path": true, "datetime": true, "Grid": true, "GridView": true,
 	"GridRow": true, "Maybe": true, "never": true, "none": true, "new": true,
 }
 

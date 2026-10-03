@@ -601,7 +601,7 @@ type EnumMemberInfo struct {
 // an enum member with one of these names could not be matched.
 var patternWords = map[string]bool{
 	"_": true, "just": true, "none": true, "null": true, "list": true, "dict": true,
-	"path": true, "date": true, "quotation": true, "maybe": true, "binary": true,
+	"path": true, "datetime": true, "quotation": true, "maybe": true, "binary": true,
 	"Maybe": true, "Json": true, "HtmlNode": true, "is": true,
 }
 
@@ -1950,7 +1950,7 @@ func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, 
 		case "path":
 			_, ok := subject.(MShellPath)
 			return ok, SimpleSuccess()
-		case "date":
+		case "datetime":
 			_, ok := subject.(*MShellDateTime)
 			return ok, SimpleSuccess()
 		case "quotation":

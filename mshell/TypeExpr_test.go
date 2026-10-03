@@ -32,7 +32,7 @@ func TestTypeExprPrimitives(t *testing.T) {
 		"float": TidFloat,
 		"bool":  TidBool,
 		"str":   TidStr,
-		"bytes": TidBytes,
+		"binary": TidBytes,
 		"null":  TidNull,
 	}
 	for src, want := range cases {

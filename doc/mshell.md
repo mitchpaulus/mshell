@@ -705,7 +705,7 @@ end
 Type expressions:
 
 ```mshell
-int float bool str path datetime bytes null   # base types; null is JSON null
+int float bool str path datetime binary null  # base types; null is JSON null
 [str]                 # list of str
 {str: int}            # dictionary: any keys, int values
 {int}                 # short for {str: int}
@@ -1097,7 +1097,7 @@ end wl # Output: 3
 ### Type Matching
 
 Type keywords match based on the subject's type:
-`int`, `float`, `str`, `bool`, `list`, `dict`, `path`, `date`, `quotation`, `maybe`, `binary`, `null`.
+`int`, `float`, `str`, `bool`, `list`, `dict`, `path`, `datetime`, `quotation`, `maybe`, `binary`, `null`.
 
 A `null` arm matches the JSON null value (the `null` type), which is distinct from a `none` arm (the empty case of a `Maybe`).
 For a union such as `int | null`, the `int` and `null` arms cover it exhaustively with no wildcard needed.
@@ -1335,8 +1335,8 @@ end wl # Output: 11
    Windows Terminal always reports 10x20 cells, so fonts with a different cell shape need this.
    Yank bindings copy text about the selected entry to the system clipboard: `yf` (file name), `yp` (full path), `yg` (path relative to the enclosing `.git` directory). `(str -- )`
 - `clip`: Copy a string to the system clipboard. Cross-platform: uses `pbcopy` on macOS, `clip` on Windows, and the first available of `wl-copy`, `xclip`, or `xsel` on Linux. `(str | path -- )`
-- `writeFile`: Write a string (UTF-8) or raw binary data to file. Overwrites file if it exists. `(str|bytes content str|path file -- )`
-- `appendFile`: Append a string (UTF-8) or raw binary data to file. `(str|bytes content str|path file -- )`
+- `writeFile`: Write a string (UTF-8) or raw binary data to file. Overwrites file if it exists. `(str|binary content str|path file -- )`
+- `appendFile`: Append a string (UTF-8) or raw binary data to file. `(str|binary content str|path file -- )`
 - `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`
 - `modTime`: Get a file's last modification time. Returns a Maybe (None on missing file or IO error). This is the only file timestamp that is portable across operating systems and filesystems; reported in local time. `(str|path -- Maybe datetime)`
 - `lsDir`: Get list of all items (files and directories) in directory. Full paths to the items. `(str|path -- [path])`
@@ -1352,10 +1352,10 @@ end wl # Output: 11
 - `abs`: Absolute value `(numeric -- numeric)`
 - `inc`: Increment an integer `(int -- int)`
 - `max2`: Maximum of two numbers `(numeric numeric -- numeric)`
-- `max`: Maximum of list of numbers or datetimes `([numeric] -- numeric) | ([DateTime] -- DateTime)`
+- `max`: Maximum of list of numbers or datetimes `([numeric] -- numeric) | ([datetime] -- datetime)`
 - `transpose`: Transpose list of lists `([[a]] -- [[a]])`
 - `min2`: Minimum of two numbers `(numeric numeric -- numeric)`
-- `min`: Minimum of list of numbers or datetimes `([numeric] -- numeric) | ([DateTime] -- DateTime)`
+- `min`: Minimum of list of numbers or datetimes `([numeric] -- numeric) | ([datetime] -- datetime)`
 - `mod`: Modulus `(numeric numeric -- numeric)`
 - `floor`: Round a number down to the nearest integer. `(numeric -- int)`
 - `ceil`: Round a number up to the nearest integer. `(numeric -- int)`
@@ -1546,7 +1546,7 @@ Access the parts with `:k?` and `:v?`.
 
 ## Date Functions
 
-- `toDt`: Convert string to date/time `(str -- Maybe[date])`.
+- `toDt`: Convert string to date/time `(str -- Maybe[datetime])`.
   Separators are ignored, month names are accepted, and a time with optional AM/PM may follow.
   A leading four digit year is always year-month-day, so ISO dates like `2026-01-02` are never ambiguous.
   Other dates are tried as year-month-day, month-day-year, and day-month-year.
@@ -1554,32 +1554,32 @@ Access the parts with `:k?` and `:v?`.
   If several readings are valid (`01/02/2026`), the order learned from the most recent unambiguous
   non-ISO date in this evaluation decides. With no such date yet, the result is `none`.
   Out of range components (month 13, Feb 30, hour 25) give `none` rather than rolling over.
-- `now`: Push current local date/time onto the stack `( -- date)`
-- `date`: Drop the time portion from a datetime `(date -- date)`
-- `year`: Get year from date `(date -- int)`
-- `month`: Get month from date (1-12) `(date -- int)`
-- `day`: Get day from date (1-31) `(date -- int)`
-- `hour`: Get hour from date (0-23) `(date -- int)`
-- `minute`: Get minute from date (0-59) `(date -- int)`
-- `dateFmt`: Format a date using the [golang format string](https://pkg.go.dev/time#Layout) `(date str -- str)`. Jan 2, 2006 at 3:04pm (MST) is the reference time.
+- `now`: Push current local date/time onto the stack `( -- datetime)`
+- `date`: Drop the time portion from a datetime `(datetime -- datetime)`
+- `year`: Get year from date `(datetime -- int)`
+- `month`: Get month from date (1-12) `(datetime -- int)`
+- `day`: Get day from date (1-31) `(datetime -- int)`
+- `hour`: Get hour from date (0-23) `(datetime -- int)`
+- `minute`: Get minute from date (0-59) `(datetime -- int)`
+- `dateFmt`: Format a date using the [golang format string](https://pkg.go.dev/time#Layout) `(datetime str -- str)`. Jan 2, 2006 at 3:04pm (MST) is the reference time.
 - `isoDateFmt`: Format a date using the ISO 8601 format YYYY-MM-DD `(datetime -- str)`
 - `isoDateTimeFmt`: Format a date/time using ISO 8601 with seconds YYYY-MM-DDTHH:MM:SS `(datetime -- str)`
-- `isWeekend`: Check if date is a weekend `(date -- bool)`
-- `isWeekday`: Check if date is a weekday `(date -- bool)`
-- `dow`: Get day of week from date (0-6). Sunday = 0, .., Saturday = 6 `(date -- int)`
-- `toUnixTime`: Get unix time in seconds from date `(date -- int)`
-- `toUnixTimeMilli`: Get unix time in milliseconds from date `(date -- int)`
-- `toUnixTimeMicro`: Get unix time in microseconds from date `(date -- int)`
-- `toUnixTimeNano`: Get unix time in nanoseconds from date `(date -- int)`
-- `fromUnixTime`: Get date from unix time in seconds `(int -- date)`
-- `fromUnixTimeMilli`: Get date from unix time in milliseconds int `(int -- date)`
-- `fromUnixTimeMicro`: Get date from unix time in microseconds int `(int -- date)`
-- `fromUnixTimeNano`: Get date from unix time in nanoseconds int `(int -- date)`
-- `toOleDate`: Convert a date to an OLE Automation date float `(date -- float)`
-- `fromOleDate`: Convert an OLE Automation date float to a date `(numeric -- date)`
-- `addDays`: Add days to date `(date numeric -- date)`
-- `utcToCst`: Convert a UTC datetime to US Central Time `(date -- date)`
-- `cstToUtc`: Convert a US Central Time datetime to UTC `(date -- date)`
+- `isWeekend`: Check if date is a weekend `(datetime -- bool)`
+- `isWeekday`: Check if date is a weekday `(datetime -- bool)`
+- `dow`: Get day of week from date (0-6). Sunday = 0, .., Saturday = 6 `(datetime -- int)`
+- `toUnixTime`: Get unix time in seconds from date `(datetime -- int)`
+- `toUnixTimeMilli`: Get unix time in milliseconds from date `(datetime -- int)`
+- `toUnixTimeMicro`: Get unix time in microseconds from date `(datetime -- int)`
+- `toUnixTimeNano`: Get unix time in nanoseconds from date `(datetime -- int)`
+- `fromUnixTime`: Get date from unix time in seconds `(int -- datetime)`
+- `fromUnixTimeMilli`: Get date from unix time in milliseconds int `(int -- datetime)`
+- `fromUnixTimeMicro`: Get date from unix time in microseconds int `(int -- datetime)`
+- `fromUnixTimeNano`: Get date from unix time in nanoseconds int `(int -- datetime)`
+- `toOleDate`: Convert a date to an OLE Automation date float `(datetime -- float)`
+- `fromOleDate`: Convert an OLE Automation date float to a date `(numeric -- datetime)`
+- `addDays`: Add days to date `(datetime numeric -- datetime)`
+- `utcToCst`: Convert a UTC datetime to US Central Time `(datetime -- datetime)`
+- `cstToUtc`: Convert a US Central Time datetime to UTC `(datetime -- datetime)`
 
 ## Regular Expression Functions
 
@@ -1636,7 +1636,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTTP Requests
 
-- `httpGet`: Make a HTTP GET request. Signature is `(dict -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes, cookieJar?: [dict]}])`. Takes the request information in a dictionary that should have the following keys:
+- `httpGet`: Make a HTTP GET request. Signature is `(dict -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: binary, cookieJar?: [dict]}])`. Takes the request information in a dictionary that should have the following keys:
 
   - `url`: Full URL, including all the query parameters (required, string)
   - `timeout`: Request timeout in seconds (optional, positive integer; default 30)
@@ -1655,7 +1655,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
   - `status`: Integer status code
   - `reason`: Full reason line, ex: `"200 OK"`
   - `headers`: Dictionary of header name to a list of values
-  - `body`: Body of response, as raw `bytes`. Decode with `utf8Str` if you want a UTF-8 string.
+  - `body`: Body of response, as raw `binary`. Decode with `utf8Str` if you want a UTF-8 string.
   - `cookieJar`: Present only when supplied on the request, referencing the same list.
 
 - `httpPost`: Make a HTTP POST request. Signature is the same as `httpGet`. The only difference is that on the request dictionary, you can also set the `body` field to a stringable value.

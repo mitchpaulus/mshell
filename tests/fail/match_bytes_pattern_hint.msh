@@ -1,0 +1,4 @@
+"x" match
+    bytes b : "binary" wl,
+    _ : "other" wl,
+end
