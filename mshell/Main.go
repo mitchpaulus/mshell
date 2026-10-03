@@ -3464,18 +3464,16 @@ func (state *TermState) InteractiveMode() error {
 
 	state.stdLibDefs = stdLibDefs
 
-	if replCheckEnabled() {
-		checker, startupErrs := newReplChecker(stdLibDefs, state.evalState.StartupDecls, len(state.stack), state.context.Variables)
-		state.checker = checker
-		if len(startupErrs) > 0 {
-			state.leaveRawMode()
-			fmt.Fprintln(os.Stderr, "Type errors in the startup files; lines that use what they declare cannot be checked:")
-			for _, e := range startupErrs {
-				fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
-			}
-			if err := state.enterRawMode(); err != nil {
-				return err
-			}
+	checker, startupErrs := newReplChecker(stdLibDefs, state.evalState.StartupDecls, len(state.stack), state.context.Variables)
+	state.checker = checker
+	if len(startupErrs) > 0 {
+		state.leaveRawMode()
+		fmt.Fprintln(os.Stderr, "Type errors in the startup files; lines that use what they declare cannot be checked:")
+		for _, e := range startupErrs {
+			fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
+		}
+		if err := state.enterRawMode(); err != nil {
+			return err
 		}
 	}
 

@@ -2388,6 +2388,10 @@ checks that a variable exists in ordinary code, and a misspelled name should be 
 that has it.
 The line's inputs, the frame of `repl_error`, are the fewest top slots it
 checks with: the checker is run with the slots below out of reach, as a list literal's body is.
+There is no way to run a line without checking it, for one line or for the session (decided 2026-10-03,
+question 22): a line that is hard to write past the checker is a problem in the language or the checker,
+to be fixed there. Only if the checker loses track of the stack (a bug) does it turn itself off, with a
+message asking for a report.
 `return` at the top level of a line ends the session, as it ends a script (decided 2026-10-03, question
 23): the shell exits. A session is checked as one script typed a line at a time, and in a script nothing
 runs after a top-level `return`, so it checks with any stack there, by the script's rule. Ending only the

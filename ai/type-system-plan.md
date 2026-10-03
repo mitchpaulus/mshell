@@ -27,7 +27,6 @@ put the answer in the Typst design doc and remove the row.
 | # | Question | Context |
 |---|---|---|
 | 21 | When a startup file (std or the init file) has a type error, does the REPL still check lines? Proposed: report the errors once at startup, check lines as usual, and refuse a line that calls a def whose signature has an error. | Your `~/.config/msh/init.msh` has one now (a generic in a union, line 52), so this decides whether checking works for you on day one. |
-| 22 | Is there a way to run a line without checking it? Proposed: `MSH_REPL_CHECK=0` turns checking off for the session; no per-line escape. A per-line escape would mean the checker no longer knows the stack's or variables' types afterwards, so checking would have to stop for the rest of the session anyway. | A line the checker refuses but you know is fine (a checker gap, or the checker being conservative). |
 
 ## 3. Files
 
@@ -168,7 +167,7 @@ The same applies to runtime work: `deepCopy`, the cycle-safe walkers and `valida
 
 Each stage lists its work, its tests, and when it is done.
 
-Status (2026-10-03, twelfth session): done: stages 0 through 7, and three independent reviews whose holes are fixed (progress log). Stage 9 (the REPL checks each line) is implemented and proved for the rule decided for question 20; overload choices stay open across lines (twelfth session); questions 21 and 22 are open. Left: stage 8's final pass at release.
+Status (2026-10-03, twelfth session): done: stages 0 through 7, and three independent reviews whose holes are fixed (progress log). Stage 9 (the REPL checks each line) is implemented and proved for the rule decided for question 20; overload choices stay open across lines (twelfth session); question 21 is open. Left: stage 8's final pass at release.
 Stages 2–5 depend on each other in order. Runtime groundwork is independent and can land any time. The soundness oracle can start after the core checker.
 
 ### Stage 0: Baseline and measurements
@@ -388,7 +387,7 @@ Work:
 
 1. **Rocq: the state after a checked error.** `RErr` carries the heap; `res_ok` for it says the store typing and the caller's frame still hold (the same `INV` as a normal result, with whatever stack the error left). Then the REPL theorem for question 20 (a): the slots below the line's static input depth are its frame and keep their types; the shared slots it took keep theirs (they can be put in the frame as well, since a shared slot owns no region); the new ones it took are dropped.
 2. **A session checker** (`TypeCoreSession.go`): the script unit stays open across lines. Each line is checked from the stack and variables the previous lines left; at its end the unit is solved *without* committing the defaults (unsolved variables are ⊥ for the checks and stay open afterwards), and every check that still mentions an unsolved variable is kept, to be made again after each later line; checks that are ground and pass are dropped, so a line costs the same at the start and the end of a long session. A refused line rolls the checker back to where it was before it (substitution trail, variables, stack, definitions, declarations). The line's static input depth is recorded for the revert.
-3. **The REPL**: check each line before running it; print the errors and do not run a refused line; on a runtime error, restore the stack (question 20) and tell the checker. `return` at the top level of a line ends the session, as it ends a script (question 23). Startup errors (question 21). The opt-out (question 22).
+3. **The REPL**: check each line before running it; print the errors and do not run a refused line; on a runtime error, restore the stack (question 20) and tell the checker. `return` at the top level of a line ends the session, as it ends a script (question 23). Startup errors (question 21). No opt-out (question 22).
 4. Benchmarks: per-line cost at the start of a session and after thousands of lines; allocations per line.
 5. Docs (`doc/` interactive mode pages, not `mshell.md`), changelog.
 

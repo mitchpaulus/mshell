@@ -2,7 +2,6 @@ package main
 
 import (
 	"maps"
-	"os"
 	"slices"
 	"strconv"
 )
@@ -19,12 +18,6 @@ type replChecker struct {
 	// pre is the stack before the committed line: its references, not
 	// copies of the values (design doc, "Checking by default").
 	pre MShellStack
-}
-
-// replCheckEnabled reports whether the REPL checks lines: MSH_REPL_CHECK=0
-// turns it off for the session (plan question 22).
-func replCheckEnabled() bool {
-	return os.Getenv("MSH_REPL_CHECK") != "0"
 }
 
 // newReplChecker starts checking with the startup files' definitions and
