@@ -416,6 +416,7 @@ contract; every builtin that returns a new list follows `map`'s rule, fresh exac
 immutable, `tw_map_imm`), the checker algorithm (unification and overload resolution; joins, the decision procedures for `<=`
 and fresh retyping, the escape check, frame and substitution lemmas are now proved; unification and
 overload resolution need no proof if the checker checks their results again with the final
-substitution, design doc §Inference),
+substitution, and each overload choice records its candidate's whole typing to check then, since the
+recheck alone checks the constraints made, not that every one was made, design doc §Inference),
 and definite assignment (an unset variable is a checked error, as at runtime).
 See the "mechanized core" section of the design document for what each would need.

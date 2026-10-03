@@ -2109,6 +2109,21 @@ length and joins their outputs; `loop{e}` requires the body to preserve its stac
   Then a wrong unification or a wrong overload choice (which is only the constraints of the chosen
   candidate) shows up as an internal checker error, never as an accepted program: what is accepted is
   a derivation of the rules, checked by code that follows the proof.
+- *The recheck checks the constraints made, not that every one was made* (found 2026-10-03, review).
+  Only a unification that succeeded is recorded, and a failed one may have bound variables first. So a
+  candidate that failed part way, and was then taken, leaves bindings the recheck finds consistent:
+  `(toFloat 1.0 +)` took toFloat's first candidate when the script was solved, whose `str` input bound
+  before its `Maybe[float]` output failed against `1.0 +`, and the quote was typed `(str -- float)`.
+  The argument above needs every constraint of the chosen candidate to be generated. So a choice, once
+  made, records the candidate's whole typing as checks of their own, whatever the trial did: each
+  argument must fit its parameter (by $<=$, or fresh retyping) and each output must equal the
+  candidate's, all with the final substitution and by the proved relations. A choice that breaks one is
+  an internal checker error. This does not trust the trial, `check` or the unifier to have generated
+  the constraints: put back the bug above, or a trial that skips its argument checks, and the program is
+  rejected with an internal error (checked 2026-10-03). The proofs are unchanged; the claim that
+  overload resolution needs no proof now rests on these checks, not on the recheck of unified pairs.
+  Builtins with one signature, and a choice made at the word, are checked by `apply`, which reports
+  every check that fails; their typings are not recorded a second time.
 
 *Stacks saved before arms and loops (found 2026-10-02).* An `if`, `match`, `iff`, `and`/`or`, a `loop`
 and an overloaded word on a union operand check several paths from one saved stack. That stack must
@@ -2569,7 +2584,8 @@ decision procedures for $<=$ and $subset.sq.eq$ on them.
   bodies checked once), divergence, joins, the decision procedures for $<=$ and $subset.sq.eq$
   (@sec-alias; right when they say yes, with termination left to guardedness), and the escape check
   (@sec-unknown). Not proved: unification and overload resolution. They need no proof, because the
-  checker checks their results again with the final substitution (@sec-infer).
+  checker checks their results again with the final substitution (@sec-infer): the recheck covers the
+  constraints unification made, and each overload choice records its candidate's whole typing to check.
   `formal-ver/oracle/` extracts the decision procedures and the join to a program, so the Go port of
   them can be compared with the proved functions on generated types.
 - *Definite assignment.* Reading an unset variable is a checked error in the model, as at runtime.

@@ -404,11 +404,7 @@ func (s *CoreSession) finishLine() {
 		}
 		t, want := c.subst.Apply(c.arena, d.t), c.subst.Apply(c.arena, d.want)
 		if ok, _ := c.markBelow(d.mark, t, want); !ok {
-			if d.validation {
-				c.validationError(d.tok, t, want)
-			} else {
-				c.mismatch(d.tok, 0, want, t)
-			}
+			c.deferredError(&d, t, want)
 		}
 		earlier(n, earlierCheck)
 	}
@@ -480,9 +476,7 @@ func (s *CoreSession) pickChoice(i int) {
 	if first < 0 {
 		return // cannot happen: a retry reports a choice nothing fits
 	}
-	ch := &c.choices[i]
-	c.choiceFits(&ch.sigs[first], ch)
-	ch.done = true
+	c.commitChoice(&c.choices[i], first)
 	c.choiceVersion = -1
 	c.retryChoices()
 }

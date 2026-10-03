@@ -800,3 +800,20 @@ func sortRecordLabels(msg string) string {
 		msg = msg[:start] + "\x01" + strings.Join(parts, ", ") + "\x02" + msg[end+1:]
 	}
 }
+
+// TestCoreFinishedChoiceFits checks that a choice made when the unit is
+// solved is made with a candidate that fits. toFloat's first candidate
+// takes a str and gives a Maybe[float], which `1.0 +` cannot take: trying
+// it bound the input to str before it failed, and taking it anyway left
+// the quote typed (str -- float).
+func TestCoreFinishedChoiceFits(t *testing.T) {
+	base := NewCoreBase(nil, nil)
+	out, ok := coreCheck(t, base, `(toFloat 1.0 +) dbg`)
+	if !ok {
+		t.Fatalf("rejected: %v", out)
+	}
+	got := strings.Join(out, "\n")
+	if !strings.Contains(got, "(int -- float)") {
+		t.Errorf("got %q, want the quote typed (int -- float)", got)
+	}
+}

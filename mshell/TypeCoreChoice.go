@@ -159,8 +159,7 @@ func (c *coreChecker) retryChoices() {
 					Hint: "its arguments are " + c.formatSlots(ch.args) + " and its results are used as " +
 						c.formatTypes(ch.outs) + "; " + c.formatCandidates(ch.sigs)})
 			case 1:
-				ch.done = true
-				c.choiceFits(&ch.sigs[fit], ch)
+				c.commitChoice(ch, fit)
 				changed = true
 			}
 		}
@@ -177,11 +176,53 @@ func (c *coreChecker) anyBound(vs []TypeVarId) bool {
 	return false
 }
 
+// commitChoice makes ch with its candidate j, which a trial just found
+// fits. The unifier records only the pairs it unified, and a candidate that
+// failed part way may have bound variables first, so the recheck alone
+// would find such bindings consistent: it checks the constraints made, not
+// that every one was. So the choice also records the candidate's whole
+// typing as checks of their own, made with the final substitution by the
+// proved relations however the trial went: each argument must fit its
+// parameter, by <= or fresh retyping, and each output must equal the
+// candidate's. A choice that breaks one is a checker error, never a typing
+// (design doc, "Unification and subtyping, kept apart").
+func (c *coreChecker) commitChoice(ch *coreChoice, j int) {
+	ch.done = true
+	sig := &ch.sigs[j]
+	gens, mark := c.instantiate(sig)
+	defer c.releaseGens(mark)
+	cp := c.checkpoint()
+	if !c.choiceFitsWith(sig, ch, gens) {
+		c.rollback(cp)
+		c.errs = append(c.errs, TypeError{Kind: TErrCoreInternal, Pos: ch.tok,
+			Hint: "the signature chosen for '" + ch.tok.Lexeme + "' does not fit its arguments " + c.formatSlots(ch.args)})
+		return
+	}
+	for i, want := range sig.ins {
+		if sig.genIn&genBit(i) != 0 {
+			want = c.rel.SubstParams(want, gens)
+		}
+		c.deferred = append(c.deferred, coreDeferred{tok: ch.tok, t: ch.args[i].t, want: want, mark: slotMark(ch.args[i]), choice: true})
+	}
+	for k, t := range sig.outs {
+		if sig.genOut&genBit(k) != 0 {
+			t = c.rel.SubstParams(t, gens)
+		}
+		c.uni.Require(ch.outs[k], t)
+	}
+}
+
 // choiceFits checks a choice's arguments against sig and unifies its
-// output variables with sig's outputs.
+// output variables with sig's outputs. On failure the substitution may be
+// partly changed, so a caller rolls back.
 func (c *coreChecker) choiceFits(sig *coreSig, ch *coreChoice) bool {
 	gens, mark := c.instantiate(sig)
 	defer c.releaseGens(mark)
+	return c.choiceFitsWith(sig, ch, gens)
+}
+
+// choiceFitsWith is choiceFits with sig's generics instantiated as gens.
+func (c *coreChecker) choiceFitsWith(sig *coreSig, ch *coreChoice, gens []TypeId) bool {
 	ok := true
 	c.eachInput(sig, gens, func(i int) coreSlot { return ch.args[i] }, func(i int, want TypeId) {
 		if ok && !c.check(ch.args[i], want) {
@@ -213,9 +254,8 @@ func (c *coreChecker) finishChoices() {
 		if ch.done {
 			continue
 		}
-		if c.sameOutputs(ch) {
-			ch.done = true
-			c.choiceFits(&ch.sigs[0], ch)
+		if j := c.sameOutputs(ch); j >= 0 {
+			c.commitChoice(ch, j)
 			c.choiceVersion = -1
 			c.retryChoices()
 			continue
@@ -226,11 +266,12 @@ func (c *coreChecker) finishChoices() {
 	}
 }
 
-// sameOutputs reports whether every candidate of a choice that still fits
-// gives the same, fully known, output types.
-func (c *coreChecker) sameOutputs(ch *coreChoice) bool {
+// sameOutputs returns the first candidate of a choice that still fits
+// when every one that fits gives the same, fully known, output types, and
+// -1 otherwise.
+func (c *coreChecker) sameOutputs(ch *coreChoice) int {
 	var first []TypeId
-	n := 0
+	firstFit := -1
 	for j := range ch.sigs {
 		cp := c.checkpoint()
 		if c.choiceFits(&ch.sigs[j], ch) {
@@ -239,22 +280,21 @@ func (c *coreChecker) sameOutputs(ch *coreChoice) bool {
 				outs[k] = c.subst.Apply(c.arena, o)
 				if c.hasVars(outs[k]) {
 					c.rollback(cp)
-					return false
+					return -1
 				}
 			}
-			if n == 0 {
-				first = outs
+			if firstFit < 0 {
+				first, firstFit = outs, j
 			} else {
 				for k := range outs {
 					if outs[k] != first[k] {
 						c.rollback(cp)
-						return false
+						return -1
 					}
 				}
 			}
-			n++
 		}
 		c.rollback(cp)
 	}
-	return n > 0
+	return firstFit
 }

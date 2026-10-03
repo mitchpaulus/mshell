@@ -655,6 +655,19 @@ func (c *coreChecker) breakOrContinue(tok Token) {
 	c.diverged = true
 }
 
+// deferredError reports a deferred checking position that failed.
+func (c *coreChecker) deferredError(d *coreDeferred, t, want TypeId) {
+	switch {
+	case d.choice:
+		c.errs = append(c.errs, TypeError{Kind: TErrCoreInternal, Pos: d.tok,
+			Hint: "the signature chosen for '" + d.tok.Lexeme + "' takes " + c.format(want) + ", got " + c.format(t)})
+	case d.validation:
+		c.validationError(d.tok, t, want)
+	default:
+		c.mismatch(d.tok, 0, want, t)
+	}
+}
+
 // deferCheck records a checking position to decide once the unit is
 // solved: s must fit want then.
 func (c *coreChecker) deferCheck(tok Token, s coreSlot, want TypeId) {
@@ -672,4 +685,7 @@ type coreDeferred struct {
 	// validation marks a shared value given to tryAs or `is`, for the
 	// error's wording (TypeCoreValidate.go).
 	validation bool
+	// choice marks an argument of an overload choice checked against the
+	// candidate taken (commitChoice): failing it is a checker error.
+	choice bool
 }

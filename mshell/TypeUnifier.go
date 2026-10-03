@@ -35,6 +35,13 @@ func (u *Unifier) Unify(a, b TypeId) bool {
 	return true
 }
 
+// Require records a pair that must be equal once solved without unifying
+// it: a check of its own that Recheck makes, as for the outputs of an
+// overload choice (TypeCoreChoice.go).
+func (u *Unifier) Require(a, b TypeId) {
+	u.pairs = append(u.pairs, typePair{a, b})
+}
+
 // UnifierCheckpoint is a state of the substitution and the recorded pairs.
 type UnifierCheckpoint struct {
 	subst SubstCheckpoint
