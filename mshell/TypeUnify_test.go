@@ -158,7 +158,7 @@ func TestFormatTypeVar(t *testing.T) {
 	names := NewNameTable()
 	v := arena.MakeVar(TypeVarId(7))
 	got := FormatType(arena, names, v)
-	if got != "T7" {
-		t.Fatalf("expected T7, got %q", got)
+	if got != "_" {
+		t.Fatalf("expected _, got %q", got)
 	}
 }

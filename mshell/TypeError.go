@@ -219,7 +219,9 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 	case TidDateTime:
 		return "datetime"
 	case TidBottom:
-		return "<bottom>"
+		// ⊥ in a message is a type nothing has fixed yet (a variable left
+		// unsolved reads as ⊥), printed like one (plan question 25).
+		return "_"
 	case TidUnknown:
 		return "unknown"
 	}
@@ -276,7 +278,9 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		sb.WriteByte(')')
 		return sb.String()
 	case TKVar:
-		return fmt.Sprintf("T%d", n.A)
+		// A type not worked out yet; its number means nothing to the
+		// reader (plan question 25).
+		return "_"
 	case TKRigid:
 		return names.Name(NameId(n.A))
 	case TKGrid, TKGridView, TKGridRow:
