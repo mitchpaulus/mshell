@@ -2330,14 +2330,13 @@ remaining values have no known types. Decided 2026-09-30:
 - *Shared slots keep their types.* A shared value's type never changes, and every write the line made
   through one kept that type, so each restored shared slot has the type the checker had for it before
   the line, even if the line popped it or changed its contents.
-- *New slots the line popped get their types from their values.* The line may have changed such a
-  value's type in place (widened a list, added a key) or stored it in a variable before failing. For
-  each one: an immutable value (`int`, `str`, `bool`, or `Maybe` or an enum of those) gets the type read
-  off it, exactly. A list or dict that nothing else points to (checked by walking from the variables,
-  captured scopes and the other stack slots) gets the type read off its contents and stays new; an
-  empty list is `[⊥]`, which a new value can be widened from. Anything else, and every quote, becomes
-  `unknown`, shared. New slots the line never popped are unchanged, since nothing else could reach
-  them; the runtime records the lowest stack depth the line reached to tell them apart.
+- *New lists, dicts and grids the line took are dropped (decided 2026-10-03, question 20).* The line
+  may have changed such a value's type in place (widened a list, added a key) or stored it in a variable
+  before failing, and the checker cannot know which. So it is not restored, and the REPL says how many
+  values it dropped. A new value of an immutable type (`int`, `str`, `bool`, or `Maybe` or an enum of
+  those) cannot have changed, so it is restored, like a shared one. The slots below everything the line
+  took are restored as they were: the line never reached them. The line's inputs, the slots it took,
+  are found statically (below, "Checking a session"), not by watching the run.
 - *Variables need nothing.* Each keeps its one type; one the line never stored reads as unset, a
   checked error. Definitions from a line that does not check are not added.
 
@@ -2353,18 +2352,20 @@ the line's *shared* inputs have the types they had (a shared slot owns no region
 can sit in the frame, which the induction protects). `repl_error_commit` adds the new inputs of an
 immutable type, which may be committed before the line.
 
-*Found while proving it: the last two rules above are not right as stated (plan question 20).*
-"Anything else becomes `unknown`, shared" is not sound for an enum value: in the model a new enum's
-payloads can be taken apart while new (`tw_case` on a new value pushes them new) and then committed at
-types no instance of the enum agrees with, `[int | str]` for one and `[int]` for the other of a
-`Pair[a] = pair [a] [a]`. No type `Pair[t]` then holds the value, and a kind pattern on the `unknown`
-value binds `Pair[k]` and could move a `str` from the first list into the second, a stored `[int]`.
-(An argument from the rules, not mechanized. Surface mshell may not reach it: a member pattern always binds, which commits the payloads together.)
-And "a list nothing else points to gets the type read off its contents" needs the model to type objects
-it has stopped tracking (a value overwritten in a new dict, the input of a new `take`), which needs an
-invariant that every closure and enum value in the heap, reachable or not, is well formed.
-*Implemented, pending question 20:* the new inputs of a mutable type are dropped from the restored
-stack, with a note; everything else is restored as above. That is exactly what `repl_error_commit` proves.
+*Why not read types off the values (question 20, the alternative declined).* An earlier draft gave a new
+mutable value the line took the type read off its contents, and anything else `unknown`, shared. That
+is neither simpler nor proved. "Anything else becomes `unknown`, shared" is not sound for an enum value:
+in the model a new enum's payloads can be taken apart while new (`tw_case` on a new value pushes them
+new) and then committed at types no instance of the enum agrees with, `[int | str]` for one and `[int]`
+for the other of a `Pair[a] = pair [a] [a]`. No type `Pair[t]` then holds the value, and a kind pattern
+on the `unknown` value binds `Pair[k]` and could move a `str` from the first list into the second, a
+stored `[int]`. (An argument from the rules, not mechanized. Surface mshell may not reach it: a member
+pattern always binds, which commits the payloads together.) And "a list nothing else points to gets the
+type read off its contents" needs the model to type objects it has stopped tracking (a value overwritten
+in a new dict, the input of a new `take`), which needs an invariant that every closure and enum value in
+the heap, reachable or not, is well formed. It would also walk the stack after every error. The rule
+decided above is exactly what `repl_error_commit` proves, and uses only the new and stored values the
+rest of the design already has.
 
 *Checking a session.* No new theorem is needed while no line fails: types are erased and evaluation is
 deterministic, so running lines one after another is running their concatenation, and checking each

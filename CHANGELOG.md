@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `deepCopy` copies a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original.
 - The interactive shell type checks each line before it runs it, keeping types across lines.
   A line that does not check is not run and changes nothing.
-  After a line that stops with an error, the stack goes back to what it was before the line, less the new values the line took.
+  After a line that stops with an error, the stack goes back to what it was before the line, less the new lists, dictionaries and grids the line took.
   `MSH_REPL_CHECK=0` turns it off.
 - The file manager previews PNG, JPEG, and GIF images in terminals that support sixel graphics, such as Windows Terminal, WezTerm, foot, and xterm.
   Other terminals show the image format and size in pixels.
