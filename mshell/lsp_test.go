@@ -1946,3 +1946,33 @@ func TestDiagnosticsStartupFileItself(t *testing.T) {
 		t.Fatalf("another document using the startup files: %+v", diags)
 	}
 }
+
+// TestDiagnosticsStartupDefErrors: an error in a startup def's body shows
+// where the def is called, not on every document, and in the startup file
+// itself when it is open.
+func TestDiagnosticsStartupDefErrors(t *testing.T) {
+	dir := t.TempDir()
+	initPath := filepath.Join(dir, "init.msh")
+	initText := "def badBody (int -- int) \"oops\" end\ndef good ( -- int) 1 end\n"
+	if err := os.WriteFile(initPath, []byte(initText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parseMShellInput(initText, &TokenFile{initPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := []lspStartupFile{{path: initPath, defs: parsed.Definitions}}
+	s := &lspServer{startupFiles: files}
+	s.stdlibDefs, s.startupDecls = joinStartupFiles(files)
+	uri := func(p string) protocol.DocumentURI { return protocol.DocumentURI("file://" + filepath.ToSlash(p)) }
+	other := filepath.Join(dir, "other.msh")
+	if diags := s.computeDiagnostics(uri(other), "good wl\n"); len(diags) != 0 {
+		t.Fatalf("a document that does not call it: %+v", diags)
+	}
+	if diags := s.computeDiagnostics(uri(other), "5 badBody wl\n"); len(diags) != 1 || !strings.Contains(diags[0].Message, "its body has a type error") {
+		t.Fatalf("a document that calls it: %+v", diags)
+	}
+	if diags := s.computeDiagnostics(uri(initPath), initText); len(diags) != 1 || diags[0].Range.Start.Line != 0 {
+		t.Fatalf("the init file itself: %+v", diags)
+	}
+}

@@ -587,3 +587,50 @@ func TestCoreStartupDeclarationErrors(t *testing.T) {
 		}
 	}
 }
+
+// TestCoreStartupBodies: the startup files' def bodies are checked like a
+// script's (plan question 21). A def whose body or signature has an error
+// stays defined, and only code that calls it is refused, with the reason;
+// the error is among the startup errors the shell prints once.
+func TestCoreStartupBodies(t *testing.T) {
+	init, err := NewMShellParser(NewLexer("def double (int -- int) 2 * end\n"+
+		"def badBody (int -- int) \"oops\" end\n"+
+		"def shout (string -- str) \"!\" + end\n"+
+		"def useBad ( -- int) 5 badBody end\n", &TokenFile{"init.msh"})).ParseFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := NewCoreBase(init.Definitions, nil)
+	cases := []struct {
+		src  string
+		ok   bool
+		want string
+	}{
+		{`5 double wl`, true, ""},
+		{`1 2 + wl`, true, ""},
+		{`5 badBody wl`, false, "'badBody', defined at init.msh:2:5, cannot be checked, so neither can a call to it: its body has a type error"},
+		{`"hi" shout wl`, false, "its signature has a type error"},
+		// useBad's own body is fine, but it calls a def that cannot be checked.
+		{`useBad wl`, false, "'useBad', defined at init.msh:4:5"},
+		{`def f ( -- int) 5 badBody end`, false, "'badBody'"},
+	}
+	for _, tc := range cases {
+		errs, ok := coreCheck(t, base, tc.src)
+		if ok != tc.ok {
+			t.Errorf("%q: ok = %v, want %v; errors: %v", tc.src, ok, tc.ok, errs)
+			continue
+		}
+		if !ok && !strings.Contains(errs[0], tc.want) {
+			t.Errorf("%q: first error %q does not contain %q", tc.src, errs[0], tc.want)
+		}
+	}
+	if d := base.DeclarationErrors(); len(d) != 0 {
+		t.Errorf("declaration errors: %q", d)
+	}
+	all := strings.Join(base.StartupErrors(), "\n")
+	for _, want := range []string{"in init.msh: type error at line 2", "in init.msh: type error at line 3", "in init.msh: type error at line 4"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("startup errors %q do not contain %q", all, want)
+		}
+	}
+}

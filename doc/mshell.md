@@ -688,7 +688,7 @@ and parse a string in a given base with `fromBase` / `parseHex` / `parseOctal` /
 ## Type System
 
 Use `msh --check-types script.msh` to type-check a script before it runs, and `msh --type-check-only script.msh` to check and exit.
-The checker checks every def body and the top-level code; the standard library and startup file are trusted by their signatures.
+The checker checks every def body and the top-level code, and the standard library's and startup file's defs too: code that calls a startup def with a type error is refused.
 It only accepts or rejects: no word behaves differently because of it.
 
 Signatures list inputs before `--` and outputs after it; the rightmost input is the top of the stack.

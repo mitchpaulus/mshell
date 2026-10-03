@@ -1094,7 +1094,7 @@ func (s *lspServer) computeDiagnostics(uri protocol.DocumentURI, text string) []
 
 	var diags []protocol.Diagnostic
 	base, startupErrs := s.baseFor(uri)
-	for _, msg := range append(startupErrs[:len(startupErrs):len(startupErrs)], base.StartupErrors()...) {
+	for _, msg := range append(startupErrs[:len(startupErrs):len(startupErrs)], base.DeclarationErrors()...) {
 		diags = append(diags, protocol.Diagnostic{
 			Range:    protocol.Range{End: protocol.Position{Character: 1}},
 			Severity: protocol.DiagnosticSeverityError,

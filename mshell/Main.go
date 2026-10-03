@@ -3468,7 +3468,7 @@ func (state *TermState) InteractiveMode() error {
 	state.checker = checker
 	if len(startupErrs) > 0 {
 		state.leaveRawMode()
-		fmt.Fprintln(os.Stderr, "Type errors in the startup files; lines that use what they declare cannot be checked:")
+		fmt.Fprintln(os.Stderr, "Type errors in the startup files; a line that calls a definition with one is refused:")
 		for _, e := range startupErrs {
 			fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
 		}

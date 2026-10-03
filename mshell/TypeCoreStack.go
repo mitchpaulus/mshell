@@ -116,6 +116,9 @@ type coreTable struct {
 	// startupDefs are the startup files' definitions' names, with their
 	// files: a definition that takes one says where it is (checkDefName).
 	startupDefs map[NameId]Token
+	// brokenWhy says, for a startup def whose signature or body has an
+	// error, why a call to it is refused.
+	brokenWhy map[NameId]string
 	byToken [][]coreSig
 	// index is the indexer `:n:`; slice is `n:`, `:n` and `a:b`.
 	index, slice []coreSig

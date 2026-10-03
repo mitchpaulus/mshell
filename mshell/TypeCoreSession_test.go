@@ -771,3 +771,25 @@ func TestCoreSessionOpenChecksCompact(t *testing.T) {
 	}
 	run(`@b len wl`)
 }
+
+// TestCoreSessionStartupBodies: a startup def whose body does not check is
+// refused in a session, rather than trusted by its signature (which made
+// the checker lose track of the stack); its other defs work.
+func TestCoreSessionStartupBodies(t *testing.T) {
+	init, err := NewMShellParser(NewLexer("def double (int -- int) 2 * end\ndef badBody (int -- int) \"oops\" end\n",
+		&TokenFile{"init.msh"})).ParseFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := NewCoreBase(init.Definitions, nil)
+	if errs := base.StartupErrors(); len(errs) != 1 || !strings.Contains(errs[0], "badBody") {
+		t.Fatalf("startup errors: %q", errs)
+	}
+	s := base.NewSession(0)
+	if errs, ok := sessionLine(t, s, `5 badBody wl`); ok || !strings.Contains(errs[0], "its body has a type error") {
+		t.Fatalf("a call to a broken startup def: ok = %v, %q", ok, errs)
+	}
+	if errs, ok := sessionLine(t, s, `5 double wl`); !ok {
+		t.Fatalf("a call to a good startup def: %q", errs)
+	}
+}

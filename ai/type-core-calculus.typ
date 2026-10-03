@@ -2388,6 +2388,15 @@ checks that a variable exists in ordinary code, and a misspelled name should be 
 that has it.
 The line's inputs, the frame of `repl_error`, are the fewest top slots it
 checks with: the checker is run with the slots below out of reach, as a list literal's body is.
+*The startup files' defs are checked like a script's (decided 2026-10-03, question 21).* Their bodies
+used to be trusted by their signatures, like builtins, which let a checked script or REPL line reach a type
+mismatch through a startup def whose body did not match its signature (`def badBody (int -- int) "oops"
+end`, then `5 badBody 1 +`). Now every startup def's body is checked when the checker's base is built,
+from the files as loaded (about 2 ms for the standard library); nothing is cached, since nothing guarantees
+a file is unchanged. A def whose signature or body has an error stays defined, and any checked code that
+calls it, including another startup def, is refused, with the error; the shell prints these errors once
+when it starts, and checking the startup file itself shows them. Errors in the startup files' `type` and
+`enum` declarations still stop every program, as the runtime refuses those declarations too.
 There is no way to run a line without checking it, for one line or for the session (decided 2026-10-03,
 question 22): a line that is hard to write past the checker is a problem in the language or the checker,
 to be fixed there. Only if the checker loses track of the stack (a bug) does it turn itself off, with a

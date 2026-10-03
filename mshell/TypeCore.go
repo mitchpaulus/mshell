@@ -38,16 +38,20 @@ type CoreBase struct {
 	enums    map[NameId]uint32
 	ctors    map[NameId]*coreCtor
 	declared map[NameId]Token
+	// declErrs are errors in the startup files' declarations, which stop
+	// every program (the runtime refuses them too); defErrs are errors in
+	// their definitions' signatures and bodies, which only refuse the code
+	// that calls those definitions (checkStartupBodies).
 	declErrs []TypeError
+	defErrs  []TypeError
 	// pool holds checkers that finished a check, to start the next one
 	// with their storage (diagnose).
 	pool sync.Pool
 }
 
-// NewCoreBase builds the base: the builtin table, the signatures of
-// stdlibDefs (their bodies are not checked: their signatures are trusted,
-// like the builtins'), and
-// the startup files' declarations, decls.
+// NewCoreBase builds the base: the builtin table, the startup files'
+// declarations, decls, and the signatures of their defs, stdlibDefs, whose
+// bodies are checked too (checkStartupBodies).
 func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBase {
 	arena, names := NewTypeArena(), NewNameTable()
 	res := &coreResolver{arena: arena, names: names, rel: NewRelations(arena), aliases: map[NameId]TypeId{}, self: -1}
@@ -71,25 +75,29 @@ func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBa
 		res.aliases, res.enums = c.res.aliases, c.res.enums
 		b.enums, b.ctors, b.declared, b.declErrs = c.res.enums, c.ctors, c.declared, c.errs
 	}
+	// owned are the startup defs that define their names (a name a builtin
+	// or an earlier def took is refused at run time anyway).
+	var owned []int
 	for i := range stdlibDefs {
 		def := &stdlibDefs[i]
 		id := names.Intern(def.Name)
 		if table.name(id) != nil {
 			continue
 		}
+		owned = append(owned, i)
 		if table.startupDefs == nil {
 			table.startupDefs = map[NameId]Token{}
 		}
 		table.startupDefs[id] = withFile(def.NameToken, def.File)
 		parts := res.resolveSig(def.Inputs, def.Outputs)
-		broken := len(res.errs) > 0
-		// A startup file's signature that does not resolve is reported with
-		// its file, as its declarations are: its callers would otherwise see
-		// a type with nothing in it.
+		// A signature that does not resolve is reported with its file, and
+		// a call to the def is refused: its callers would otherwise see a
+		// type with nothing in it.
 		for _, e := range res.errs {
 			e.Pos = withFile(e.Pos, def.File)
-			b.declErrs = append(b.declErrs, e)
+			b.brokenDef(def, id, "signature", e)
 		}
+		broken := len(res.errs) > 0
 		res.errs = res.errs[:0]
 		sig := newCoreSig(arena, parts)
 		sig.freeOut = outputOnlyGeneric(arena, parts)
@@ -97,11 +105,93 @@ func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBa
 		table.setName(id, []coreSig{sig})
 		if e := completionSigError(arena, names, res.rel, table, def, &sig); e != nil {
 			e.Pos = withFile(e.Pos, def.File)
-			b.declErrs = append(b.declErrs, *e)
+			b.defErrs = append(b.defErrs, *e)
 		}
 	}
 	b.aliases = res.aliases
+	b.checkStartupBodies(stdlibDefs, owned, res)
 	return b
+}
+
+// checkStartupBodies checks the startup files' def bodies as a file's are
+// checked: a body is trusted no more than a script's (design doc, "Checking
+// by default"; plan question 21). A def whose body has an error stays
+// defined, and a call to it is refused with the reason.
+func (b *CoreBase) checkStartupBodies(defs []MShellDefinition, owned []int, res *coreResolver) {
+	if len(owned) == 0 {
+		return
+	}
+	c := &coreChecker{arena: b.arena, names: b.names, rel: res.rel, table: b.table, res: *res,
+		defs: map[NameId]*coreSig{}, ctors: b.ctors, declared: b.declared}
+	c.uni = NewUnifier(c.arena, &c.subst, c.rel)
+	// One file at a time, so each error gets its file; a def's errors are
+	// at or after its name and before the next def's in the same file.
+	for start := 0; start < len(owned); {
+		file := defs[owned[start]].File
+		end := start
+		group := make([]MShellDefinition, 0, len(owned)-start)
+		for end < len(owned) && defs[owned[end]].File == file {
+			def := defs[owned[end]]
+			c.defs[c.names.Intern(def.Name)] = &b.table.name(c.names.Intern(def.Name))[0]
+			group = append(group, def)
+			end++
+		}
+		start = end
+		slices.SortFunc(group, func(x, y MShellDefinition) int { return tokenOrder(x.NameToken, y.NameToken) })
+		// A def that calls one found broken is broken too: it was checked
+		// trusting the other's signature. So check again until no def
+		// breaks; checkDefs skips the broken ones, so each error is
+		// reported once, and with no errors this is one pass.
+		for broke := true; broke; {
+			broke = false
+			nerr := len(c.errs)
+			c.checkDefs(group)
+			for _, e := range c.errs[nerr:] {
+				if e.Severity != SeverityError {
+					continue
+				}
+				var owner *MShellDefinition
+				for i := range group {
+					if tokenOrder(group[i].NameToken, e.Pos) <= 0 {
+						owner = &group[i]
+					}
+				}
+				e.Pos = withFile(e.Pos, file)
+				if owner == nil {
+					b.defErrs = append(b.defErrs, e)
+					continue
+				}
+				id := c.names.Intern(owner.Name)
+				b.brokenDef(owner, id, "body", e)
+				if sig := &b.table.name(id)[0]; !sig.broken {
+					sig.broken, broke = true, true
+				}
+			}
+		}
+	}
+}
+
+// tokenOrder compares two positions in one file.
+func tokenOrder(a, b Token) int {
+	if a.Line != b.Line {
+		return a.Line - b.Line
+	}
+	return a.Column - b.Column
+}
+
+// brokenDef records error e in a startup def's signature or body (part):
+// it is reported once, and the first one is why a call to it is refused.
+func (b *CoreBase) brokenDef(def *MShellDefinition, id NameId, part string, e TypeError) {
+	b.defErrs = append(b.defErrs, e)
+	if b.table.brokenWhy == nil {
+		b.table.brokenWhy = map[NameId]string{}
+	}
+	if _, ok := b.table.brokenWhy[id]; ok {
+		return
+	}
+	msg := strings.TrimPrefix(e.Format(b.arena, b.names), "type error ")
+	b.table.brokenWhy[id] = "'" + def.Name + "', defined at " + tokenPosStr(withFile(def.NameToken, def.File)) +
+		", cannot be checked, so neither can a call to it: its " + part + " has a type error " + msg
 }
 
 // completionSigError checks a def with `complete` metadata: completionDefs
@@ -139,11 +229,22 @@ func (b *CoreBase) Check(file *MShellFile) (out []string, ok bool) {
 	return out, ok
 }
 
-// StartupErrors are the errors in the startup files' declarations, each
-// naming its file. Every check reports them.
+// StartupErrors are every error in the startup files, each naming its
+// file: the interactive shell prints them once when it starts.
 func (b *CoreBase) StartupErrors() []string {
+	return b.formatStartup(append(slices.Clone(b.declErrs), b.defErrs...))
+}
+
+// DeclarationErrors are the errors in the startup files' declarations,
+// which stop every program: every check reports them. An error in a
+// startup def only refuses the code that calls it, where it is reported.
+func (b *CoreBase) DeclarationErrors() []string {
+	return b.formatStartup(b.declErrs)
+}
+
+func (b *CoreBase) formatStartup(errs []TypeError) []string {
 	var out []string
-	for _, e := range b.declErrs {
+	for _, e := range errs {
 		where := ""
 		if e.Pos.TokenFile != nil {
 			where = "in " + e.Pos.TokenFile.Path + ": "
@@ -155,7 +256,7 @@ func (b *CoreBase) StartupErrors() []string {
 
 func (b *CoreBase) formatCheck(diags []TypeError, arena *TypeArena, names *NameTable) (out []string, ok bool) {
 	out = make([]string, 0, len(b.declErrs)+len(diags))
-	out = append(out, b.StartupErrors()...)
+	out = append(out, b.DeclarationErrors()...)
 	ok = len(b.declErrs) == 0
 	for _, e := range diags {
 		switch {
@@ -883,6 +984,13 @@ func (c *coreChecker) word(tok Token) {
 	if named {
 		if sig := c.defs[id]; sig != nil {
 			if sig.broken {
+				// A def of this file whose signature has an error is reported
+				// at the def. A startup def found broken while the startup
+				// files' bodies are checked (checkStartupBodies) is not, and
+				// a def that calls it is broken too.
+				if ts := c.table.name(id); ts != nil && &ts[0] == sig {
+					c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok, Hint: c.table.brokenWhy[id]})
+				}
 				c.abandoned = true
 				return
 			}
@@ -912,13 +1020,9 @@ func (c *coreChecker) word(tok Token) {
 	if named {
 		if sigs := c.table.name(id); sigs != nil {
 			if sigs[0].broken {
-				// A startup file's def whose signature has an error: the
-				// error is reported with the file. A file check fails
-				// anyway; a REPL line that calls it does not run.
-				if c.session {
-					c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
-						Hint: "the signature of '" + tok.Lexeme + "' has an error (reported at startup), so a call to it cannot be checked"})
-				}
+				// A startup file's def whose signature or body has an error:
+				// a call to it is refused, with the reason.
+				c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok, Hint: c.table.brokenWhy[id]})
 				c.abandoned = true
 				return
 			}
