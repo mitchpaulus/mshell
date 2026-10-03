@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Type expressions resolved to the types of the core checker
@@ -32,8 +33,10 @@ type coreResolver struct {
 	// outside its signature, a type written in the body (`as`) may name
 	// them, as the rigid types the body sees.
 	bodyGens []NameId
-	// anon counts the generics `dict` and `list` made in this signature.
+	// anon counts the generics `dict` and `list` made in this signature,
+	// and badNames are the unknown names it has reported.
 	anon     int
+	badNames []NameId
 	errs     []TypeError
 	jsonName NameId
 	// builtin is set while the builtin table is built: there `Grid_s`,
@@ -103,9 +106,10 @@ func (r *coreResolver) declareHtmlNode() {
 	r.aliases[name] = ref
 }
 
-// resolveSig resolves a signature. Unknown names are its generics.
+// resolveSig resolves a signature. Unknown names of one letter, optionally
+// followed by digits, are its generics.
 func (r *coreResolver) resolveSig(ins, outs []MShellParseItem) coreSigParts {
-	r.gens, r.inSig, r.anon = r.gens[:0], true, 0
+	r.gens, r.inSig, r.anon, r.badNames = r.gens[:0], true, 0, r.badNames[:0]
 	var p coreSigParts
 	// A signature's inputs and outputs are tracked in 64-bit masks.
 	for _, side := range [][]MShellParseItem{ins, outs} {
@@ -300,7 +304,50 @@ func (r *coreResolver) resolveNamed(n *TypeNamed) TypeId {
 		// Read as a mark only before a def's output type.
 		return r.errorf(n.Tok, "'new' marks a def output as a new value, so it goes only before an output type: (int -- new [int])")
 	}
+	if !r.builtin && !isGenericName(n.Name) {
+		// A generic is introduced by writing it, so a misspelled or
+		// imagined type would silently become one (plan question 17).
+		// Each name is reported once per signature.
+		if slices.Contains(r.badNames, name) {
+			return TidNothing
+		}
+		r.badNames = append(r.badNames, name)
+		if hint, ok := notATypeHints[n.Name]; ok {
+			return r.errorf(n.Tok, "'"+n.Name+"' is not a type: "+hint)
+		}
+		return r.errorf(n.Tok, "unknown type '"+n.Name+"'; a generic is a single letter, optionally followed by digits, such as `a` or `T1`")
+	}
 	return r.generic(name)
+}
+
+// isGenericName reports whether a name in a signature may be a generic:
+// one letter, optionally followed by digits (`a`, `T`, `T1`). A generic
+// needs no declaration, so a longer unknown name is an error rather than
+// a generic: it is almost always a misspelled or imagined type.
+func isGenericName(s string) bool {
+	for i, r := range s {
+		if i == 0 && !unicode.IsLetter(r) || i > 0 && !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// notATypeHints are the type names people reach for that mshell spells
+// differently.
+var notATypeHints = map[string]string{
+	"numeric":   "write `int | float`",
+	"number":    "write `int | float`",
+	"string":    "write `str`",
+	"integer":   "write `int`",
+	"boolean":   "write `bool`",
+	"double":    "write `float`",
+	"date":      "write `datetime`",
+	"binary":    "write `bytes`",
+	"quote":     "write the quote's type, such as `(int -- int)`",
+	"quotation": "write the quote's type, such as `(int -- int)`",
+	"function":  "write the quote's type, such as `(int -- int)`",
+	"any":       "no type holds every value; use a generic, such as `a`",
 }
 
 // enumType is the enum declared at idx, at the arguments written after its

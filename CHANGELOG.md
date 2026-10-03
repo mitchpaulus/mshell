@@ -94,6 +94,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The type checker rejects a `return` that leaves more values than the definition declares,
   such as `def name (-- str) 5 "a" return end`.
 - `map` on a grid with no rows gives a grid with no columns. Previously it kept the input grid's columns.
+- In a signature, a generic is a single letter, optionally followed by digits (`a`, `T`, `T1`).
+  Any other name that is not a type is an error, with a hint for names such as `string` (`str`) and `numeric` (`int | float`).
+  Previously a misspelled type silently became a generic.
 - The type checker is about twice as fast, and checking a file again, as the language server does on every edit, allocates almost nothing.
   Deeply nested quotations no longer take quadratic time.
 

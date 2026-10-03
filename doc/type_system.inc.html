@@ -56,7 +56,8 @@ def fullName (str str -- str)
 end</code></pre>
 
 <p>
-A name in a signature that is not a type is a <em>generic</em>: the same name means the same type everywhere in that signature, and the body cannot assume anything about it.
+A single letter in a signature, optionally followed by digits (<code>a</code>, <code>T</code>, <code>T1</code>), is a <em>generic</em>: the same name means the same type everywhere in that signature, and the body cannot assume anything about it.
+Any other name must be a type, so a misspelled type, or one mshell spells differently (<code>string</code> for <code>str</code>, <code>numeric</code> for <code>int | float</code>), is an error.
 </p>
 
 <pre><code>def first ([a] -- a)

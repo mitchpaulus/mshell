@@ -1,0 +1,3 @@
+# A generic is one letter, optionally followed by digits; a longer unknown name is an error.
+def f (key -- key) end
+5 f wl

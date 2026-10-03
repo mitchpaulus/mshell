@@ -692,7 +692,7 @@ The checker checks every def body and the top-level code; the standard library a
 It only accepts or rejects: no word behaves differently because of it.
 
 Signatures list inputs before `--` and outputs after it; the rightmost input is the top of the stack.
-A name that is not a type is a generic (`def first ([a] -- a)`).
+A single letter, optionally followed by digits, that is not a type is a generic (`def first ([a] -- a)`, `T1`); any other unknown name is an error.
 In a signature, `dict` is short for `{str: T}` and `list` for `[T]`, each with its own generic.
 
 ```mshell

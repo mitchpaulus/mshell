@@ -2266,6 +2266,11 @@ is an unknown name (found 2026-10-02).
 - One type parser for `type`, `is`, `tryAs`, `as` and `def` signatures, and one resolved form of each
   type, used by both the checker and the runtime validator. No second spelling or second
   implementation of the same type.
+- In a def signature, a generic is a single letter, optionally followed by digits (`a`, `T`, `T1`), that
+  names no declared type; any other unknown name is an error, with a hint for the names people reach for
+  (`string`, `numeric`, `date`, `quote`, ...). A generic needs no declaration, so before this a misspelled
+  or imagined type silently became one (decided 2026-10-02, question 17; every generic in std, the tests
+  and the scripts was already one letter). Enum parameters are declared in brackets, so any name is fine there.
 - In a def signature, `dict` is short for `{str: T}` and `list` for `[T]`, each with a new generic `T`
   per occurrence (decided 2026-10-01: `dict` was always meant as an easy way to write `{str: T}`).
   Outside a signature there is no generic to stand for `T`, so the full form is required. A shape is
