@@ -65,6 +65,25 @@ func TestCoreChecker(t *testing.T) {
 		{"false if 5 else 2.5 end z!\n\"s\" z!", false, "int | float comes from the `if` at line 1"},
 		{"3 match 1 : \"one\", _ : 0, end n!  @n 1 +", false, "the arm `1` (line 1) leaves str, the arm `_` (line 1) leaves int"},
 		{"true (5) (\"x\") iff 2 *", false, "the quote run when true (line 1) leaves int, the quote run when false (line 1) leaves str"},
+		// An unknown: the error names the read that made it, through
+		// bindings, variables, list literals, words and joins.
+		{"def f (str {a: str, b: str} -- [str])\n  map! k!\n  @map @k trim get match\n    just v :,\n    none: \"bad\" wle 1 exit\n  end\n" +
+			"  true if [\"x\" @v] else [\"y\"] end\nend", false,
+			"body produced [unknown]; unknown comes from the `get` at line 3, column 16: its key is known only at run time, " +
+				"so it may read a field that {a: str, b: str} does not declare, which may hold anything; " +
+				"say what undeclared fields hold with `*: T` in the shape: {a: str, b: str, *: str}"},
+		{"def f ({a: int} str -- int) get match just v : @v, none : 0 end end", false, "unknown comes from the `get` at line 1, column 29"},
+		{"def f ({a: int} str -- int) get ? 1 + end", false, "the stack has (unknown int); it takes"},
+		{"def f ({a: int} str -- int) get ? 1 + end", false, "unknown comes from the `get` at line 1, column 29"},
+		{"def f ({a: int, b: str} str -- int) get ? end", false, "`*: T` in the shape: {a: int, b: str, *: int | str}"},
+		{"def f ({a: int} -- int) :b ? end", false, "unknown comes from the `:b` at line 1, column 26: {a: int} does not declare 'b'"},
+		{"def f ({a: int} -- int) \"b\" 0 getDef end", false, "unknown comes from the `getDef`"},
+		{"def f ({a: int} -- [int]) values end", false, "unknown comes from the `values` at line 1, column 27: it reads every field"},
+		{"def f ({a: int} -- int) match { 'b': y } : @y, _ : 0 end end", false, "unknown comes from the `{ 'b': y }` at line 1, column 31"},
+		{"def f (Grid -- [int]) :a ? end", false, "the grid's columns are not known"},
+		{"def f ({a: int} str -- int) get match just v : @v match list xs : @xs len, _ : 0 end, none : 0 end end", false,
+			"the matched value's unknown comes from the `get`"},
+		{"def f ({a: int, *: int} str -- int) get ? end", true, ""},
 		// `new` across defs that call each other: the largest consistent marks.
 		{"def evens (int -- [int]) dup 0 = if drop [] else 1 - odds end end\n" +
 			"def odds (int -- [int]) dup 0 = if drop [] else 1 - evens end end", false, "'evens': output 0 is a new value on every path"},

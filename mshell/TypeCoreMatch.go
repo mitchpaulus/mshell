@@ -175,6 +175,12 @@ type coreArm struct {
 type coreBinding struct {
 	tok Token
 	t   TypeId
+	// open is set when the binding reads key, a field that the record rec
+	// does not declare, in a dict pattern: that read made its unknown
+	// (coreOrigin).
+	open bool
+	rec  TypeId
+	key  NameId
 }
 
 func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
@@ -235,14 +241,24 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 		}
 		for _, b := range a.binds {
 			if c.mentionsAbstract(b.t) {
-				c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: b.tok,
-					Hint: "'" + b.tok.Lexeme + "' would have a type known only inside this arm (" + c.format(b.t) +
-						"); keep the value on the stack with `:>` instead of binding it, or narrow it first with tryAs"})
+				hint := "'" + b.tok.Lexeme + "' would have a type known only inside this arm (" + c.format(b.t) +
+					"); keep the value on the stack with `:>` instead of binding it, or narrow it first with tryAs"
+				if h := c.originHint(subj); h != "" {
+					hint += "; the matched value's " + h
+				}
+				c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: b.tok, Hint: hint})
 				// Every use of the name would be an error too.
 				c.abandoned = true
 				continue
 			}
 			c.push(b.t, false)
+			if b.open {
+				at := arm.Pattern[0].GetStartToken()
+				at.Lexeme = "{ '" + c.names.Name(b.key) + "': " + b.tok.Lexeme + " }"
+				c.noteUnknown(at, unkLabel, b.rec, b.key)
+			} else {
+				c.carryUnknown(len(c.stack)-1, c.unknownOrigin(subj))
+			}
 			c.store(b.tok, c.names.Intern(b.tok.Lexeme))
 		}
 		c.walk(arm.Body)
@@ -484,14 +500,14 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 			if !ok || tok.Type != LITERAL {
 				return c.badPattern(p.StartToken, "a dict pattern's value is one name")
 			}
-			ft := TidBottom
+			ft, open := TidBottom, false
 			if rec != TidBottom {
 				f := c.arena.records[c.arena.nodes[rec].Extra].FieldAt(c.names.Intern(kv.Key))
 				switch f.Status {
 				case FieldRequired, FieldOptional, FieldDeletable:
 					ft = f.Type
 				case FieldOpen:
-					ft = TidUnknown
+					ft, open = TidUnknown, true
 				case FieldAbsent:
 					// In a match this arm is dead; after `=>` it always fails.
 					if c.assertive {
@@ -501,6 +517,10 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 				}
 			}
 			c.bind(&a, tok, ft)
+			if open && tok.Lexeme != "_" {
+				b := &a.binds[len(a.binds)-1]
+				b.open, b.rec, b.key = true, rec, c.names.Intern(kv.Key)
+			}
 		}
 	default:
 		return c.badPattern(at, "")

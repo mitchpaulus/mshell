@@ -611,6 +611,12 @@ A list of unknown elements can be measured, iterated and reordered, but nothing 
 Keep it on the stack with <code>:&gt;</code>, or check it with <code>tryAs</code> or <code>is</code> first.
 </p>
 
+<p>
+An error about a value of unknown type names the read that made it, and why.
+A <code>get</code> with a key known only at run time is a common one: on a <code>{name: str}</code>, the key may name a field the shape does not declare.
+Say what those fields hold with <code>*: T</code>, as in <code>{name: str, *: str}</code>, or use <code>{str: str}</code>.
+</p>
+
 <h2 id="type-system-overloads">Overloaded Words on Unions <a class="section-link" href="#type-system-overloads" aria-label="Permalink">§</a></h2>
 
 <p>

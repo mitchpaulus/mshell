@@ -108,6 +108,39 @@ func (c *coreChecker) readType(rec TypeId, k coreSlot, tok Token) (TypeId, bool)
 	return t, ok
 }
 
+// noteRead records, when the read of key slot k from rec may land on a
+// field rec does not declare, that it made the unknown in the top slot.
+// rec is a grid's schema when grid is set.
+func (c *coreChecker) noteRead(tok Token, rec TypeId, k coreSlot, grid bool) {
+	r := c.arena.records[c.arena.nodes[rec].Extra]
+	kind, name := unkKey, k.key()
+	if name != NameNone {
+		if r.FieldAt(name).Status != FieldOpen {
+			return
+		}
+		kind = unkLabel
+	} else if !c.openFields(r) {
+		return
+	}
+	if grid {
+		kind += unkGridKey - unkKey
+	}
+	c.noteUnknown(tok, kind, rec, name)
+}
+
+// openFields reports whether a record may have fields of any type.
+func (c *coreChecker) openFields(r RecordType) bool {
+	if r.Rest.Status == FieldOpen {
+		return true
+	}
+	for _, f := range r.Fields {
+		if f.Status == FieldOpen {
+			return true
+		}
+	}
+	return false
+}
+
 // keyArg checks that slot i is a key: a str or a path.
 func (c *coreChecker) keyArg(i int, tok Token) bool {
 	c.force(i)
@@ -136,12 +169,16 @@ func (c *coreChecker) dictWord(tok Token) bool {
 		if !ok || !c.keyArg(n-1, tok) {
 			return true
 		}
-		t, ok := c.readType(rec, c.stack[n-1], tok)
+		k := c.stack[n-1]
+		t, ok := c.readType(rec, k, tok)
 		if !ok {
 			return true
 		}
+		from := c.unknownOrigin(c.stack[n-2])
 		c.stack = c.stack[:n-2]
 		c.push(c.arena.MakeMaybeEnum(t), false)
+		c.noteRead(tok, rec, k, false)
+		c.carryUnknown(n-2, from)
 	case "getDef":
 		// dict key default getDef: the value, or the default.
 		if !c.need(3, tok) {
@@ -177,8 +214,14 @@ func (c *coreChecker) dictWord(tok Token) bool {
 		if c.abandoned {
 			return true
 		}
+		from := c.unknownOrigin(c.stack[n-3])
+		if from == 0 {
+			from = c.unknownOrigin(def)
+		}
 		c.stack = c.stack[:n-3]
 		c.push(t, false)
+		c.noteRead(tok, rec, k, false)
+		c.carryUnknown(n-3, from)
 	case "values", "keyValues":
 		if !c.need(1, tok) {
 			return true
@@ -202,9 +245,14 @@ func (c *coreChecker) dictWord(tok Token) bool {
 				{Name: c.names.Intern("v"), Status: FieldRequired, Type: v},
 			}, RecordField{Status: FieldAbsent})
 		}
+		from := c.unknownOrigin(c.stack[n-1])
 		c.stack = c.stack[:n-1]
 		// A new list of the dict's values: fresh when they are immutable.
 		c.push(c.arena.MakeList(elem), c.rel.Immutable(c.subst.Apply(c.arena, v)))
+		if c.openFields(c.arena.records[c.arena.nodes[rec].Extra]) {
+			c.noteUnknown(tok, unkAll, rec, NameNone)
+		}
+		c.carryUnknown(n-1, from)
 	case "set", "setd":
 		return c.setLiteral(tok)
 	case "map", "filter":
@@ -416,7 +464,13 @@ func (c *coreChecker) getter(g *MShellGetter) {
 	c.push(TidStr, true)
 	c.stack[n].lit = c.names.Intern(g.String)
 	tok.Lexeme = "get"
+	made := len(c.origins)
 	c.dictWord(tok)
+	if len(c.origins) > made {
+		// The read is named as written.
+		c.origins[made].tok = g.Token
+		c.origins[made].tok.Lexeme = ":" + g.String
+	}
 }
 
 // gridRead checks get on a grid, a view or a row (getters too): a row
@@ -432,7 +486,8 @@ func (c *coreChecker) gridRead(i int, tok Token) bool {
 	if !c.keyArg(len(c.stack)-1, tok) {
 		return true
 	}
-	t, ok := c.readType(rec, c.stack[len(c.stack)-1], tok)
+	k := c.stack[len(c.stack)-1]
+	t, ok := c.readType(rec, k, tok)
 	if !ok {
 		return true
 	}
@@ -443,5 +498,6 @@ func (c *coreChecker) gridRead(i int, tok Token) bool {
 	}
 	c.stack = c.stack[:len(c.stack)-2]
 	c.push(c.arena.MakeMaybeEnum(t), fresh)
+	c.noteRead(tok, rec, k, true)
 	return true
 }

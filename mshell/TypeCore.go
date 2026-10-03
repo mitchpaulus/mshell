@@ -642,7 +642,8 @@ type coreChecker struct {
 	ctors    map[NameId]*coreCtor
 	declared map[NameId]Token
 	errs  []TypeError
-	// origins are the joins that made union types (coreSlot.origin).
+	// origins are the joins that made union types, and the reads that
+	// made unknowns (coreSlot.origin).
 	origins []coreOrigin
 
 	stack []coreSlot
@@ -914,8 +915,11 @@ func (c *coreChecker) checkOutputs(def *MShellDefinition, outs []TypeId) {
 	for i, want := range outs {
 		if !c.check(c.stack[i], want) {
 			got := c.subst.Apply(c.arena, c.stack[i].t)
-			c.errs = append(c.errs, TypeError{Kind: TErrDefBodyMismatch, Pos: def.NameToken, Name: def.Name,
-				Hint: "output " + strconv.Itoa(i) + " is declared " + c.format(want) + ", body produced " + c.format(got)})
+			hint := "output " + strconv.Itoa(i) + " is declared " + c.format(want) + ", body produced " + c.format(got)
+			if h := c.originHint(c.stack[i]); h != "" {
+				hint += "; " + h
+			}
+			c.errs = append(c.errs, TypeError{Kind: TErrDefBodyMismatch, Pos: def.NameToken, Name: def.Name, Hint: hint})
 		}
 	}
 	c.exit(Token{})
@@ -2166,6 +2170,12 @@ func (c *coreChecker) apply(sig *coreSig, tok Token) {
 			}
 		}
 	}
+	var from uint32
+	for _, s := range c.stack[base:] {
+		if from = c.unknownOrigin(s); from != 0 {
+			break
+		}
+	}
 	c.stack = c.stack[:base]
 	if sig.diverges {
 		c.diverged = true
@@ -2180,6 +2190,7 @@ func (c *coreChecker) apply(sig *coreSig, tok Token) {
 			fresh = c.newOverImmutable(t)
 		}
 		c.push(t, fresh)
+		c.carryUnknown(len(c.stack)-1, from)
 	}
 }
 
@@ -2371,7 +2382,14 @@ func (c *coreChecker) listLiteral(l *MShellParseList) {
 	if names, ok := c.literalNames(elems); ok {
 		out.lit = names
 	}
+	var from uint32
+	for _, e := range elems {
+		if from = c.unknownOrigin(e); from != 0 {
+			break
+		}
+	}
 	c.stack = append(c.stack[:start], out)
+	c.carryUnknown(start, from)
 }
 
 // literalNames records the elements of a list literal when every one is a
@@ -2667,12 +2685,34 @@ func (c *coreChecker) joinArms(arms []savedRun, tok Token) {
 }
 
 // coreOrigin is a join that made a union: which arm left which type in
-// the slot, so an error about the value can point back at the arms.
+// the slot, so an error about the value can point back at the arms. Or,
+// when unk is set, the read at tok that made an unknown: unk says what
+// kind of read, u is the dict's record or the grid's schema, and key the
+// literal key, if any. The message is made only for an error.
 type coreOrigin struct {
 	tok  Token
 	u    TypeId
 	arms []coreOriginArm
+	unk  unknownRead
+	key  NameId
 }
+
+// unknownRead is the kind of read that gave a value of unknown type.
+type unknownRead uint8
+
+const (
+	unkNone unknownRead = iota
+	// unkKey reads a field with a key known only at run time.
+	unkKey
+	// unkLabel reads a literal key the shape does not declare.
+	unkLabel
+	// unkAll reads every field (values, keyValues).
+	unkAll
+	// unkGridKey and unkGridLabel are unkKey and unkLabel on a grid's
+	// columns.
+	unkGridKey
+	unkGridLabel
+)
 
 type coreOriginArm struct {
 	label string
@@ -2732,6 +2772,9 @@ func (c *coreChecker) originHint(s coreSlot) string {
 		return ""
 	}
 	o := c.origins[s.origin-1]
+	if o.unk != unkNone {
+		return c.unknownHint(o)
+	}
 	var b strings.Builder
 	b.WriteString(c.format(o.u) + " comes from the `" + o.tok.Lexeme + "` at line " + strconv.Itoa(o.tok.Line) + ":")
 	for i, a := range o.arms {
@@ -2743,8 +2786,99 @@ func (c *coreChecker) originHint(s coreSlot) string {
 	return b.String()
 }
 
+// unknownHint says which read made an unknown, why, and how to say what
+// it holds: "unknown comes from the `get` at line 12, column 9: its key
+// is known only at run time, so ...".
+func (c *coreChecker) unknownHint(o coreOrigin) string {
+	at := "unknown comes from the `" + o.tok.Lexeme + "` at line " + strconv.Itoa(o.tok.Line) +
+		", column " + strconv.Itoa(o.tok.Column) + ": "
+	switch o.unk {
+	case unkKey:
+		return at + "its key is known only at run time, so it may read a field that " + c.format(o.u) +
+			" does not declare, which may hold anything; " + c.restFix(o.u)
+	case unkLabel:
+		k := c.names.Name(o.key)
+		return at + c.format(o.u) + " does not declare '" + k + "', so it may hold anything; " +
+			"check the key's spelling, or add '" + k + "' to the shape"
+	case unkAll:
+		return at + "it reads every field, and the fields " + c.format(o.u) +
+			" does not declare may hold anything; " + c.restFix(o.u)
+	case unkGridKey, unkGridLabel:
+		const narrow = "narrow the cells with `match` or `tryAs`"
+		cols := formatSchema(c.arena, c.names, c.schemaOf(c.subst.Apply(c.arena, o.u)))
+		if cols == "" {
+			return at + "the grid's columns are not known (as for `Grid` or `toGrid`), so its cells may hold anything; " + narrow
+		}
+		if o.unk == unkGridKey {
+			return at + "its column name is known only at run time, so it may name a column other than " + cols +
+				", which may hold anything; " + narrow
+		}
+		return at + "the grid's known columns, " + cols + ", do not include '" + c.names.Name(o.key) +
+			"', so it may hold anything; check the column's spelling, or " + narrow
+	}
+	return ""
+}
+
+// restFix says how to declare what a shape's undeclared fields hold: with
+// `*: T`, T the join of the fields it declares, when they have one.
+func (c *coreChecker) restFix(rec TypeId) string {
+	const fix = "say what undeclared fields hold with `*: T` in the shape"
+	r := c.arena.records[c.arena.nodes[rec].Extra]
+	acc := Slot{Type: TidBottom}
+	for _, f := range r.Fields {
+		if f.Status == FieldAbsent || f.Status == FieldOpen {
+			continue
+		}
+		t := c.subst.Apply(c.arena, f.Type)
+		if c.hasVars(t) {
+			return fix
+		}
+		j, ok := c.rel.JoinSlot(acc, Slot{Type: t})
+		if !ok {
+			return fix
+		}
+		acc = j
+	}
+	if acc.Type == TidBottom || acc.Type == TidUnknown {
+		return fix
+	}
+	return fix + ": " + c.format(c.arena.MakeRecord(r.Fields, RecordField{Status: FieldOptional, Type: acc.Type}))
+}
+
+// noteUnknown records that the read at tok made the unknown in the top
+// slot (coreSlot.origin): an error about the value then names the read.
+// rec is the dict's record or the grid's schema.
+func (c *coreChecker) noteUnknown(tok Token, kind unknownRead, rec TypeId, key NameId) {
+	s := &c.stack[len(c.stack)-1]
+	if !c.mentionsType(c.subst.Apply(c.arena, s.t), TidUnknown) {
+		return
+	}
+	c.origins = append(c.origins, coreOrigin{tok: tok, u: rec, unk: kind, key: key})
+	s.origin = uint32(len(c.origins))
+}
+
+// unknownOrigin is the slot's origin when it is a read that made an
+// unknown, or 0.
+func (c *coreChecker) unknownOrigin(s coreSlot) uint32 {
+	if s.origin == 0 || int(s.origin) > len(c.origins) || c.origins[s.origin-1].unk == unkNone {
+		return 0
+	}
+	return s.origin
+}
+
+// carryUnknown gives slot i the read that made an unknown in a value it
+// was made from (unknownOrigin), when it has an unknown and no origin of
+// its own.
+func (c *coreChecker) carryUnknown(i int, o uint32) {
+	if o == 0 || c.stack[i].origin != 0 || !c.mentionsType(c.subst.Apply(c.arena, c.stack[i].t), TidUnknown) {
+		return
+	}
+	c.stack[i].origin = o
+}
+
 // joinSlot joins two slots. A slot with an unsolved variable is unified,
-// never joined, so the answer does not depend on checking order.
+// never joined, so the answer does not depend on checking order. An
+// unknown in the join keeps the read that made it (coreSlot.origin).
 func (c *coreChecker) joinSlot(a, b coreSlot) (coreSlot, bool) {
 	// The same slot in both arms is the value from before the branch, which
 	// neither arm touched: anything that copies, stores or rewrites it
@@ -2753,6 +2887,21 @@ func (c *coreChecker) joinSlot(a, b coreSlot) (coreSlot, bool) {
 	if a == b {
 		return a, true
 	}
+	j, ok := c.joinTypes(a, b)
+	if ok && j.origin == 0 {
+		o := c.unknownOrigin(a)
+		if o == 0 {
+			o = c.unknownOrigin(b)
+		}
+		if o != 0 && c.mentionsType(c.subst.Apply(c.arena, j.t), TidUnknown) {
+			j.origin = o
+		}
+	}
+	return j, ok
+}
+
+// joinTypes is joinSlot for two different slots.
+func (c *coreChecker) joinTypes(a, b coreSlot) (coreSlot, bool) {
 	fresh := a.fresh && b.fresh
 	if a.t == b.t {
 		return coreSlot{t: a.t, pq: a.pq, fresh: fresh}, true

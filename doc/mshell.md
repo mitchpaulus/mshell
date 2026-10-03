@@ -801,6 +801,7 @@ A store that does not fit is an error; widen the first store with `as`, or use a
 A variable must be set on every path before it is read.
 Match bindings are variables of the enclosing scope: two arms binding one name must agree on its type (use `int n`, `str s`).
 A kind pattern on a value of unknown type (an undeclared field of a written shape, a cell of an unknown grid) cannot bind a name; keep it on the stack with `:>`, or check it with `tryAs`/`is`.
+An error about an unknown names the read that made it; `get` with a runtime key on `{a: str}` gives `Maybe[unknown]`, so write `{a: str, *: str}` or `{str: str}`.
 
 For more detail, see the generated Type System help page.
 

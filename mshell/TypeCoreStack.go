@@ -26,8 +26,9 @@ type coreSlot struct {
 	// parts, or 0 (TypeCorePartial.go). A slot with part != 0 is not fresh.
 	part uint16
 	// origin is 1 + the index in c.origins of the join that made the
-	// slot's union type, or 0: an error about the value names the arm
-	// each member came from.
+	// slot's union type, or of the read that made an unknown in it, or 0:
+	// an error about the value names the arm each member came from, or
+	// the read.
 	origin uint32
 }
 
