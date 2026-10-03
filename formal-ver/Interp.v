@@ -5,7 +5,7 @@
     stack underflow, a non-quote given to [x], ...).  Checked errors
     (a match with no arm, such as [?] on none; index out of range; reading
     an unset variable) return
-    [RErr].  Soundness (Soundness.v) says a well-typed program never
+    [RErr], with the heap at that point.  Soundness (Soundness.v) says a well-typed program never
     evaluates to [RStuck], for any amount of fuel. *)
 
 From Stdlib Require Import String List Arith Bool.
@@ -18,7 +18,7 @@ Inductive outcome := ONormal | OBreak | OContinue | OReturn.
 Inductive result :=
 | RTimeout                                    (* out of fuel *)
 | RStuck                                      (* a runtime type error *)
-| RErr                                        (* a checked error *)
+| RErr (H : heap)                             (* a checked error, and the heap there *)
 | RExit (code : nat)
 | ROk (o : outcome) (H : heap) (st : list val).
 
@@ -224,7 +224,7 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
   | WSwap => match st with a :: b :: st' => next H (b :: a :: st') | _ => RStuck end
   | WLoad x =>
       match scope_get H sc with
-      | Some kvs => match lookup x kvs with Some v => next H (v :: st) | None => RErr end
+      | Some kvs => match lookup x kvs with Some v => next H (v :: st) | None => RErr H end
       | None => RStuck
       end
   | WStore x =>
@@ -277,7 +277,7 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
       | VInt i :: VLoc l :: st' =>
           match nth_error H l with
           | Some (OList vs) =>
-              match nth_error vs i with Some x => next H (x :: st') | None => RErr end
+              match nth_error vs i with Some x => next H (x :: st') | None => RErr H end
           | _ => RStuck
           end
       | _ => RStuck
@@ -288,7 +288,7 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
           match nth_error H l with
           | Some (OList vs) =>
               if i <? length vs then next (set_nth l (OList (set_nth i x vs)) H) (VLoc l :: st')
-              else RErr
+              else RErr H
           | _ => RStuck
           end
       | _ => RStuck
@@ -365,7 +365,7 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
               let e := match b with Some e => e | None => length vs end in
               if (a <=? e) && (e <=? length vs)
               then next (app H [OList (firstn (e - a) (skipn a vs))]) (VLoc (length H) :: st')
-              else RErr
+              else RErr H
           | _ => RStuck
           end
       | _ => RStuck
@@ -443,7 +443,7 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
           match vd n' H v u with
           | Some true => next H (vjust v :: st')
           | Some false => next H (vnone :: st')
-          | None => RErr                     (* validation budget exhausted *)
+          | None => RErr H                   (* validation budget exhausted *)
           end
       | _ => RStuck
       end
@@ -452,7 +452,7 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
       | v :: st' =>
           match dcopy (length H) H v with
           | Some (H', v') => next H' (v' :: st')
-          | None => RErr                     (* a cyclic value *)
+          | None => RErr H                   (* a cyclic value *)
           end
       | _ => RStuck
       end
@@ -465,7 +465,7 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
           if ename_eqb E E' then
             match lookup c arms with
             | Some e => cont (evalv n' H sc (vs ++ st') e)
-            | None => RErr                   (* no arm: a checked error *)
+            | None => RErr H                 (* no arm: a checked error *)
             end
           else RStuck
       | _ => RStuck
@@ -475,6 +475,9 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
   end.
 
 End Eval.
+
+(** Whether a run stopped with a checked error. *)
+Definition is_err (r : result) : bool := match r with RErr _ => true | _ => false end.
 
 (** The interpreter with the model's validator. *)
 Definition eval := evalv validate.

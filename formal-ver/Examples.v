@@ -220,7 +220,7 @@ Definition copy_cycle : prog :=
   [ WNil; WStore "xs"; WLoad "xs"; WLoad "xs"; WPush; WDrop
   ; WLoad "xs"; WCopy ].
 
-Example copy_cycle_err : run copy_cycle = RErr.
+Example copy_cycle_err : is_err (run copy_cycle) = true.
 Proof. vm_compute. reflexivity. Qed.
 
 (** * Generic enums
@@ -557,7 +557,7 @@ Qed.
 
 (** The renamed program reads an unset variable, a checked error: it does
     not do what the original does. *)
-Example rename_if_renamed_differs : run (if_orig "x1" "x2" "x1") = RErr.
+Example rename_if_renamed_differs : is_err (run (if_orig "x1" "x2" "x1")) = true.
 Proof. vm_compute. reflexivity. Qed.
 
 (** * Fresh def outputs
@@ -761,7 +761,7 @@ Example skip_imm_runs : exists H, run skip_imm = ROk ONormal H [].
 Proof. vm_compute. eexists. reflexivity. Qed.
 
 (** An index slice out of range is a checked error. *)
-Example slice_out_of_range : run [WNil; WInt 1; WPush; WSlice 0 (Some 2)] = RErr.
+Example slice_out_of_range : is_err (run [WNil; WInt 1; WPush; WSlice 0 (Some 2)]) = true.
 Proof. vm_compute. reflexivity. Qed.
 
 (** * Builtins whose quote sees the elements

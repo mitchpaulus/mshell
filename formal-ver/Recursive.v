@@ -137,7 +137,7 @@ Proof. vm_compute. reflexivity. Qed.
 Definition people_bad : prog :=
   [WNil; WDictNew; WStr "a"; WSetK "name"; WStr "old"; WSetK "age"; WNil; WSetK "friends"; WPush].
 
-Example people_bad_err : run (people_bad ++ people_read)%list = RErr.
+Example people_bad_err : is_err (run (people_bad ++ people_read)%list) = true.
 Proof. vm_compute. reflexivity. Qed.
 
 (** A shape literal is a [{str: Json}]: every label may become deletable. *)
@@ -292,10 +292,10 @@ Qed.
 
 (** The model's validator runs out of budget on the cycle (a checked error),
     and so does [deepCopy]. *)
-Example cyc_try_err : run cyc_try = RErr.
+Example cyc_try_err : is_err (run cyc_try) = true.
 Proof. vm_compute. reflexivity. Qed.
 
-Example cyc_copy_err : run cyc_copy = RErr.
+Example cyc_copy_err : is_err (run cyc_copy) = true.
 Proof. vm_compute. reflexivity. Qed.
 
 (** The validator of Cycles.v assumes a repeated (object, type) pair and

@@ -68,8 +68,28 @@ type (`kind_list_once`, and `kind_enum_once` with one variable per enum paramete
 `eval` is a fuel-bounded definitional interpreter (`Interp.v`).
 It returns `RStuck` exactly where the Go runtime reports a type mismatch: `+` on a string, a
 missing *required* key, a non-quote given to `x`, stack underflow, and so on.
-It returns `RErr` for checked errors (`?` on none, index out of range, reading an unset variable,
-`copy` of a cyclic value) and `RExit` for `exit`.
+It returns `RErr H` for checked errors (`?` on none, index out of range, reading an unset variable,
+`copy` of a cyclic value), with the heap at that point, and `RExit` for `exit`.
+The proof's induction also says that at a checked error the invariant still holds: the store typing,
+the scopes and the caller's frame keep their types (`err_ok` in `Soundness.v`).
+
+`Repl.v` uses that for the REPL, which checks each line and runs it only if it checks
+(`ai/type-system-plan.md`, stage 9). When a line that checked stops with a checked error, the REPL
+restores the stack it had before the line, except the new values the line took:
+
+```coq
+Theorem repl_error : forall G B C R e s1 s2, T sigs G B C R e s1 s2 ->
+  forall Σ H sc S Sf sf Os n He,
+  INV sigs Σ H sc G (S ++ Sf) (s1 ++ sf) Os -> length S = length s1 ->  (* the line takes S *)
+  evalv vd defs n H sc S e = RErr He ->
+  exists Σ' Os', scope_ext Σ Σ' /\
+    INV sigs Σ' He sc G (fst (keep_sh S s1) ++ Sf) (snd (keep_sh S s1) ++ sf) Os'.
+```
+
+`keep_sh` keeps the line's shared inputs; the frame `Sf` below them keeps its types too.
+`repl_error_commit` lets the inputs be committed first, so a new input of an immutable type is kept as well.
+A session with no errors needs nothing new: running lines one after another is running their
+concatenation, which `soundness` covers.
 "For all fuel" means every finite prefix of every run is free of type errors, including runs
 that never terminate.
 
@@ -125,6 +145,7 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Match bindings | stores into the scope (`WStore`); `list :>` is `WKindIf` with the value left on the stack |
 | Checkable targets; `is T` exhaustiveness | `chk`, `validate_complete`, `validate_complete_fresh` in `Checkable.v` |
 | Counterexamples | `Examples.v` |
+| The state after a checked error; the REPL's restored stack | `err_ok`, `err_here`, `err_lift`, `err_frame` in `Soundness.v`; `repl_error`, `repl_error_commit` in `Repl.v` |
 | Recursive aliases `type X = T` | `TMu t` (`TRV 0` in `t` is the type itself), closed (`mu_ok`); one step of unfolding is `tunfold` |
 | Recursive aliases compared as infinite trees | `sub`, `rsub` as greatest fixed points; `sub_trans`, `sub_tsub`, `rsub_tsub`; `json_teq` in `Recursive.v` |
 | Guardedness; one assumption set per relation | `unguarded_*`, `mixed_accepts`, `rsub_rejects`, `hole_mixed_*` in `Recursive.v` |

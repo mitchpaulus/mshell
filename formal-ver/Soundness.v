@@ -36,11 +36,18 @@ Definition out_ok (o : outcome) (B C : lctx) (R : rctx) (s2 st' : sty) : Prop :=
   | OReturn => match R with RSome s => st' = s | RAny => True | RNone => False end
   end.
 
+(** A checked error keeps the store typing and the caller's frame: the
+    invariant holds with whatever stack the error left above the frame. *)
+Definition err_ok (Σ : store_ty) (sc : loc) (G : tenv) (Sf : list val) (sf : sty) (He : heap) : Prop :=
+  exists Σ' S' st' Os', scope_ext Σ Σ' /\ INV Σ' He sc G (S' ++ Sf) (st' ++ sf) Os' /\
+    length S' = length st'.
+
 Definition res_ok (Σ : store_ty) (sc : loc) (G : tenv) (B C : lctx) (R : rctx)
     (s2 : sty) (Sf : list val) (sf : sty) (r : result) : Prop :=
   match r with
   | RStuck => False
-  | RTimeout | RErr | RExit _ => True
+  | RTimeout | RExit _ => True
+  | RErr H' => err_ok Σ sc G Sf sf H'
   | ROk o H' S' =>
       exists Σ' st' Os', scope_ext Σ Σ' /\ INV Σ' H' sc G (S' ++ Sf) (st' ++ sf) Os' /\
         length S' = length st' /\ out_ok o B C R s2 st'
@@ -51,10 +58,23 @@ Definition P (n : nat) : Prop :=
   forall Σ H sc stk Sf sf Os, INV Σ H sc G (stk ++ Sf) (s1 ++ sf) Os -> length stk = length s1 ->
   res_ok Σ sc G B C R s2 Sf sf (evalv vd defs n H sc stk e).
 
+(** A checked error where the invariant holds. *)
+Lemma err_here Σ H sc G B C R s2 Sf sf stk s Os :
+  INV Σ H sc G (stk ++ Sf) (s ++ sf) Os -> length stk = length s ->
+  res_ok Σ sc G B C R s2 Sf sf (RErr H).
+Proof. intros I L. exists Σ, stk, s, Os. split; [apply scope_ext_refl | auto]. Qed.
+
+Lemma err_weaken Σ Σ1 sc G Sf sf He : scope_ext Σ Σ1 -> err_ok Σ1 sc G Sf sf He -> err_ok Σ sc G Sf sf He.
+Proof.
+  intros Sx (Σ' & S' & st' & Os' & Sx' & I & L). exists Σ', S', st', Os'.
+  split; [eapply scope_ext_trans; eauto | auto].
+Qed.
+
 Lemma res_ok_weaken Σ Σ' sc G B C R s2 Sf sf r :
   scope_ext Σ Σ' -> res_ok Σ' sc G B C R s2 Sf sf r -> res_ok Σ sc G B C R s2 Sf sf r.
 Proof.
   intros Sx Hr. destruct r; simpl in *; auto.
+  { eapply err_weaken; eauto. }
   destruct Hr as (Σ2 & st' & Os' & Sx2 & I & L & O).
   exists Σ2, st', Os'. split; [eapply scope_ext_trans; eauto | split; [exact I | split; [exact L | exact O]]].
 Qed.
@@ -72,7 +92,7 @@ Lemma cont_same Σ sc G B C R s2 s3 Sf sf r (k : heap -> list val -> result) :
      length S' = length s2 -> res_ok Σ sc G B C R s3 Sf sf (k H' S')) ->
   res_ok Σ sc G B C R s3 Sf sf (match r with ROk ONormal H' S' => k H' S' | r => r end).
 Proof.
-  destruct r as [| | | |o H' S']; simpl; auto. intros (Σ' & st' & Os' & Sx & I & L & O) K.
+  destruct r as [| |He| |o H' S']; simpl; auto. intros (Σ' & st' & Os' & Sx & I & L & O) K.
   destruct o; simpl in O.
   - subst. eapply K; eauto.
   - exists Σ', st', Os'. split; [exact Sx | split; [exact I | split; [exact L | exact O]]].
@@ -84,6 +104,23 @@ Lemma INV_scope Σ H sc sc' G G' L st Os :
   INV Σ H sc G L st Os -> nth_error Σ sc' = Some (HScope G') -> INV Σ H sc' G' L st Os.
 Proof. intros [I B] E. split; auto. eapply inv_scope_change; eauto. Qed.
 
+(** Values held above the frame by the caller become part of the error's stack. *)
+Lemma err_frame Σ sc G X x Sf sf He :
+  length X = length x -> err_ok Σ sc G (X ++ Sf) (x ++ sf) He -> err_ok Σ sc G Sf sf He.
+Proof.
+  intros Lx (Σ' & S' & st' & Os' & Sx & I & L). exists Σ', (S' ++ X), (st' ++ x), Os'.
+  rewrite <- !app_assoc. split; [exact Sx | split; [exact I | rewrite !length_app; lia]].
+Qed.
+
+(** An error from a sub-evaluation (another scope or other contexts) over the
+    same frame is an error here. *)
+Lemma err_lift Σ sc sc' G G' Sf sf He :
+  nth_error Σ sc = Some (HScope G) -> err_ok Σ sc' G' Sf sf He -> err_ok Σ sc G Sf sf He.
+Proof.
+  intros Esc (Σ' & S' & st' & Os' & Sx & I & L). exists Σ', S', st', Os'.
+  split; [exact Sx | split; [eapply INV_scope; [exact I | apply Sx; exact Esc] | exact L]].
+Qed.
+
 (** A sub-evaluation in another scope with no loop or return context
     (a quote body): only a normal outcome is possible. *)
 Lemma cont_quote Σ sc sc' G G' B C R s2 s3 Sf sf r (k : heap -> list val -> result) :
@@ -93,7 +130,9 @@ Lemma cont_quote Σ sc sc' G G' B C R s2 s3 Sf sf r (k : heap -> list val -> res
      length S' = length s2 -> res_ok Σ sc G B C R s3 Sf sf (k H' S')) ->
   res_ok Σ sc G B C R s3 Sf sf (match r with ROk ONormal H' S' => k H' S' | r => r end).
 Proof.
-  intros Esc. destruct r as [| | | |o H' S']; simpl; auto. intros (Σ' & st' & Os' & Sx & I & L & O) K.
+  intros Esc. destruct r as [| |He| |o H' S']; simpl; auto.
+  { intros E _. eapply err_lift; eauto. }
+  intros (Σ' & st' & Os' & Sx & I & L & O) K.
   destruct o; simpl in O; try contradiction.
   subst. eapply K; eauto. eapply INV_scope; eauto.
 Qed.
@@ -111,7 +150,7 @@ Lemma never_normal Σ sc G B C R s3 Sf sf r (k : heap -> list val -> result) :
   (forall o H' S', r = ROk o H' S' -> o <> ONormal -> res_ok Σ sc G B C R s3 Sf sf r) ->
   res_ok Σ sc G B C R s3 Sf sf (match r with ROk ONormal H' S' => k H' S' | r => r end).
 Proof.
-  destruct r as [| | | |o H' S']; simpl; auto. intros Hr K.
+  destruct r as [| |He| |o H' S']; simpl; auto. intros Hr K.
   destruct o.
   - exfalso. destruct Hr as (Σ' & st' & Os' & Sx & I & L & O). simpl in O. subst.
     destruct S' as [|v S']; simpl in L; [lia|]. eapply slot_bot_false; eauto.
@@ -348,7 +387,7 @@ Lemma w_load G B C R x t rest s s3 Σ H sc stk Sf sf Os :
   res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WLoad x :: rest)).
 Proof.
   intros Hx HT [Iv Bd] L. destruct (inv_scope_obj _ _ _ _ _ _ _ Iv) as (kvs & E & Ok & Hr & Nsc).
-  simpl. unfold scope_get. rewrite E. destruct (lookup x kvs) as [v|] eqn:Ev; [|exact Logic.I].
+  simpl. unfold scope_get. rewrite E. destruct (lookup x kvs) as [v|] eqn:Ev; [|eapply err_here; [split; eauto | exact L]].
   simpl in Ok. destruct (Ok x v Ev) as (t' & Ht' & Hv). rewrite Hx in Ht'. inversion Ht'; subst.
   eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
   split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | exact Hv |].
@@ -442,7 +481,8 @@ Proof.
   pose proof (IH G' LNone LNone RNone e (shs ins ++ s) [(Sh, TBot)] (Hc s [(Sh, TBot)]) Σ H sc' stk Sf sf Os0) as Hr.
   assert (Hr' : res_ok Σ sc' G' LNone LNone RNone [(Sh, TBot)] Sf sf (evalv vd defs n H sc' stk e)).
   { apply Hr; [| len]. split; [|exact Bd]. eapply inv_scope_change; [| exact Esc']. exact Iv. }
-  destruct (evalv vd defs n H sc' stk e) as [| | | |o H' S'] eqn:Ev; simpl; auto.
+  destruct (evalv vd defs n H sc' stk e) as [| |He| |o H' S'] eqn:Ev; simpl; auto.
+  { eapply err_lift; [exact (inv_scope _ _ _ _ _ _ _ _ Iv) | exact Hr']. }
   destruct Hr' as (Σ' & st' & Os' & Sx & Iv' & L' & O). destruct o; simpl in O; try contradiction.
   subst. destruct S' as [|w S']; [simpl in L'; lia|]. exfalso. eapply slot_bot_false; eauto.
 Qed.
@@ -528,7 +568,7 @@ Lemma w_loop G B C R e rest s s3 Σ H sc stk Sf sf Os :
 Proof.
   intros He HT Iv L. simpl.
   pose proof (IH _ _ _ _ _ _ _ He Σ H sc stk Sf sf Os Iv L) as Hr.
-  destruct (evalv vd defs n H sc stk e) as [| | | |o H' S'] eqn:Ev; simpl; auto.
+  destruct (evalv vd defs n H sc stk e) as [| |Herr| |o H' S'] eqn:Ev; simpl; auto.
   destruct Hr as (Σ' & st' & Os' & Sx & Iv' & L' & O).
   destruct o; simpl in O; subst.
   - eapply res_ok_weaken; [exact Sx|].
@@ -549,7 +589,7 @@ Lemma w_loop_forever G B C R e rest s s' s3 Σ H sc stk Sf sf Os :
 Proof.
   intros He HT Iv L. simpl.
   pose proof (IH _ _ _ _ _ _ _ He Σ H sc stk Sf sf Os Iv L) as Hr.
-  destruct (evalv vd defs n H sc stk e) as [| | | |o H' S'] eqn:Ev; simpl; auto.
+  destruct (evalv vd defs n H sc stk e) as [| |Herr| |o H' S'] eqn:Ev; simpl; auto.
   destruct Hr as (Σ' & st' & Os' & Sx & Iv' & L' & O).
   destruct o; simpl in O; try contradiction; subst.
   - eapply res_ok_weaken; [exact Sx|].
@@ -584,7 +624,8 @@ Proof.
   destruct (INV_new_scope _ _ _ _ G' _ _ _ Iv) as [Iv1 Sx1].
   pose proof (IH _ _ _ _ _ _ _ (Hb s) _ _ _ stk Sf sf Os Iv1 L) as Hr.
   pose proof (inv_scope _ _ _ _ _ _ _ _ (proj1 Iv)) as Esc.
-  destruct (evalv vd defs n (H ++ [OScope []]) (length H) stk body) as [| | | |o H' S'] eqn:Ev; simpl; auto.
+  destruct (evalv vd defs n (H ++ [OScope []]) (length H) stk body) as [| |He| |o H' S'] eqn:Ev; simpl; auto;
+    try (eapply err_weaken; [exact Sx1 | eapply err_lift; [apply Sx1; exact (inv_scope _ _ _ _ _ _ _ _ (proj1 Iv)) | exact Hr]]).
   destruct Hr as (Σ' & st' & Os' & Sx & Iv' & L' & O).
   destruct o; simpl in O; try contradiction; subst.
   - eapply (next_ok n IH); [exact HT | | exact L' | eapply scope_ext_trans; eauto].
@@ -603,7 +644,8 @@ Proof.
   simpl. rewrite Ed.
   destruct (INV_new_scope _ _ _ _ G' _ _ _ Iv) as [Iv1 Sx1].
   pose proof (IH _ _ _ _ _ _ _ (Hb s [(Sh, TBot)]) _ _ _ stk Sf sf Os Iv1 L) as Hr.
-  destruct (evalv vd defs n (H ++ [OScope []]) (length H) stk body) as [| | | |o H' S'] eqn:Ev; simpl; auto.
+  destruct (evalv vd defs n (H ++ [OScope []]) (length H) stk body) as [| |He| |o H' S'] eqn:Ev; simpl; auto;
+    try (eapply err_weaken; [exact Sx1 | eapply err_lift; [apply Sx1; exact (inv_scope _ _ _ _ _ _ _ _ (proj1 Iv)) | exact Hr]]).
   destruct Hr as (Σ' & st' & Os' & Sx & Iv' & L' & O).
   destruct o; simpl in O; try contradiction; subst.
   exfalso. destruct S' as [|w S']; [simpl in L'; lia|]. eapply slot_bot_false; eauto.
@@ -736,11 +778,11 @@ Lemma w_getat G B C R t rest s s3 Σ H sc stk Sf sf Os :
   length stk = length ((Sh, TInt) :: (Sh, TList t) :: s) ->
   res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WGetAt :: rest)).
 Proof.
-  intros HT [Iv Bd] L. destruct stk as [|x [|v stk]]; try len. simpl in Iv.
+  intros HT I0 L. pose proof I0 as [Iv Bd]. destruct stk as [|x [|v stk]]; try len. simpl in Iv.
   pop_sh Iv. destruct Iv as (-> & Vx & Hx & Iv). pop_sh Iv. destruct Iv as (-> & Vv & Hv & Iv).
   apply vt_int_inv in Vx as (i & ->).
   destruct (sh_list _ _ _ _ _ _ _ _ _ Iv Vv Hv) as (l & a & vs & -> & E & Ta & Nl & Eo & Fv & Hr).
-  simpl. rewrite Eo. destruct (nth_error vs i) as [y|] eqn:Ey; [|exact Logic.I].
+  simpl. rewrite Eo. destruct (nth_error vs i) as [y|] eqn:Ey; [|eapply err_here; [exact I0 | exact L]].
   eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
   split; auto. simpl. apply inv_push_sh; [exact Iv | |].
   - rewrite Forall_forall in Fv. eapply vtyped_sub; [apply Fv; eapply nth_error_In; eauto | apply Ta].
@@ -753,12 +795,12 @@ Lemma w_setat G B C R t rest s s3 Σ H sc stk Sf sf Os :
   length stk = length ((Sh, t) :: (Sh, TInt) :: (Sh, TList t) :: s) ->
   res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WSetAt :: rest)).
 Proof.
-  intros HT [Iv Bd] L. destruct stk as [|x [|w [|v stk]]]; try len. simpl in Iv.
+  intros HT I0 L. pose proof I0 as [Iv Bd]. destruct stk as [|x [|w [|v stk]]]; try len. simpl in Iv.
   pop_sh Iv. destruct Iv as (-> & Vx & Hx & Iv). pop_sh Iv. destruct Iv as (-> & Vw & Hw & Iv).
   pop_sh Iv. destruct Iv as (-> & Vv & Hv & Iv).
   apply vt_int_inv in Vw as (i & ->).
   destruct (sh_list _ _ _ _ _ _ _ _ _ Iv Vv Hv) as (l & a & vs & -> & E & Ta & Nl & Eo & Fv & Hr).
-  simpl. rewrite Eo. destruct (i <? length vs); [|exact Logic.I].
+  simpl. rewrite Eo. destruct (i <? length vs); [|eapply err_here; [exact I0 | exact L]].
   pose proof (inv_len _ _ _ _ _ _ _ _ Iv) as Ln.
   eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
   split.
@@ -1125,11 +1167,11 @@ Lemma w_try_dp G B C R t u rest s s3 Σ H sc stk Sf sf Os :
   INV Σ H sc G (stk ++ Sf) (((Dp, t) :: s) ++ sf) Os -> length stk = length ((Dp, t) :: s) ->
   res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WTryAs u :: rest)).
 Proof.
-  intros HT [Iv Bd] L. destruct stk as [|v stk]; try len. simpl in Iv.
+  intros HT I0 L. pose proof I0 as [Iv Bd]. destruct stk as [|v stk]; try len. simpl in Iv.
   destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
   pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl Iv) as Sl.
   unfold slot_ok in Sl; simpl in Sl.
-  simpl. destruct (vd n H v u) as [[|]|] eqn:Ev; [| | exact Logic.I].
+  simpl. destruct (vd n H v u) as [[|]|] eqn:Ev; [| | eapply err_here; [exact I0 | exact L]].
   - eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
     split; [|exact Bd]. simpl. eapply inv_replace_top_dp; [exact Iv|].
     apply (dt_vjust sigs Hmaybe). eapply vd_fresh; eauto.
@@ -1144,9 +1186,9 @@ Lemma w_try_sh G B C R t u rest s s3 Σ H sc stk Sf sf Os :
   INV Σ H sc G (stk ++ Sf) (((Sh, t) :: s) ++ sf) Os -> length stk = length ((Sh, t) :: s) ->
   res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WTryAs u :: rest)).
 Proof.
-  intros Hu HT [Iv Bd] L. destruct stk as [|v stk]; try len. simpl in Iv.
+  intros Hu HT I0 L. pose proof I0 as [Iv Bd]. destruct stk as [|v stk]; try len. simpl in Iv.
   pop_sh Iv. destruct Iv as (-> & V & Hl & Iv).
-  simpl. destruct (vd n H v u) as [[|]|] eqn:Ev; [| | exact Logic.I].
+  simpl. destruct (vd n H v u) as [[|]|] eqn:Ev; [| | eapply err_here; [exact I0 | exact L]].
   - eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
     split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | | simpl; rewrite app_nil_r; exact Hl].
     apply (vt_vjust sigs Hmaybe). destruct Hu as [Hs|Hi].
@@ -1162,11 +1204,11 @@ Lemma w_copy G B C R t rest s s3 Σ H sc stk Sf sf Os :
   INV Σ H sc G (stk ++ Sf) (((Sh, t) :: s) ++ sf) Os -> length stk = length ((Sh, t) :: s) ->
   res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WCopy :: rest)).
 Proof.
-  intros HT [Iv Bd] L. destruct stk as [|v stk]; try len. simpl in Iv.
+  intros HT I0 L. pose proof I0 as [Iv Bd]. destruct stk as [|v stk]; try len. simpl in Iv.
   pop_sh Iv. destruct Iv as (-> & V & Hl & Iv).
   pose proof (inv_heap_ok_out sigs _ _ _ _ _ _ _ Iv) as Ho.
   pose proof (inv_len _ _ _ _ _ _ _ _ Iv) as Ln.
-  simpl. destruct (dcopy (length H) H v) as [[H' v']|] eqn:Ec; [|exact Logic.I].
+  simpl. destruct (dcopy (length H) H v) as [[H' v']|] eqn:Ec; [|eapply err_here; [exact I0 | exact L]].
   destruct (dcopy_fresh sigs Σ H (concat Os0) (length H) v t H' v' Ln Ho V Hl Ec) as (N & O & -> & D & Rg).
   destruct (inv_alloc_region sigs _ _ _ _ _ _ _ _ _ _ _ Iv Bd D Rg) as [Iv' Bd'].
   eapply (next_ok n IH); [exact HT | split; [exact Iv' | exact Bd'] | len | apply scope_ext_app_l].
@@ -1198,7 +1240,9 @@ Proof.
     - unfold go. simpl. fold go.
       pose proof (IH G B' C' RNone e [(Sh, t)] [] He Σ0 H0 sc [x] (vsr ++ stk0 ++ Sf)
                     (map (fun _ => (Sh, t)) vsr ++ s ++ sf) Osq Iv0 eq_refl) as Hr0.
-      destruct (evalv vd defs n H0 sc [x] e) as [| | | |o H1 S1] eqn:Ev; simpl in Hr0 |- *; auto.
+      destruct (evalv vd defs n H0 sc [x] e) as [| |He1| |o H1 S1] eqn:Ev; simpl in Hr0 |- *; auto.
+      { eapply err_weaken; [exact Sx0|]. eapply (err_frame _ _ _ (vsr ++ stk0) (map (fun _ => (Sh, t)) vsr ++ s));
+          [rewrite !length_app, length_map; simpl in L; lia | rewrite <- !app_assoc; exact Hr0]. }
       destruct Hr0 as (Σ1 & st1 & Os1 & Sx1 & Iv1 & L1 & O1).
       assert (Drop : exists Σ2 Os2, scope_ext Σ1 Σ2 /\ INV Σ2 H1 sc G (stk0 ++ Sf) (s ++ sf) Os2).
       { destruct Iv1 as [Iv1 Bd1].
@@ -1287,7 +1331,7 @@ Lemma w_case G B C R m E a arms rest s s' s3 Σ H sc stk Sf sf Os :
   length stk = length ((m, TEnum E a) :: s) ->
   res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WCase E arms :: rest)).
 Proof.
-  intros Harms HT [Iv Bd] L. destruct stk as [|v stk]; try len. simpl in Iv.
+  intros Harms HT I0 L. pose proof I0 as [Iv Bd]. destruct stk as [|v stk]; try len. simpl in Iv.
   destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
   (* the value is a constructor of E, with payloads typed by its declaration *)
   assert (Hc : exists c pts vs Os1, v = VCon E c pts vs /\ g_ctors sigs E c = Some pts /\
@@ -1311,7 +1355,7 @@ Proof.
       + clear -Dl. induction Dl; simpl; auto. }
   destruct Hc as (c & pts & vs & Os1 & -> & Ec & Iv' & Lv).
   simpl. rewrite ename_eqb_refl.
-  destruct (@lookup (list word) c arms) as [e|] eqn:Ea; [|exact Logic.I].
+  destruct (@lookup (list word) c arms) as [e|] eqn:Ea; [|eapply err_here; [exact I0 | exact L]].
   apply cont_same with (s2 := s').
   - eapply (IH _ _ _ _ _ _ _ (Harms c pts e Ec Ea)); [exact Iv' |].
     rewrite !length_app, Lv. unfold marks. rewrite !length_map. len.
@@ -1437,7 +1481,9 @@ Proof.
       pose proof (IH G B' C' RNone e [(Sh, t)] [(Sh, u)] He Σ0 H0 sc [x] (vsr ++ acc ++ stk0 ++ Sf)
                     (map (fun _ => (Sh, t)) vsr ++ map (fun _ => (Sh, u)) acc ++ s ++ sf) Osq
                     (conj Iv0 Bd0) eq_refl) as Hr0.
-      destruct (evalv vd defs n H0 sc [x] e) as [| | | |o H1 S1] eqn:Ev; simpl in Hr0 |- *; auto.
+      destruct (evalv vd defs n H0 sc [x] e) as [| |He1| |o H1 S1] eqn:Ev; simpl in Hr0 |- *; auto.
+      { eapply err_weaken; [exact Sx0|]. eapply (err_frame _ _ _ (vsr ++ acc ++ stk0) (map (fun _ => (Sh, t)) vsr ++ map (fun _ => (Sh, u)) acc ++ s));
+          [rewrite !length_app, !length_map; simpl in L; lia | rewrite <- !app_assoc; exact Hr0]. }
       destruct Hr0 as (Σ1 & st1 & Os1 & Sx1 & Iv1 & L1 & O1).
       assert (Drop : exists Σ2 Os2, scope_ext Σ1 Σ2 /\ INV Σ2 H1 sc G (stk0 ++ Sf) (s ++ sf) Os2).
       { destruct Iv1 as [Iv1 Bd1].
@@ -1602,11 +1648,12 @@ Proof.
       [exact Hm | exact HT | split; [exact Iv | exact Bd] | len | exact El |].
     rewrite app_nil_r. symmetry. apply firstn_skipn.
   - (* index slice *)
-    destruct stk as [|y stk0]; try len. simpl in Iv. destruct Iv as [Iv Bd].
+    destruct stk as [|y stk0]; try len. simpl in Iv. pose proof Iv as I0. destruct Iv as [Iv Bd].
     destruct (list_operand _ _ _ _ _ _ _ _ _ _ Iv) as (l & vs & -> & El).
     simpl. rewrite El.
     remember (match b with Some e => e | None => length vs end) as e eqn:Ee.
-    destruct ((i <=? e) && (e <=? length vs)); [|exact Logic.I].
+    destruct ((i <=? e) && (e <=? length vs));
+      [|apply (err_here _ _ _ _ _ _ _ _ _ _ (VLoc l :: stk0) ((m, TList t) :: s) Os); [exact I0 | exact L]].
     eapply w_newlist with (pre := firstn i vs) (post := skipn (e - i) (skipn i vs));
       [exact Hm | exact HT | split; [exact Iv | exact Bd] | len | exact El |].
     rewrite firstn_skipn. symmetry. apply firstn_skipn.
