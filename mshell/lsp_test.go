@@ -1892,6 +1892,26 @@ func TestDiagnosticColumnsUTF16(t *testing.T) {
 	}
 }
 
+// TestTypeExprParseErrorPosition places a parse error inside a type
+// expression at its token, not at the top of the file, for each form that
+// names where the type expression was.
+func TestTypeExprParseErrorPosition(t *testing.T) {
+	cases := []string{
+		"type T = [\n  int,\n]\n",
+		"def f (\n  [int,] -- int) end\n",
+		"1 as [\n  int,]\n",
+	}
+	for _, src := range cases {
+		diags := (&lspServer{}).computeDiagnostics("", src)
+		if len(diags) == 0 {
+			t.Fatalf("%q: no diagnostics", src)
+		}
+		if r := diags[0].Range; r.Start.Line != 1 {
+			t.Fatalf("%q: range %+v (%s), want line 1", src, r, diags[0].Message)
+		}
+	}
+}
+
 // TestDiagnosticsShowStartupErrors shows an error in the startup files'
 // declarations on every document, as the command line fails every script
 // on it.

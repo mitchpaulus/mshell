@@ -145,7 +145,7 @@ func (parser *MShellParser) ParseEnumDecl() (*MShellEnumDecl, error) {
 			parser.curr.Line, parser.curr.Column, decl.Name)
 	}
 	if len(errs) > 0 {
-		return nil, fmt.Errorf("enum declaration '%s': %s", decl.Name, joinTypeErrs(errs))
+		return nil, inParseContext("enum declaration '"+decl.Name+"'", joinTypeErrs(errs))
 	}
 	return decl, nil
 }
@@ -195,7 +195,7 @@ func (parser *MShellParser) ParseTryAs() (*MShellTryAs, error) {
 	parser.NextToken() // consume TRYAS
 	target, errs := parser.parseTypeExpr()
 	if len(errs) > 0 {
-		return nil, fmt.Errorf("'tryAs' target: %s", joinTypeErrs(errs))
+		return nil, inParseContext("'tryAs' target", joinTypeErrs(errs))
 	}
 	return &MShellTryAs{Tok: tok, Target: target}, nil
 }
@@ -229,7 +229,7 @@ func (parser *MShellParser) parseIsPattern() (*MShellIsPattern, error) {
 	parser.NextToken() // consume is
 	target, errs := parser.parseTypeExpr()
 	if len(errs) > 0 {
-		return nil, fmt.Errorf("'is' pattern: %s", joinTypeErrs(errs))
+		return nil, inParseContext("'is' pattern", joinTypeErrs(errs))
 	}
 	if parser.curr.Type != LITERAL {
 		hint := ""
@@ -263,7 +263,7 @@ func (parser *MShellParser) ParseTypeDecl() (*MShellTypeDecl, error) {
 	parser.NextToken() // consume =
 	body, errs := parser.parseTypeExpr()
 	if len(errs) > 0 {
-		return nil, fmt.Errorf("type declaration body: %s", joinTypeErrs(errs))
+		return nil, inParseContext("type declaration body", joinTypeErrs(errs))
 	}
 	return &MShellTypeDecl{
 		Name:      nameTok.Lexeme,
@@ -281,9 +281,35 @@ func (parser *MShellParser) ParseAsCast() (*MShellAsCast, error) {
 	parser.NextToken() // consume AS
 	target, errs := parser.parseTypeExpr()
 	if len(errs) > 0 {
-		return nil, fmt.Errorf("'as' target: %s", joinTypeErrs(errs))
+		return nil, inParseContext("'as' target", joinTypeErrs(errs))
 	}
 	return &MShellAsCast{AsToken: asTok, Target: target}, nil
+}
+
+// inParseContext names where a parse error happened, after the message's
+// leading "line:col:" so that readers of the location (the LSP placing
+// its diagnostic) still find it first.
+func inParseContext(context, msg string) error {
+	if n := leadingPosLen(msg); n > 0 {
+		return fmt.Errorf("%s %s:%s", msg[:n], context, msg[n:])
+	}
+	return fmt.Errorf("%s: %s", context, msg)
+}
+
+// leadingPosLen is the length of a "line:col:" prefix on msg, or 0.
+func leadingPosLen(msg string) int {
+	i := 0
+	for range 2 {
+		start := i
+		for i < len(msg) && msg[i] >= '0' && msg[i] <= '9' {
+			i++
+		}
+		if i == start || i >= len(msg) || msg[i] != ':' {
+			return 0
+		}
+		i++
+	}
+	return i
 }
 
 func joinTypeErrs(errs []TypeError) string {
