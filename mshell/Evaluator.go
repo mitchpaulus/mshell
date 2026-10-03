@@ -9448,6 +9448,11 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						newCol.GenericData[rowIdx] = newVal
 					}
 
+					// The quotes may have changed the grid (extend adds rows):
+					// the new column then no longer fits it.
+					if grid.RowCount != len(newCol.GenericData) || grid.ColIndex[colName] != colIdx {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: updateCol: the grid changed while the quotation ran on column '%s'.\n", t.Line, t.Column, colName))
+					}
 					optimizeColumnStorage(newCol)
 					grid.Columns[colIdx] = newCol
 					grid.ColIndex[colName] = colIdx
@@ -10855,15 +10860,13 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 						// If all results are GridRows or dicts with same columns, create a new Grid
 						if len(mappedRows) == 0 {
-							// Empty grid, use source columns
+							// No row ran the quote, so no column is known:
+							// the result has none. The source's columns
+							// would contradict the type the checker gives
+							// the result, the columns of the quote's value.
 							newGrid := NewGrid()
 							newGrid.Meta = sourceGrid.Meta
 							newGrid.RowCount = 0
-							for _, col := range sourceGrid.Columns {
-								newCol := NewGridColumn(col.Name, 0)
-								newCol.Meta = col.Meta
-								newGrid.AddColumn(newCol)
-							}
 							stack.Push(newGrid)
 						} else {
 							// Determine column structure from first row
@@ -10898,16 +10901,18 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 								case *MShellGridRow:
 									for colIdx, colName := range colNames {
 										val, ok := rowTyped.Get(colName)
-										if ok {
-											newGrid.Columns[colIdx].GenericData[rowIdx] = val
+										if !ok {
+											return state.CheckedFailure(fmt.Sprintf("%d:%d: map on a grid: row %d has no column '%s', which the first row has.\n", t.Line, t.Column, rowIdx, colName))
 										}
+										newGrid.Columns[colIdx].GenericData[rowIdx] = val
 									}
 								case *MShellDict:
 									for colIdx, colName := range colNames {
 										val, ok := rowTyped.Items[colName]
-										if ok {
-											newGrid.Columns[colIdx].GenericData[rowIdx] = val
+										if !ok {
+											return state.CheckedFailure(fmt.Sprintf("%d:%d: map on a grid: row %d has no key '%s', which the first row has.\n", t.Line, t.Column, rowIdx, colName))
 										}
+										newGrid.Columns[colIdx].GenericData[rowIdx] = val
 									}
 								}
 							}

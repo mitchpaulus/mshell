@@ -395,10 +395,10 @@ func (c *coreChecker) iff(tok Token) {
 	c.forceWaiting()
 	mark := len(c.saved)
 	entry := c.saveStack()
-	var runs []savedRun
+	am := c.armBegin()
+	defer c.armEnd(am)
 	daMark := len(c.setLog)
-	var sets [][]NameId
-	for _, q := range arms {
+	for i, q := range arms {
 		c.restoreStack(entry)
 		c.daRestore(daMark)
 		if p := c.waiting(q); p != nil {
@@ -413,24 +413,24 @@ func (c *coreChecker) iff(tok Token) {
 			return
 		}
 		if !c.diverged {
-			sets = append(sets, c.daSince(daMark))
+			c.keepSet(daMark)
 		}
 		run := c.saveArm()
 		run.label, run.line = "the quote run when true", tok.Line
-		if len(runs) == 1 {
+		if i == 1 {
 			run.label = "the quote run when false"
 		}
-		runs = append(runs, run)
+		c.keepRun(run)
 	}
 	if len(arms) == 1 {
 		c.restoreStack(entry)
 		run := c.saveArm()
 		run.label, run.line = "the missing quote for false", tok.Line
-		runs = append(runs, run)
-		sets = append(sets, nil)
+		c.keepRun(run)
+		c.keepNoSet()
 	}
-	c.joinArms(runs, tok)
-	c.daJoin(daMark, sets)
+	c.joinArms(c.runsSince(am), tok)
+	c.daJoinSince(daMark, am)
 	c.saved = c.saved[:mark]
 }
 
@@ -457,8 +457,9 @@ func (c *coreChecker) andOr(tok Token) bool {
 	c.forceWaiting()
 	mark := len(c.saved)
 	entry := c.saveStack()
+	am := c.armBegin()
+	defer c.armEnd(am)
 	daMark := len(c.setLog)
-	var sets [][]NameId
 	c.walkInline(p.items)
 	if c.abandoned {
 		c.saved = c.saved[:mark]
@@ -470,16 +471,16 @@ func (c *coreChecker) andOr(tok Token) bool {
 			return true
 		}
 		c.push(TidBool, true)
-		sets = append(sets, c.daSince(daMark))
+		c.keepSet(daMark)
 	}
-	runs := []savedRun{c.saveArm()}
+	c.keepRun(c.saveArm())
 	c.restoreStack(entry)
 	c.daRestore(daMark)
 	c.push(TidBool, true)
-	runs = append(runs, c.saveArm())
-	sets = append(sets, nil)
-	c.joinArms(runs, tok)
-	c.daJoin(daMark, sets)
+	c.keepRun(c.saveArm())
+	c.keepNoSet()
+	c.joinArms(c.runsSince(am), tok)
+	c.daJoinSince(daMark, am)
 	c.saved = c.saved[:mark]
 	return true
 }

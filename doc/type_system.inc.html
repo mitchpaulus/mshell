@@ -386,6 +386,7 @@ end</code></pre>
 <p>
 A written shape type says nothing about the keys it does not name: a <code>{name: str}</code> may have other keys, of any type.
 A shape literal's own type is exact: <code>{name: "Ada"}</code> has the key <code>name</code> and no other.
+Error messages and hover show it as <code>exact {name: str}</code>; no type you write is exact.
 <code>*: T</code> says the other keys hold <code>T</code>: <code>{url: str, *: int}</code>.
 </p>
 

@@ -73,6 +73,9 @@ func (c *coreChecker) checkDefs(defs []MShellDefinition) {
 	}
 	for i := range bodies {
 		b := &bodies[i]
+		if b.sig.broken {
+			continue
+		}
 		b.outs = c.checkBody(b.def, b.sig)
 		b.exitNew, b.exitShared = c.exitNew, append([]Token(nil), c.exitShared...)
 		b.checked = !c.abandoned && !b.sig.diverges && c.exits > 0

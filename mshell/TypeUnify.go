@@ -14,35 +14,39 @@ package main
 // indexed directly without bounds-grow logic on Bind (FreshVar is the
 // only way to create a var, and it sizes the slice).
 //
-// Checkpoints are versions of a persistent array (Baker's rerooting):
-// bound holds the current version, and every other version is a chain of
-// undo logs leading to it. Checkpoint is O(1), a write appends one undo
-// entry, and Rollback costs the writes between the two versions, which is
-// nothing when the walker returns to the state it just captured.
+// Checkpoints are positions in a trail: once a checkpoint has been
+// taken, every write logs the value it replaces, and Rollback undoes the
+// writes after its checkpoint, newest first. Checkpoint is O(1), a write
+// appends one entry to one reused slice, and Rollback costs the writes it
+// undoes. Checkpoints are used last in, first out: rolling back to a
+// checkpoint discards every checkpoint taken after it, while it stays
+// valid itself (a trial may be rolled back to the same point several
+// times). The checker only tries a candidate and rolls back to just before
+// it, so that is all it needs.
 //
 // Ids are never reused: Rollback leaves the slice at full length, and
 // slots allocated after the checkpoint just revert to unbound. So a type
 // that escapes one branch can't alias a variable another branch creates.
 type Substitution struct {
 	bound []TypeId
-	// root is the newest version, which the undo log in root.undo takes
-	// back from bound. Nil until the first Checkpoint: before that no
-	// version can be returned to, so writes need no log.
-	root *substVersion
-}
-
-// substVersion is one version of a Substitution. For the root, applying
-// undo in reverse to bound gives this version; for any other, applying
-// it in reverse to the version at next does.
-type substVersion struct {
-	next *substVersion
-	undo []substWrite
+	// trail holds the old value of every write since the first
+	// checkpoint. Before one is taken no state can be returned to, so
+	// writes need no log (logging is false).
+	trail   []substWrite
+	logging bool
 }
 
 // substWrite records that slot v held t before a write.
 type substWrite struct {
 	v TypeVarId
 	t TypeId
+}
+
+// Reset empties the substitution for a new unit, keeping its storage.
+func (s *Substitution) Reset() {
+	s.bound = s.bound[:0]
+	s.trail = s.trail[:0]
+	s.logging = false
 }
 
 // FreshVar allocates a new generic variable, reserves its slot in the
@@ -54,68 +58,35 @@ func (s *Substitution) FreshVar(arena *TypeArena) TypeId {
 	return arena.MakeVar(id)
 }
 
-// set writes slot v, logging the old value so the root can be restored.
+// set writes slot v, logging the old value so a checkpoint can be restored.
 func (s *Substitution) set(v TypeVarId, t TypeId) {
-	if s.root != nil {
-		s.root.undo = append(s.root.undo, substWrite{v, s.bound[v]})
+	if s.logging {
+		s.trail = append(s.trail, substWrite{v, s.bound[v]})
 	}
 	s.bound[v] = t
 }
 
 // SubstCheckpoint records the substitution's state at a point in time
 // so it can be rolled back: trying an overload candidate, or a match that
-// may fail, without leaving its bindings behind.
+// may fail, without leaving its bindings behind. It is the trail's length.
 type SubstCheckpoint struct {
-	v *substVersion
+	n int
 }
 
-// Checkpoint returns the current version. Writes after it don't change it.
+// Checkpoint returns the current state. Writes after it don't change it.
 func (s *Substitution) Checkpoint() SubstCheckpoint {
-	if s.root == nil || len(s.root.undo) > 0 {
-		// Nothing written since the root was taken reuses it; otherwise
-		// the current state becomes the new root, and the old root now
-		// differs from it by exactly its log.
-		v := &substVersion{}
-		if s.root != nil {
-			s.root.next = v
-		}
-		s.root = v
-	}
-	return SubstCheckpoint{v: s.root}
+	s.logging = true
+	return SubstCheckpoint{n: len(s.trail)}
 }
 
-// Rollback restores the version snap was taken at, discarding writes made
-// since the last Checkpoint, and makes it the root.
+// Rollback restores the state snap was taken at, undoing the writes made
+// since, newest first. Checkpoints taken after snap are no longer valid.
 func (s *Substitution) Rollback(snap SubstCheckpoint) {
-	// Undo writes since the root, which no version refers to.
-	s.undoInto(s.root, nil)
-	// Walk the path from the target to the root, then reroot along it
-	// from the root end: each step moves the current state one version
-	// toward the target, and logs the way back on the version it left.
-	var path []*substVersion
-	for v := snap.v; v != s.root; v = v.next {
-		path = append(path, v)
-	}
-	for i := len(path) - 1; i >= 0; i-- {
-		v, old := path[i], s.root
-		s.undoInto(v, old)
-		old.next = v
-		v.next = nil
-		s.root = v
-	}
-}
-
-// undoInto applies v's log to bound in reverse and empties it. If back is
-// not nil, it receives the log that redoes what was undone.
-func (s *Substitution) undoInto(v *substVersion, back *substVersion) {
-	for i := len(v.undo) - 1; i >= 0; i-- {
-		w := v.undo[i]
-		if back != nil {
-			back.undo = append(back.undo, substWrite{w.v, s.bound[w.v]})
-		}
+	for i := len(s.trail) - 1; i >= snap.n; i-- {
+		w := s.trail[i]
 		s.bound[w.v] = w.t
 	}
-	v.undo = v.undo[:0]
+	s.trail = s.trail[:snap.n]
 }
 
 // Apply resolves a TypeId against the current substitution, walking into
@@ -125,6 +96,9 @@ func (s *Substitution) undoInto(v *substVersion, back *substVersion) {
 // path-compressed, so repeated lookups are fast.
 func (s *Substitution) Apply(a *TypeArena, t TypeId) TypeId {
 	n := a.Node(t)
+	if n.Flags&NodeHasVar == 0 {
+		return t
+	}
 	switch n.Kind {
 	case TKVar:
 		v := TypeVarId(n.A)
@@ -163,23 +137,33 @@ func (s *Substitution) Apply(a *TypeArena, t TypeId) TypeId {
 		}
 		return a.MakeQuote(QuoteSig{Inputs: ins, Outputs: outs, Diverges: sig.Diverges})
 	case TKRecord:
-		rec := a.records[n.Extra]
-		changed := false
-		fields := make([]RecordField, len(rec.Fields))
-		for i, f := range rec.Fields {
-			fields[i] = f
-			if f.Type != TidNothing {
-				fields[i].Type = s.Apply(a, f.Type)
-				changed = changed || fields[i].Type != f.Type
+		// The fields are copied only once one changes. Apply may add
+		// records, so the record is read again by index each time.
+		var fields []RecordField
+		nf := len(a.records[n.Extra].Fields)
+		for i := range nf {
+			f := a.records[n.Extra].Fields[i]
+			if f.Type == TidNothing {
+				continue
+			}
+			ft := s.Apply(a, f.Type)
+			if ft != f.Type && fields == nil {
+				fields = make([]RecordField, nf)
+				copy(fields, a.records[n.Extra].Fields)
+			}
+			if fields != nil {
+				fields[i].Type = ft
 			}
 		}
-		rest := rec.Rest
+		rest := a.records[n.Extra].Rest
 		if rest.Type != TidNothing {
 			rest.Type = s.Apply(a, rest.Type)
-			changed = changed || rest.Type != rec.Rest.Type
 		}
-		if !changed {
-			return t
+		if fields == nil {
+			if rest.Type == a.records[n.Extra].Rest.Type {
+				return t
+			}
+			fields = a.records[n.Extra].Fields
 		}
 		return a.MakeRecord(fields, rest)
 	case TKEnum:
@@ -264,6 +248,9 @@ func (s *Substitution) occurs(arena *TypeArena, v TypeVarId, t TypeId) bool {
 // to decide whether a bound variable's binding should be chased.
 func (a *TypeArena) walkTypeVars(t TypeId, visit func(TypeVarId) bool) bool {
 	n := a.Node(t)
+	if n.Flags&NodeHasVar == 0 {
+		return false
+	}
 	switch n.Kind {
 	case TKVar:
 		return visit(TypeVarId(n.A))

@@ -113,10 +113,24 @@ func (k TypeKind) String() string {
 // A, B, and Extra is dictated by Kind. Layout is fixed so the arena slice
 // stays cache-friendly.
 type TypeNode struct {
-	Kind  TypeKind
+	Kind TypeKind
+	// Flags are facts about the whole type, set when the node is made
+	// from its children's (TypeArena.append); NodeHasVar is the only one.
+	// They fill padding, so a node stays 16 bytes.
+	Flags uint8
 	A     uint32
 	B     uint32
 	Extra uint32
+}
+
+// NodeHasVar is set on a type that mentions a unification variable
+// (TKVar), solved or not. A type without it is the same under every
+// substitution, so Apply and the occurs check skip it at once.
+const NodeHasVar uint8 = 1
+
+// HasVarNode reports whether t mentions a unification variable at all.
+func (a *TypeArena) HasVarNode(t TypeId) bool {
+	return a.nodes[t].Flags&NodeHasVar != 0
 }
 
 // CommandCaptureMode is really a per-stream *destination state*: unset,
@@ -273,10 +287,16 @@ type TypeArena struct {
 	enumArgs      [][]TypeId
 	aliases       []AliasDecl
 	abstractCount uint32
-	// keyBuf is scratch space for building composite cons keys.
-	keyBuf []byte
-	// varIds caches MakeVar: the TypeId of each type variable made here.
+	// keyBuf is scratch space for building composite cons keys; unionBuf
+	// and fieldBuf hold a union's members and a record's fields while
+	// they are looked up, copied only into a new type.
+	keyBuf   []byte
+	unionBuf []TypeId
+	fieldBuf []RecordField
+	// varIds and listOf find the variable and list types made here, by
+	// variable id and by element id (MakeVar, MakeList).
 	varIds []TypeId
+	listOf []TypeId
 }
 
 // Overlay returns an arena that starts with every type in a and grows on
@@ -309,6 +329,29 @@ func (a *TypeArena) lookupCons(key []byte) (TypeId, bool) {
 		}
 	}
 	return TidNothing, false
+}
+
+// resetOverlay takes an overlay made by Overlay back to the state Overlay
+// gave it, keeping its storage for the next check. Its slices hold the
+// parent's entries first, unchanged, since the parent is frozen and the
+// overlay writes only entries it added; each is cut back to the parent's
+// length.
+func (a *TypeArena) resetOverlay() {
+	p := a.parent
+	a.nodes = a.nodes[:len(p.nodes)]
+	clear(a.cons)
+	clear(a.atomCons)
+	a.quoteSigs = a.quoteSigs[:len(p.quoteSigs)]
+	a.unionMembers = a.unionMembers[:len(p.unionMembers)]
+	a.records = a.records[:len(p.records)]
+	a.enumDecls = a.enumDecls[:len(p.enumDecls)]
+	a.enumArgs = a.enumArgs[:len(p.enumArgs)]
+	a.aliases = a.aliases[:len(p.aliases)]
+	a.abstractCount = p.abstractCount
+	clear(a.varIds)
+	a.varIds = a.varIds[:0]
+	clear(a.listOf)
+	a.listOf = a.listOf[:0]
 }
 
 // NewTypeArena constructs an arena pre-populated with the primitive ids
@@ -384,20 +427,46 @@ func (a *TypeArena) Kind(id TypeId) TypeKind {
 
 // MakeList returns the canonical TypeId for [elem].
 func (a *TypeArena) MakeList(elem TypeId) TypeId {
-	return a.intern(TKList, uint32(elem), 0, 0)
+	// Lists are found by their element's id, without hashing: in this
+	// arena, then in its parent. Only MakeList makes list nodes.
+	if int(elem) < len(a.listOf) && a.listOf[elem] != TidNothing {
+		return a.listOf[elem]
+	}
+	if p := a.parent; p != nil && int(elem) < len(p.listOf) && p.listOf[elem] != TidNothing {
+		return p.listOf[elem]
+	}
+	id := a.append(TypeNode{Kind: TKList, A: uint32(elem)})
+	a.listOf = growIds(a.listOf, int(elem))
+	a.listOf[elem] = id
+	return id
+}
+
+// growIds makes ids long enough to index i, with TidNothing in new entries.
+func growIds(ids []TypeId, i int) []TypeId {
+	if i < len(ids) {
+		return ids
+	}
+	if n := len(ids); i < cap(ids) {
+		ids = ids[:i+1]
+		clear(ids[n:])
+		return ids
+	}
+	return append(ids, make([]TypeId, i+1-len(ids))...)
 }
 
 // MakeVar returns the canonical TypeId for the generic type variable v.
 // Two calls with the same TypeVarId always return the same TypeId.
 func (a *TypeArena) MakeVar(v TypeVarId) TypeId {
-	// Variable ids are dense, so a slice finds one without hashing.
+	// Variable ids are dense, so a slice finds one without hashing: in
+	// this arena, then in its parent. Only MakeVar makes variable nodes.
 	if int(v) < len(a.varIds) && a.varIds[v] != TidNothing {
 		return a.varIds[v]
 	}
-	id := a.intern(TKVar, uint32(v), 0, 0)
-	if int(v) >= len(a.varIds) {
-		a.varIds = append(a.varIds, make([]TypeId, int(v)+1-len(a.varIds))...)
+	if p := a.parent; p != nil && int(v) < len(p.varIds) && p.varIds[v] != TidNothing {
+		return p.varIds[v]
 	}
+	id := a.append(TypeNode{Kind: TKVar, A: uint32(v)})
+	a.varIds = growIds(a.varIds, int(v))
 	a.varIds[v] = id
 	return id
 }
@@ -433,7 +502,7 @@ func (a *TypeArena) MakeUnion(arms []TypeId) TypeId {
 		return id
 	}
 	idx := uint32(len(a.unionMembers))
-	a.unionMembers = append(a.unionMembers, flat)
+	a.unionMembers = append(a.unionMembers, slices.Clone(flat))
 	id := a.append(TypeNode{Kind: TKUnion, Extra: idx})
 	a.cons[string(a.keyBuf)] = id
 	return id
@@ -479,7 +548,8 @@ func (a *TypeArena) GridRecord(t TypeId) TypeId {
 func (a *TypeArena) MakeRecord(fields []RecordField, rest RecordField) TypeId {
 	rest = normalizeRecordField(rest)
 	rest.Name = NameNone
-	out := make([]RecordField, 0, len(fields))
+	out := a.fieldBuf[:0]
+	defer func() { a.fieldBuf = out[:0] }()
 	for _, f := range fields {
 		f = normalizeRecordField(f)
 		if f.Status == rest.Status && f.Type == rest.Type {
@@ -498,7 +568,7 @@ func (a *TypeArena) MakeRecord(fields []RecordField, rest RecordField) TypeId {
 		return id
 	}
 	idx := uint32(len(a.records))
-	a.records = append(a.records, RecordType{Fields: out, Rest: rest})
+	a.records = append(a.records, RecordType{Fields: slices.Clone(out), Rest: rest})
 	id := a.append(TypeNode{Kind: TKRecord, Extra: idx})
 	a.cons[string(a.keyBuf)] = id
 	return id
@@ -651,11 +721,53 @@ func (a *TypeArena) intern(kind TypeKind, x, y, extra uint32) TypeId {
 	return id
 }
 
-// append adds n and returns its TypeId.
+// append adds n, with its flags, and returns its TypeId. A composite's
+// side table entry (record, union members, quote signature, enum
+// arguments) is added before its node, so the flags can read it.
 func (a *TypeArena) append(n TypeNode) TypeId {
+	n.Flags = a.nodeFlags(n)
 	id := TypeId(len(a.nodes))
 	a.nodes = append(a.nodes, n)
 	return id
+}
+
+// nodeFlags computes a new node's flags from its children's.
+func (a *TypeArena) nodeFlags(n TypeNode) uint8 {
+	var f uint8
+	of := func(t TypeId) {
+		if t != TidNothing {
+			f |= a.nodes[t].Flags
+		}
+	}
+	switch n.Kind {
+	case TKVar:
+		return NodeHasVar
+	case TKList, TKCommand, TKGrid, TKGridView, TKGridRow:
+		of(TypeId(n.A))
+	case TKUnion:
+		for _, m := range a.unionMembers[n.Extra] {
+			of(m)
+		}
+	case TKQuote:
+		sig := &a.quoteSigs[n.Extra]
+		for _, t := range sig.Inputs {
+			of(t)
+		}
+		for _, t := range sig.Outputs {
+			of(t)
+		}
+	case TKRecord:
+		rec := &a.records[n.Extra]
+		for _, fl := range rec.Fields {
+			of(fl.Type)
+		}
+		of(rec.Rest.Type)
+	case TKEnum:
+		for _, t := range a.enumArgs[n.Extra] {
+			of(t)
+		}
+	}
+	return f
 }
 
 // Len returns the current count of types in the arena (including primitives).
@@ -664,9 +776,11 @@ func (a *TypeArena) Len() int {
 }
 
 // flattenAndCanonicalizeUnion takes a list of arm types and returns a sorted,
-// deduplicated flat list. Nested unions are dissolved.
+// deduplicated flat list. Nested unions are dissolved. The list is the
+// arena's scratch space, valid until the next call.
 func (a *TypeArena) flattenAndCanonicalizeUnion(arms []TypeId) []TypeId {
-	out := make([]TypeId, 0, len(arms))
+	out := a.unionBuf[:0]
+	defer func() { a.unionBuf = out[:0] }()
 	for _, arm := range arms {
 		n := a.Node(arm)
 		if n.Kind == TKUnion {
@@ -773,6 +887,12 @@ func (t *NameTable) Clone() *NameTable {
 	return &NameTable{parent: t.parent, base: t.base, ids: maps.Clone(t.ids), names: slices.Clone(t.names)}
 }
 
+// resetOverlay empties an overlay made by Overlay, keeping its storage.
+func (t *NameTable) resetOverlay() {
+	clear(t.ids)
+	t.names = t.names[:0]
+}
+
 // Overlay returns a name table that starts with t's names and grows on its
 // own without copying them, as TypeArena.Overlay. t must not change
 // afterwards.
@@ -798,10 +918,8 @@ func (t *NameTable) Intern(s string) NameId {
 	if s == "" {
 		return NameNone
 	}
-	for p := t; p != nil; p = p.parent {
-		if id, ok := p.ids[s]; ok {
-			return id
-		}
+	if id, ok := t.Lookup(s); ok {
+		return id
 	}
 	id := t.Len()
 	t.names = append(t.names, s)
@@ -816,12 +934,15 @@ func (t *NameTable) Len() NameId {
 
 // Lookup returns the NameId for s if it has been interned.
 func (t *NameTable) Lookup(s string) (NameId, bool) {
-	for p := t; p != nil; p = p.parent {
-		if id, ok := p.ids[s]; ok {
+	// An overlay holds only names its parent lacks, so the order does not
+	// matter; the parent first, since most words are builtins and std's.
+	if t.parent != nil {
+		if id, ok := t.parent.Lookup(s); ok {
 			return id, true
 		}
 	}
-	return NameNone, false
+	id, ok := t.ids[s]
+	return id, ok
 }
 
 // Name returns the string for an id. Panics on out-of-range ids.

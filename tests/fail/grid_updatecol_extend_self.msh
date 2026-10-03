@@ -1,0 +1,4 @@
+# updateCol whose quotation extends the grid being updated: a checked failure.
+[| x; 1; 2 |] g!
+@g "x" (@g [| x; 5 |] extend drop) updateCol drop
+@g :3: :x? wl

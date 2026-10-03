@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go.lsp.dev/protocol"
 )
@@ -1772,5 +1774,135 @@ func TestHoverIndexMergesWalkerForms(t *testing.T) {
 	}
 	if len(sigs["swap"]) != 1 {
 		t.Errorf("swap hover has %d forms, want 1: %v", len(sigs["swap"]), sigs["swap"])
+	}
+}
+
+// TestDiagnosticsNewestTextOnly sends many edits at once: the checks of a
+// document do not overlap, the last publish is for the newest text, and a
+// document closed while its check runs gets nothing from that check.
+func TestDiagnosticsNewestTextOnly(t *testing.T) {
+	var buf bytes.Buffer
+	s := &lspServer{out: bufio.NewWriter(&buf), documents: map[protocol.DocumentURI]*lspDocument{}}
+	uri := protocol.DocumentURI("file:///edits.msh")
+	for i := range 50 {
+		text := "1 wl\n"
+		if i%2 == 0 || i == 49 {
+			text = "1 \"a\" +\n"
+		}
+		s.updateDocument(uri, text)
+	}
+	closed := protocol.DocumentURI("file:///closed.msh")
+	line := "1 2 + wl [1 2 3] (1 +) map len wl\n"
+	s.updateDocument(closed, strings.Repeat(line, 8000)+"1 \"a\" +\n")
+	s.closeDiagnostics(closed)
+	for {
+		s.diagMu.Lock()
+		busy := false
+		for _, st := range s.diag {
+			busy = busy || st.running
+		}
+		s.diagMu.Unlock()
+		if !busy {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var last []protocol.Diagnostic
+	n := 0
+	for _, part := range strings.Split(buf.String(), "Content-Length: ")[1:] {
+		body := part[strings.Index(part, "\r\n\r\n")+4:]
+		var msg struct {
+			Params protocol.PublishDiagnosticsParams `json:"params"`
+		}
+		if err := json.Unmarshal([]byte(body), &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Params.URI == closed {
+			t.Fatalf("a closed document got diagnostics: %+v", msg.Params.Diagnostics)
+		}
+		last = msg.Params.Diagnostics
+		n++
+	}
+	if len(last) != 1 {
+		t.Fatalf("the last publish is not for the newest text: %+v", last)
+	}
+	if n >= 50 {
+		t.Fatalf("%d publishes for 50 edits made at once; the checks were not coalesced", n)
+	}
+}
+
+// renameEdits renames the variable at (line, char) in text and gives each
+// edit as "line:start-end=text".
+func renameEdits(t *testing.T, text string, line, char uint32, name string) []string {
+	t.Helper()
+	uri := protocol.DocumentURI("file:///rename.msh")
+	doc := &lspDocument{}
+	doc.setText(text)
+	s := &lspServer{documents: map[protocol.DocumentURI]*lspDocument{uri: doc}, parser: NewMShellParser(NewLexer("", nil))}
+	edit, err := s.rename(protocol.RenameParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Position:     protocol.Position{Line: line, Character: char},
+		},
+		NewName: name,
+	})
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	var out []string
+	for _, e := range edit.Changes[uri] {
+		out = append(out, fmt.Sprintf("%d:%d-%d=%s", e.Range.Start.Line, e.Range.Start.Character, e.Range.End.Character, e.NewText))
+	}
+	return out
+}
+
+// TestRenameReachesEveryBody renames through if arms, match arm bindings
+// and bodies, `=>` bindings and prefix quotes, and counts columns in UTF-16
+// code units as LSP does.
+func TestRenameReachesEveryBody(t *testing.T) {
+	cases := []struct {
+		text       string
+		line, char uint32
+		want       string
+	}{
+		{"1 n!\ntrue if @n wl end\n@n wl\n", 0, 2, "[0:2-4=m! 1:8-10=@m 2:0-2=@m]"},
+		{"[1 2] k!\n[3] map. @k len + end drop\n", 0, 6, "[0:6-8=m! 1:9-11=@m]"},
+		{"[1 2] => [a b]\n@a @b + wl\n", 1, 1, "[0:10-11=m 1:0-2=@m]"},
+		{"5 just match just n : @n wl, none : end\n", 0, 23, "[0:18-19=m 0:22-24=@m]"},
+		{"\"😀\" n! @n wl\n", 0, 9, "[0:5-7=m! 0:8-10=@m]"},
+	}
+	for _, c := range cases {
+		got := fmt.Sprint(renameEdits(t, c.text, c.line, c.char, "m"))
+		if got != c.want {
+			t.Errorf("%q: got %s, want %s", c.text, got, c.want)
+		}
+	}
+}
+
+// TestDiagnosticColumnsUTF16 puts a diagnostic after characters outside the
+// basic plane at the UTF-16 position of its token.
+func TestDiagnosticColumnsUTF16(t *testing.T) {
+	s := &lspServer{}
+	diags := s.computeDiagnostics("\"😀😀😀\" 1 +\n")
+	if len(diags) != 1 {
+		t.Fatalf("diagnostics: %+v", diags)
+	}
+	if r := diags[0].Range; r.Start.Character != 11 || r.End.Character != 12 {
+		t.Fatalf("range %+v, want characters 11-12", r)
+	}
+}
+
+// TestDiagnosticsShowStartupErrors shows an error in the startup files'
+// declarations on every document, as the command line fails every script
+// on it.
+func TestDiagnosticsShowStartupErrors(t *testing.T) {
+	parsed, err := parseMShellInput("type U = [int] | [str]\n", &TokenFile{"init.msh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &lspServer{startupDecls: declarationItems(parsed.Items), startupErrs: []string{"the init file x does not parse"}}
+	diags := s.computeDiagnostics("1 wl\n")
+	if len(diags) != 2 || !strings.Contains(diags[0].Message, "does not parse") || !strings.Contains(diags[1].Message, "init.msh") {
+		t.Fatalf("diagnostics: %+v", diags)
 	}
 }

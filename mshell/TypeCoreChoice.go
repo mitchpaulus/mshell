@@ -178,7 +178,7 @@ func (c *coreChecker) choiceFits(sig *coreSig, ch *coreChoice) bool {
 		return false
 	}
 	for j, t := range sig.outs {
-		if sig.genOut&(1<<j) != 0 {
+		if sig.genOut&genBit(j) != 0 {
 			t = c.rel.SubstParams(t, gens)
 		}
 		if !c.uni.Unify(ch.outs[j], t) {

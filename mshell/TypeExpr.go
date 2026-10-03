@@ -20,6 +20,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // tokDesc returns a short human-readable description of a token, used
@@ -618,7 +619,7 @@ func (parser *MShellParser) parseTypeNamed(errs *[]TypeError) MShellParseItem {
 	node := &TypeNamed{Tok: tok, Name: tok.Lexeme}
 	if tok.Lexeme == "Maybe" {
 		parser.applyMaybeArgs(node, errs)
-	} else if parser.curr.Type == LEFT_SQUARE_BRACKET && parser.curr.Start == tok.Start+len(tok.Lexeme) {
+	} else if parser.curr.Type == LEFT_SQUARE_BRACKET && parser.curr.Start == tok.Start+utf8.RuneCountInString(tok.Lexeme) {
 		// Arguments of a generic enum, written against the name: `Box[int]`,
 		// `Pair[int str]`. `Foo [int]` with a space is a name and then a list.
 		parser.NextToken() // consume [

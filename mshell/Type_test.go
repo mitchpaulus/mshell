@@ -229,3 +229,35 @@ func TestNameTableOverlay(t *testing.T) {
 		t.Errorf("two overlays of one base should number their names alike")
 	}
 }
+
+// TestFormatRecordRemainders pins how messages and hover print what a
+// record says about keys it does not name (plan question 19): a written
+// shape type prints as written; a literal's exact type is marked `exact`,
+// which is never written; a grid's known schema needs no mark.
+func TestFormatRecordRemainders(t *testing.T) {
+	a, names := NewTypeArena(), NewNameTable()
+	fa := RecordField{Name: names.Intern("a"), Status: FieldRequired, Type: TidInt}
+	open := a.MakeRecord([]RecordField{fa}, RecordField{Status: FieldOpen})
+	exact := a.MakeRecord([]RecordField{fa}, RecordField{Status: FieldAbsent})
+	cases := []struct {
+		t    TypeId
+		want string
+	}{
+		{open, "{a: int}"},
+		{exact, "exact {a: int}"},
+		{a.MakeRecord(nil, RecordField{Status: FieldOpen}), "{}"},
+		{a.MakeRecord(nil, RecordField{Status: FieldAbsent}), "exact {}"},
+		{a.MakeRecord([]RecordField{fa}, RecordField{Status: FieldOptional, Type: TidStr}), "{a: int, *: str}"},
+		{a.MakeStrDict(TidInt), "{str: int}"},
+		{a.MakeGridOf(TKGrid, exact), "Grid{a: int}"},
+		{a.MakeGridOf(TKGrid, open), "Grid{a: int, ...}"},
+		{a.MakeMaybeEnum(TidBottom), "none"},
+		{a.MakeList(a.MakeMaybeEnum(TidBottom)), "[none]"},
+		{a.MakeMaybeEnum(TidInt), "Maybe[int]"},
+	}
+	for _, c := range cases {
+		if got := FormatType(a, names, c.t); got != c.want {
+			t.Errorf("got %s, want %s", got, c.want)
+		}
+	}
+}

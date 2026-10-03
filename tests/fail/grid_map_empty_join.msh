@@ -1,0 +1,3 @@
+# An empty grid mapped has no columns, so a row a left join adds reads none
+# there, a checked failure (it used to keep the empty grid's own column x).
+[| k; 5 |] [| x; |] (drop {y: 1}) map (drop 1) (drop 1) leftJoin :0: :x ? 1 + wl

@@ -93,6 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Write `cond (value return) iff` as `cond if value return end`, and leave a loop early with `break`.
 - The type checker rejects a `return` that leaves more values than the definition declares,
   such as `def name (-- str) 5 "a" return end`.
+- `map` on a grid with no rows gives a grid with no columns. Previously it kept the input grid's columns.
+- The type checker is about twice as fast, and checking a file again, as the language server does on every edit, allocates almost nothing.
+  Deeply nested quotations no longer take quadratic time.
 
 ### Security
 
@@ -106,6 +109,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `map` on a grid, when a row the quotation gives lacks a column the first row has, is an error.
+  Previously the cell was left empty, which crashed later or read as zero.
+- `updateCol` whose quotation adds rows to the grid it is updating is an error. Previously it crashed.
+- The language server:
+  - publishes diagnostics only for a document's newest text, and none for a closed document.
+    Previously an older check could finish last and leave errors for text that no longer existed,
+    and fast typing in a large document could use gigabytes of memory.
+  - puts diagnostics, hover, completion and rename at the right column on lines with characters such as emoji.
+  - renames a variable everywhere in its scope: inside `if` and `match` arms, prefix quotations, and match and `=>` bindings.
+  - fixes every `new` mark of a large file at once in a fraction of a second. Previously it took seconds and blocked other requests.
+  - shows errors in the startup files, as the command line does.
 - `chunk` with a size of 0 or less exits with an error. Previously it never finished.
 - `ssh` completion after an option it has no list for offers the options and hosts. Previously it gave back a quotation instead of a list.
 - `loop` on a stored quotation runs it in the variables it captured, as `x` and `each` do.

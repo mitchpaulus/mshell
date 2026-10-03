@@ -199,10 +199,9 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 	defer func() { c.listDepth = depth }()
 	mark := len(c.saved)
 	entry := c.saveStack()
-	var runs []savedRun
-	var arms []coreArm
+	am := c.armBegin()
+	defer c.armEnd(am)
 	daMark := len(c.setLog)
-	var sets [][]NameId
 	for _, arm := range m.Arms {
 		// Padded, so `below` and the escape check read the same stack.
 		entry = c.padRun(entry)
@@ -213,7 +212,7 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 			c.saved = c.saved[:mark]
 			return
 		}
-		arms = append(arms, a)
+		c.armBuf = append(c.armBuf, a)
 		below := len(c.stack) - 1
 		if a.is != TidNothing && !c.validates(subj, a.is, a.isTok) {
 			// Validated in place, the value is new only if it was.
@@ -255,22 +254,22 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 			c.recordEscape(k, tok, entry, below)
 		}
 		if !c.diverged {
-			sets = append(sets, c.daSince(daMark))
+			c.keepSet(daMark)
 		}
 		run := c.saveArm()
-		run.label = "the arm `" + formatPatternSnippet(arm.Pattern) + "`"
+		run.pat = arm.Pattern
 		run.line = tok.Line
 		if len(arm.Pattern) > 0 {
 			run.line = arm.Pattern[0].GetStartToken().Line
 		}
-		runs = append(runs, run)
+		c.keepRun(run)
 	}
-	c.daJoin(daMark, sets)
-	if !m.Assertive && !c.exhaustive(arms, t) {
+	c.daJoinSince(daMark, am)
+	if !m.Assertive && !c.exhaustive(c.armBuf[am.arms:], t) {
 		c.errs = append(c.errs, TypeError{Kind: TErrNonExhaustiveMatch, Pos: tok,
 			Hint: "the arms do not cover every " + c.format(t) + "; add the missing cases or a `_` arm"})
 	}
-	c.joinArms(runs, tok)
+	c.joinArms(c.runsSince(am), tok)
 	c.saved = c.saved[:mark]
 }
 

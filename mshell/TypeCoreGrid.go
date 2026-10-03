@@ -801,8 +801,16 @@ func (c *coreChecker) gridMap(tok Token) bool {
 			}
 		}
 	case TKGridRow:
-		if _, r, ok := c.gridType(bt); ok {
+		// The result's columns are the first row's; a later row from a
+		// grid without an optional column leaves holes in it, so only a
+		// schema whose every column is required carries over.
+		if _, r, ok := c.gridType(bt); ok && c.exactSchema(r) {
 			out = r
+			for _, f := range c.schemaOf(r).Fields {
+				if f.Status != FieldRequired {
+					out = open
+				}
+			}
 		}
 	}
 	c.pushNewGrid(out)

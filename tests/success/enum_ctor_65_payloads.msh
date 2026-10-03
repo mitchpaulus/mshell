@@ -1,0 +1,3 @@
+# A member with 65 payloads, the last generic: it is instantiated at the call.
+enum Big[a] = big int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int int a end
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 "x" big match big _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ v : @v wl end

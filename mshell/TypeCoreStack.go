@@ -59,6 +59,10 @@ type coreSig struct {
 	// generic that no input mentions. Its body is not checked, so nothing
 	// says what that output is; a call is an error (TypeCore.go).
 	freeOut bool
+	// broken is set for a def whose signature has an error, reported
+	// there: its body is not checked against it, and a call to it stops
+	// checking the unit, so the one mistake gives one error.
+	broken bool
 }
 
 // litListTag marks a slot's lit as a list of literal names.
@@ -85,17 +89,25 @@ func newCoreSig(ar *TypeArena, p coreSigParts) coreSig {
 	s := coreSig{ins: p.ins, outs: p.outs, gens: p.gens, newOut: p.newOut, diverges: p.diverges}
 	if len(p.gens) > 0 {
 		for i, t := range p.ins {
-			if i < 64 && typeMentions(ar, t, TKParam) {
-				s.genIn |= 1 << i
+			if typeMentions(ar, t, TKParam) {
+				s.genIn |= genBit(i)
 			}
 		}
 		for i, t := range p.outs {
-			if i < 64 && typeMentions(ar, t, TKParam) {
-				s.genOut |= 1 << i
+			if typeMentions(ar, t, TKParam) {
+				s.genOut |= genBit(i)
 			}
 		}
 	}
 	return s
+}
+
+// genBit is position i's bit in genIn or genOut. Bit 63 stands for every
+// position from 63 on (an enum member may have more payloads than that),
+// so a later position that mentions a generic is never skipped; one that
+// does not is instantiated to itself.
+func genBit(i int) uint64 {
+	return 1 << min(i, 63)
 }
 
 // coreTable holds the builtin signatures, by name and by token type.

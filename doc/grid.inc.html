@@ -362,7 +362,7 @@ GridRows support dictionary-like access:
         </tr>
         <tr id="func-map">
             <td><code>map</code></td>
-            <td>Transform rows using a quotation. The quotation receives a GridRow and should return a GridRow or dict. Returns a new Grid.</td>
+            <td>Transform rows using a quotation. The quotation receives a GridRow and should return a GridRow or dict. Returns a new Grid. On a grid with no rows, the new Grid has no columns.</td>
             <td><code>(Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- <span class="sig-type sig-type-gridrow">GridRow</span>|<span class="sig-type sig-type-dict">dict</span>) -- Grid)</code></td>
         </tr>
         <tr id="func-each">

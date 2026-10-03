@@ -46,16 +46,73 @@ func (c *coreChecker) daSince(mark int) []NameId {
 // daJoin takes back everything set since mark, then sets what every one of
 // sets set: the arms of a branch that go on.
 func (c *coreChecker) daJoin(mark int, sets [][]NameId) {
+	c.daJoinN(mark, len(sets), func(i int) []NameId { return sets[i] })
+}
+
+// daSpan is the variables one arm of a branch set: c.daNames[start:end].
+type daSpan struct {
+	start, end int32
+}
+
+// armMark is where a branch's entries start on the scratch stacks.
+type armMark struct {
+	runs, arms, spans, names int
+}
+
+// armBegin marks the scratch stacks for a branch; armEnd truncates them
+// back. An arm adds its entries after the nested branches inside it have
+// truncated theirs, so a branch's entries are contiguous.
+func (c *coreChecker) armBegin() armMark {
+	return armMark{runs: len(c.runBuf), arms: len(c.armBuf), spans: len(c.daSpans), names: len(c.daNames)}
+}
+
+func (c *coreChecker) armEnd(m armMark) {
+	c.runBuf = c.runBuf[:m.runs]
+	c.armBuf = c.armBuf[:m.arms]
+	c.daSpans = c.daSpans[:m.spans]
+	c.daNames = c.daNames[:m.names]
+}
+
+func (c *coreChecker) keepRun(r savedRun) {
+	c.runBuf = append(c.runBuf, r)
+}
+
+// runsSince is the branch's saved arms. Its capacity is cut, so nothing
+// appended through it can reach the entries above.
+func (c *coreChecker) runsSince(m armMark) []savedRun {
+	return c.runBuf[m.runs:len(c.runBuf):len(c.runBuf)]
+}
+
+// keepSet records the variables set since mark by an arm that goes on.
+func (c *coreChecker) keepSet(mark int) {
+	start := len(c.daNames)
+	c.daNames = append(c.daNames, c.setLog[mark:]...)
+	c.daSpans = append(c.daSpans, daSpan{int32(start), int32(len(c.daNames))})
+}
+
+// keepNoSet records an arm that goes on and sets nothing.
+func (c *coreChecker) keepNoSet() {
+	n := int32(len(c.daNames))
+	c.daSpans = append(c.daSpans, daSpan{n, n})
+}
+
+// daJoinSince is daJoin over the sets the branch marked m kept.
+func (c *coreChecker) daJoinSince(mark int, m armMark) {
+	spans := c.daSpans[m.spans:]
+	c.daJoinN(mark, len(spans), func(i int) []NameId { return c.daNames[spans[i].start:spans[i].end] })
+}
+
+func (c *coreChecker) daJoinN(mark int, n int, set func(int) []NameId) {
 	c.daRestore(mark)
-	if len(sets) == 0 {
+	if n == 0 {
 		return
 	}
-	for _, name := range sets[0] {
+	for _, name := range set(0) {
 		inAll := true
-		for _, s := range sets[1:] {
+		for i := 1; i < n; i++ {
 			found := false
-			for _, n := range s {
-				if n == name {
+			for _, x := range set(i) {
+				if x == name {
 					found = true
 					break
 				}

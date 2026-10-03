@@ -125,6 +125,14 @@ func NewRelations(arena *TypeArena) *Relations {
 	}
 }
 
+// reset forgets every answer, for a new check whose arena reuses ids.
+func (r *Relations) reset() {
+	clear(r.subKnown)
+	clear(r.retypeKnown)
+	r.work, r.active = 0, 0
+	r.pairBuf = r.pairBuf[:0]
+}
+
 // begin and end bracket every exported query, so the work limit counts a
 // whole top-level question, including the queries it starts.
 func (r *Relations) begin() {

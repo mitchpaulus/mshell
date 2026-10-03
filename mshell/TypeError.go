@@ -292,6 +292,10 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 	case TKEnum:
 		decl := arena.enumDecls[n.A]
 		args := arena.enumArgs[n.Extra]
+		if n.A == EnumMaybe && args[0] == TidBottom {
+			// The type of `none`: a Maybe that can hold nothing else.
+			return "none"
+		}
 		if len(args) == 0 {
 			return names.Name(decl.Name)
 		}
@@ -343,22 +347,29 @@ func formatRecord(arena *TypeArena, names *NameTable, r RecordType) string {
 	case FieldDeletable:
 		return "{" + body + " | str: " + FormatType(arena, names, r.Rest.Type) + "}"
 	case FieldAbsent:
-		return "{" + body + " | exact}"
+		// A literal's type: these keys and no others. No type a user
+		// writes means that, so it is marked; it is printed only.
+		return "exact {" + body + "}"
 	case FieldRequired:
 		return "{" + body + " | *!: " + FormatType(arena, names, r.Rest.Type) + "}"
 	}
-	return "{" + body + " | open}"
+	// Other keys may exist, unknown: what a written shape type means.
+	return "{" + body + "}"
 }
 
 // formatSchema prints a core grid's schema: its columns, and what other
-// columns there may be. A known schema is exact; the unknown one is printed
-// as nothing at all, so `Grid{| open}` is `Grid`.
+// columns there may be. A known schema, the usual case, is the columns in
+// braces (`Grid{a: int}`); one that may have other columns ends in `...`;
+// the unknown one is printed as nothing at all, so the type is `Grid`.
 func formatSchema(arena *TypeArena, names *NameTable, r RecordType) string {
-	if len(r.Fields) == 0 && r.Rest.Status == FieldOpen {
-		return ""
-	}
-	if r.Rest.Status == FieldAbsent {
-		return strings.Replace(formatRecord(arena, names, r), " | exact}", "}", 1)
+	switch r.Rest.Status {
+	case FieldOpen:
+		if len(r.Fields) == 0 {
+			return ""
+		}
+		return strings.TrimSuffix(formatRecord(arena, names, r), "}") + ", ...}"
+	case FieldAbsent:
+		return strings.TrimPrefix(formatRecord(arena, names, r), "exact ")
 	}
 	return formatRecord(arena, names, r)
 }

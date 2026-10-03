@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // The type checker: the checker described in ai/type-core-calculus.typ
@@ -38,6 +39,9 @@ type CoreBase struct {
 	ctors    map[NameId]*coreCtor
 	declared map[NameId]Token
 	declErrs []TypeError
+	// pool holds checkers that finished a check, to start the next one
+	// with their storage (diagnose).
+	pool sync.Pool
 }
 
 // NewCoreBase builds the base: the builtin table, the signatures of
@@ -123,8 +127,16 @@ func CoreTypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition, decls
 // and its `dbg` snapshots; ok is whether there were no errors. Errors in
 // the startup files' declarations come first, with their file.
 func (b *CoreBase) Check(file *MShellFile) (out []string, ok bool) {
-	diags, arena, names := b.Diagnostics(file)
-	out = make([]string, 0, len(b.declErrs)+len(diags))
+	b.diagnose(file, func(diags []TypeError, arena *TypeArena, names *NameTable) {
+		out, ok = b.formatCheck(diags, arena, names)
+	})
+	return out, ok
+}
+
+// StartupErrors are the errors in the startup files' declarations, each
+// naming its file. Every check reports them.
+func (b *CoreBase) StartupErrors() []string {
+	var out []string
 	for _, e := range b.declErrs {
 		where := ""
 		if e.Pos.TokenFile != nil {
@@ -132,6 +144,12 @@ func (b *CoreBase) Check(file *MShellFile) (out []string, ok bool) {
 		}
 		out = append(out, where+e.Format(b.arena, b.names))
 	}
+	return out
+}
+
+func (b *CoreBase) formatCheck(diags []TypeError, arena *TypeArena, names *NameTable) (out []string, ok bool) {
+	out = make([]string, 0, len(b.declErrs)+len(diags))
+	out = append(out, b.StartupErrors()...)
 	ok = len(b.declErrs) == 0
 	for _, e := range diags {
 		switch {
@@ -164,6 +182,62 @@ func (b *CoreBase) Diagnostics(file *MShellFile) ([]TypeError, *TypeArena, *Name
 	c := b.newChecker()
 	c.checkFile(file)
 	return c.errs, c.arena, c.names
+}
+
+// diagnose is Diagnostics with a checker that a finished check left in the
+// pool, reset: the overlays and buffers keep their storage, so a check
+// repeated on every edit allocates little. The errors, arena and names
+// are valid only inside fn; the checker goes back to the pool after it.
+// Checks may run at the same time; each takes its own checker.
+func (b *CoreBase) diagnose(file *MShellFile, fn func([]TypeError, *TypeArena, *NameTable)) {
+	c, _ := b.pool.Get().(*coreChecker)
+	if c == nil {
+		c = b.newChecker()
+	} else {
+		c.reset(b)
+	}
+	c.checkFile(file)
+	fn(c.errs, c.arena, c.names)
+	b.pool.Put(c)
+}
+
+// reset makes a checker that finished a check on b ready for another:
+// the overlays go back to the base, the tables copied from the base are
+// copied again, and every buffer is emptied but keeps its storage.
+// vars is kept with varGen counting on, so no old entry is current.
+func (c *coreChecker) reset(b *CoreBase) {
+	c.arena.resetOverlay()
+	c.names.resetOverlay()
+	c.rel.reset()
+	c.subst.Reset()
+	c.uni.pairs = c.uni.pairs[:0]
+	clear(c.defs)
+	refill(c.ctors, b.ctors)
+	refill(c.declared, b.declared)
+	r := c.res
+	refill(r.aliases, b.aliases)
+	refill(r.enums, b.enums)
+	c.res = coreResolver{arena: r.arena, names: r.names, rel: r.rel, aliases: r.aliases, enums: r.enums,
+		self: -1, errs: r.errs[:0], unions: r.unions[:0]}
+	*c = coreChecker{
+		arena: c.arena, names: c.names, rel: c.rel, subst: c.subst, uni: c.uni, res: c.res, table: b.table,
+		defs: c.defs, ctors: c.ctors, declared: c.declared,
+		vars: c.vars, varGen: c.varGen,
+		errs: c.errs[:0], origins: c.origins[:0], stack: c.stack[:0], retOuts: c.retOuts[:0],
+		unitVars: c.unitVars[:0], firstLoads: c.firstLoads[:0], unwraps: c.unwraps[:0], dbgs: c.dbgs[:0],
+		stores: c.stores[:0], saved: c.saved[:0], pending: c.pending[:0], deferred: c.deferred[:0],
+		choices: c.choices[:0], escapes: c.escapes[:0], genBuf: c.genBuf[:0], parts: c.parts[:0],
+		litLists: c.litLists[:0], calls: c.calls[:0], exitShared: c.exitShared[:0],
+		setLog: c.setLog[:0], daLoops: c.daLoops[:0], unsetReads: c.unsetReads[:0],
+		runBuf: c.runBuf[:0], armBuf: c.armBuf[:0], daNames: c.daNames[:0], daSpans: c.daSpans[:0],
+		liveBuf: c.liveBuf[:0],
+	}
+}
+
+// refill makes dst a copy of src, keeping dst's storage.
+func refill[K comparable, V any](dst, src map[K]V) {
+	clear(dst)
+	maps.Copy(dst, src)
 }
 
 func (b *CoreBase) newChecker() *coreChecker {
@@ -333,9 +407,6 @@ type coreChecker struct {
 	// assertive is set while the patterns of a `=>` are read.
 	assertive bool
 	escapes       []coreEscape
-	// mentionsVar caches, per TypeId, whether a type mentions a
-	// unification variable: 0 not yet known, 1 no, 2 yes.
-	mentionsVar []uint8
 	genBuf      []TypeId // the generics stack (instantiate)
 	// parts holds the unit's partly new marks (TypeCorePartial.go).
 	parts []corePart
@@ -358,6 +429,16 @@ type coreChecker struct {
 	daLoops    []daLoop
 	later      int
 	unsetReads []coreUnsetRead
+
+	// Scratch stacks for branches (armBegin): the saved runs of the arms,
+	// the arms of a match, the variables each arm set, and joinArms's
+	// arms that go on. A branch pushes above its mark and truncates back
+	// to it when done, so nested branches share them.
+	runBuf  []savedRun
+	armBuf  []coreArm
+	daNames []NameId
+	daSpans []daSpan
+	liveBuf []savedRun
 }
 
 // ---------------------------------------------------------------------------
@@ -371,9 +452,12 @@ func (c *coreChecker) checkFile(file *MShellFile) {
 	c.declareAll(file.Items, defNames)
 	for i := range file.Definitions {
 		def := &file.Definitions[i]
+		nerr := len(c.res.errs)
 		parts := c.res.resolveSig(def.Inputs, def.Outputs)
+		broken := len(c.res.errs) > nerr
 		c.takeResolveErrors()
 		sig := newCoreSig(c.arena, parts)
+		sig.broken = broken
 		c.defs[c.names.Intern(def.Name)] = &sig
 		if e := completionSigError(c.arena, c.names, c.rel, c.table, def, &sig); e != nil {
 			c.errs = append(c.errs, *e)
@@ -407,8 +491,7 @@ func (c *coreChecker) beginUnit() {
 	c.choices, c.choiceVersion = c.choices[:0], 0
 	c.escapes = c.escapes[:0]
 	c.brk, c.cont, c.brkSeen, c.infer = coreLoopCtx{}, coreLoopCtx{}, false, nil
-	c.subst.bound = c.subst.bound[:0]
-	c.subst.root = nil
+	c.subst.Reset()
 	c.uni.pairs = c.uni.pairs[:0]
 	c.diverged, c.abandoned = false, false
 	c.floor, c.listDepth = 0, 0
@@ -493,14 +576,14 @@ func (c *coreChecker) checkBody(def *MShellDefinition, sig *coreSig) []TypeId {
 	}
 	c.stack = c.stack[:0]
 	for i, t := range sig.ins {
-		if sig.genIn&(1<<i) != 0 {
+		if sig.genIn&genBit(i) != 0 {
 			t = c.rel.SubstParams(t, rigid)
 		}
 		c.stack = append(c.stack, coreSlot{t: t})
 	}
 	outs := make([]TypeId, len(sig.outs))
 	for i, t := range sig.outs {
-		if sig.genOut&(1<<i) != 0 {
+		if sig.genOut&genBit(i) != 0 {
 			t = c.rel.SubstParams(t, rigid)
 		}
 		outs[i] = t
@@ -599,10 +682,19 @@ func (c *coreChecker) step(item MShellParseItem) {
 	case *MShellParseQuote:
 		c.pushQuote(it.Items, it.StartToken)
 	case *MShellParsePrefixQuote:
-		// `.each ... end` is `(...) each`.
+		// `each. ... end` is `(...) each`. The name is the lexeme without
+		// its one trailing dot, as the runtime reads it.
 		c.pushQuote(it.Items, it.StartToken)
 		call := it.StartToken
-		call.Type, call.Lexeme = LITERAL, strings.Trim(call.Lexeme, ".")
+		call.Type, call.Lexeme = LITERAL, strings.TrimSuffix(call.Lexeme, ".")
+		if call.Lexeme == "return" {
+			// The runtime calls a prefix quote's word as a def, a
+			// constructor or a builtin, and return is none of them.
+			c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: it.StartToken,
+				Hint: "`return.` is not a word: return takes no quote; write `return` on its own"})
+			c.abandoned = true
+			return
+		}
 		c.word(call)
 	case *MShellParseMatchBlock:
 		c.matchBlock(it)
@@ -735,6 +827,18 @@ func (c *coreChecker) token(tok Token) {
 			}
 			return
 		}
+		switch tok.Type {
+		case TYPEINT, TYPEFLOAT, TYPEBOOL, STR, DOUBLEDASH:
+			// Type syntax where a word should be, as in a quote written
+			// like its type: `(int -- int)`. The runtime refuses it too.
+			hint := "'" + tok.Lexeme + "' is a type, not a word: types are written in a def signature, after `as` or `tryAs`, or as a match pattern"
+			if tok.Type == DOUBLEDASH {
+				hint = "'--' separates the inputs and outputs of a type, not words: to give a quote a type, write `as (int -- int)` after it"
+			}
+			c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok, Hint: hint})
+			c.abandoned = true
+			return
+		}
 		c.unsupported(tok, "'"+tok.Lexeme+"'")
 	}
 }
@@ -752,8 +856,13 @@ func (c *coreChecker) word(tok Token) {
 		c.doReturn(tok)
 		return
 	}
-	if id, ok := c.names.Lookup(tok.Lexeme); ok {
+	id, named := c.names.Lookup(tok.Lexeme)
+	if named {
 		if sig := c.defs[id]; sig != nil {
+			if sig.broken {
+				c.abandoned = true
+				return
+			}
 			if c.curDef != nil {
 				c.calls = append(c.calls, sig)
 			}
@@ -777,7 +886,7 @@ func (c *coreChecker) word(tok Token) {
 			return
 		}
 	}
-	if id, ok := c.names.Lookup(tok.Lexeme); ok {
+	if named {
 		if sigs := c.table.name(id); sigs != nil {
 			c.call(sigs, tok)
 			return
@@ -1072,23 +1181,9 @@ func (c *coreChecker) hasVars(t TypeId) bool {
 }
 
 // mentionsVars reports whether t mentions a unification variable at all,
-// solved or not. Types never change, so the answer is cached per TypeId.
+// solved or not (a flag set when the type was made).
 func (c *coreChecker) mentionsVars(t TypeId) bool {
-	for int(t) >= len(c.mentionsVar) {
-		c.mentionsVar = append(c.mentionsVar, 0)
-	}
-	switch c.mentionsVar[t] {
-	case 1:
-		return false
-	case 2:
-		return true
-	}
-	m := typeMentions(c.arena, t, TKVar)
-	c.mentionsVar[t] = 1
-	if m {
-		c.mentionsVar[t] = 2
-	}
-	return m
+	return c.arena.HasVarNode(t)
 }
 
 // freshish reports whether a slot's value is fresh, or has a type with no
@@ -1639,7 +1734,7 @@ func (c *coreChecker) eachInput(sig *coreSig, gens []TypeId, arg func(i int) cor
 			if waiting != (pass == 2) || (!waiting && bare != (pass == 1)) {
 				continue
 			}
-			if sig.genIn&(1<<i) != 0 {
+			if sig.genIn&genBit(i) != 0 {
 				want = c.rel.SubstParams(want, gens)
 			}
 			f(i, want)
@@ -1731,7 +1826,7 @@ func (c *coreChecker) apply(sig *coreSig, tok Token) {
 		return
 	}
 	for j, t := range sig.outs {
-		if sig.genOut&(1<<j) != 0 {
+		if sig.genOut&genBit(j) != 0 {
 			t = c.rel.SubstParams(t, gens)
 		}
 		fresh := sig.newOut&(1<<j) != 0 || (sig.keepOut&(1<<j) != 0 && inputsFresh)
@@ -2003,11 +2098,12 @@ func (c *coreChecker) ifBlock(b *MShellParseIfBlock) {
 	defer func() { c.listDepth = depth }()
 	mark := len(c.saved)
 	entry := c.saveStack()
-	var arms []savedRun
+	am := c.armBegin()
+	defer c.armEnd(am)
 	// Definite assignment: an arm starts with what the conditions before it
 	// set, and the if keeps what every arm that goes on set.
 	daMark := len(c.setLog)
-	var condSets, armSets [][]NameId
+	var condSets [][]NameId
 	label := "the `if` branch"
 	runArm := func(body []MShellParseItem) {
 		line := tok.Line
@@ -2024,9 +2120,9 @@ func (c *coreChecker) ifBlock(b *MShellParseIfBlock) {
 		if !c.abandoned {
 			run := c.saveStack()
 			run.diverged, run.label, run.line = c.diverged, label, line
-			arms = append(arms, run)
+			c.keepRun(run)
 			if !c.diverged {
-				armSets = append(armSets, c.daSince(daMark))
+				c.keepSet(daMark)
 			}
 		}
 		c.diverged = false
@@ -2070,8 +2166,8 @@ func (c *coreChecker) ifBlock(b *MShellParseIfBlock) {
 		}
 	}
 	if !c.abandoned {
-		c.joinArms(arms, tok)
-		c.daJoin(daMark, armSets)
+		c.joinArms(c.runsSince(am), tok)
+		c.daJoinSince(daMark, am)
 	}
 	c.saved = c.saved[:mark]
 }
@@ -2102,8 +2198,10 @@ type savedRun struct {
 	start, end int
 	diverged   bool
 	// label and line name the arm in a message about a union its join
-	// made: "the `else` branch", and the line where it starts.
+	// made: "the `else` branch", and the line where it starts. A match
+	// arm is named by its pattern, pat, made into text only for a message.
 	label string
+	pat   []MShellParseItem
 	line  int
 	// infer and ins are the quote being typed on its own when the stack
 	// was saved, and how many inputs it had then (see padRun).
@@ -2154,12 +2252,16 @@ func (c *coreChecker) restoreStack(r savedRun) {
 
 // joinArms sets the stack to the join of the arms that did not diverge.
 func (c *coreChecker) joinArms(arms []savedRun, tok Token) {
-	var live []savedRun
+	liveMark := len(c.liveBuf)
+	defer func() { c.liveBuf = c.liveBuf[:liveMark] }()
 	for _, a := range arms {
 		if !a.diverged {
-			live = append(live, c.padRun(a))
+			c.liveBuf = append(c.liveBuf, c.padRun(a))
 		}
 	}
+	// Typing a waiting literal below may check another branch, which
+	// uses liveBuf above this one's.
+	live := c.liveBuf[liveMark:len(c.liveBuf):len(c.liveBuf)]
 	if len(live) == 0 {
 		c.diverged = true
 		return
@@ -2226,14 +2328,24 @@ type coreOrigin struct {
 
 type coreOriginArm struct {
 	label string
+	pat   []MShellParseItem
 	line  int
 	t     TypeId
+}
+
+// armName is the name of an arm in a message: label, or the match arm
+// whose pattern is pat.
+func armName(label string, pat []MShellParseItem) string {
+	if pat != nil {
+		return "the arm `" + formatPatternSnippet(pat) + "`"
+	}
+	return label
 }
 
 // noteOrigins records, for each slot where the join of the arms is a
 // union that no arm left alone, which arm left which type.
 func (c *coreChecker) noteOrigins(live []savedRun, tok Token) {
-	if len(live) < 2 || live[0].label == "" {
+	if len(live) < 2 || (live[0].label == "" && live[0].pat == nil) {
 		return
 	}
 	for i := range c.stack {
@@ -2255,7 +2367,7 @@ func (c *coreChecker) noteOrigins(live []savedRun, tok Token) {
 		}
 		o := coreOrigin{tok: tok, u: u}
 		for _, a := range live {
-			o.arms = append(o.arms, coreOriginArm{label: a.label, line: a.line, t: c.saved[a.start+i].t})
+			o.arms = append(o.arms, coreOriginArm{label: a.label, pat: a.pat, line: a.line, t: c.saved[a.start+i].t})
 		}
 		c.origins = append(c.origins, o)
 		c.stack[i].origin = uint32(len(c.origins))
@@ -2278,7 +2390,7 @@ func (c *coreChecker) originHint(s coreSlot) string {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		b.WriteString(" " + a.label + " (line " + strconv.Itoa(a.line) + ") leaves " + c.format(a.t))
+		b.WriteString(" " + armName(a.label, a.pat) + " (line " + strconv.Itoa(a.line) + ") leaves " + c.format(a.t))
 	}
 	return b.String()
 }
