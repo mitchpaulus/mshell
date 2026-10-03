@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // The type checker: the checker described in ai/type-core-calculus.typ
@@ -56,6 +57,53 @@ type CoreBase struct {
 	pool sync.Pool
 }
 
+// coreBuiltins is the part of a base that depends only on the binary: an
+// arena and name table holding the built-in aliases, and the builtin table.
+// A base adds the startup files' declarations and signatures to the same
+// arena, so each coreBuiltins is used by one base.
+type coreBuiltins struct {
+	arena *TypeArena
+	names *NameTable
+	res   *coreResolver
+	table *coreTable
+}
+
+func newCoreBuiltins() *coreBuiltins {
+	arena, names := NewTypeArena(), NewNameTable()
+	res := &coreResolver{arena: arena, names: names, rel: NewRelations(arena), aliases: map[NameId]TypeId{}, self: -1}
+	res.declareJson()
+	res.declareHtmlNode()
+	res.builtin = true
+	table := buildCoreTable(res)
+	res.builtin = false
+	return &coreBuiltins{arena: arena, names: names, res: res, table: table}
+}
+
+// prebuilt receives the builtins PrebuildCoreBuiltins is building, for
+// the next base to take.
+var prebuilt atomic.Pointer[chan *coreBuiltins]
+
+// PrebuildCoreBuiltins starts building the builtin table on another
+// goroutine, for the next base. The shell calls it before it reads the
+// script and loads the startup files, which take longer and do not depend
+// on it, so a checked script does not wait for the table: in a new process,
+// building it takes 1.3 ms or more, most of the checker's cost for a short
+// script.
+func PrebuildCoreBuiltins() {
+	ch := make(chan *coreBuiltins, 1)
+	go func() { ch <- newCoreBuiltins() }()
+	prebuilt.Store(&ch)
+}
+
+// takeCoreBuiltins returns the prebuilt builtins if there are any, and
+// builds them otherwise.
+func takeCoreBuiltins() *coreBuiltins {
+	if ch := prebuilt.Swap(nil); ch != nil {
+		return <-*ch
+	}
+	return newCoreBuiltins()
+}
+
 // NewCoreBase builds the base: the builtin table, the startup files'
 // declarations, decls, and the signatures of their defs, stdlibDefs, whose
 // bodies are checked too (checkStartupBodies).
@@ -67,13 +115,8 @@ func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBa
 // checked only as checks reach them (checkLazy), which suits a base used
 // for one check: a script uses few of the standard library's defs.
 func newCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem, lazy bool) *CoreBase {
-	arena, names := NewTypeArena(), NewNameTable()
-	res := &coreResolver{arena: arena, names: names, rel: NewRelations(arena), aliases: map[NameId]TypeId{}, self: -1}
-	res.declareJson()
-	res.declareHtmlNode()
-	res.builtin = true
-	table := buildCoreTable(res)
-	res.builtin = false
+	bi := takeCoreBuiltins()
+	arena, names, res, table := bi.arena, bi.names, bi.res, bi.table
 	b := &CoreBase{arena: arena, names: names, table: table}
 	if len(decls) > 0 {
 		// Declared in the base itself, so every check sees them, and before

@@ -765,6 +765,7 @@ func main() {
 		}
 		termState.evalState.EnvironmentHistory()
 
+		PrebuildCoreBuiltins()
 		err = termState.InteractiveMode()
 		if err != nil {
 			fmt.Fprint(os.Stderr, err.Error())
@@ -774,6 +775,12 @@ func main() {
 		}
 
 		return
+	}
+
+	if command == CLIEXECUTE {
+		// Every script is checked; the table is built while it is read and
+		// the startup files load.
+		PrebuildCoreBuiltins()
 	}
 
 	if !inputSet {

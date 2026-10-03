@@ -636,6 +636,48 @@ func TestCoreStartupBodies(t *testing.T) {
 	}
 }
 
+// TestPrebuiltCoreBuiltins checks that a base made from builtins built on
+// another goroutine, while the standard library is parsed as the shell
+// does, checks every corpus program exactly as a base built in place, and
+// that each prebuild is taken by one base only. Run it with -race too.
+func TestPrebuiltCoreBuiltins(t *testing.T) {
+	src, err := os.ReadFile("../lib/std.msh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, pattern := range []string{"../tests/success/*.msh", "../tests/typecheck_fail/*.msh"} {
+		p, _ := filepath.Glob(pattern)
+		paths = append(paths, p...)
+	}
+	if len(paths) < 400 {
+		t.Fatalf("only %d corpus files", len(paths))
+	}
+	for _, p := range paths {
+		text, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, err := NewMShellParser(NewLexer(string(text), nil)).ParseFile()
+		if err != nil {
+			continue
+		}
+		PrebuildCoreBuiltins()
+		std, err := NewMShellParser(NewLexer(string(src), nil)).ParseFile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, gotOk := newCoreBase(std.Definitions, nil, true).Check(file)
+		if prebuilt.Load() != nil {
+			t.Fatal("a base did not take the prebuilt builtins")
+		}
+		want, wantOk := newCoreBase(std.Definitions, nil, true).Check(file)
+		if gotOk != wantOk || !slices.Equal(got, want) {
+			t.Errorf("%s: prebuilt builtins give ok = %v, %q; built in place, ok = %v, %q", p, gotOk, got, wantOk, want)
+		}
+	}
+}
+
 // TestCoreLazyBaseMatchesEager checks that a lazy base, which checks a
 // startup def's body only once a check calls it (the base a script's check
 // uses), gives every program exactly the output of a base that checked
