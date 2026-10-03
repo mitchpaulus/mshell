@@ -19,6 +19,10 @@ type coreChoice struct {
 	args []coreSlot
 	outs []TypeId
 	done bool
+	// watch, for a choice an earlier REPL line left open, is the unsolved
+	// variables it mentions: it is tried again only once one of them is
+	// bound (TypeCoreSession.go).
+	watch []TypeVarId
 }
 
 // choose records a waiting choice among sigs for the arguments on the
@@ -136,7 +140,7 @@ func (c *coreChecker) retryChoices() {
 		changed = false
 		c.choiceVersion = len(c.uni.pairs)
 		for i := range c.choices {
-			if c.choices[i].done {
+			if c.choices[i].done || i < c.keptChoices && !c.anyBound(c.choices[i].watch) {
 				continue
 			}
 			ch := &c.choices[i]
@@ -151,7 +155,7 @@ func (c *coreChecker) retryChoices() {
 			switch nfit {
 			case 0:
 				ch.done = true
-				c.errs = append(c.errs, TypeError{Kind: TErrNoMatchingOverload, Pos: ch.tok,
+				c.errs = append(c.errs, TypeError{Kind: TErrNoMatchingOverload, Pos: ch.tok, Earlier: i < c.keptChoices,
 					Hint: "its arguments are " + c.formatSlots(ch.args) + " and its results are used as " +
 						c.formatTypes(ch.outs) + "; " + c.formatCandidates(ch.sigs)})
 			case 1:
@@ -161,6 +165,16 @@ func (c *coreChecker) retryChoices() {
 			}
 		}
 	}
+}
+
+// anyBound reports whether any of vs is bound.
+func (c *coreChecker) anyBound(vs []TypeVarId) bool {
+	for _, v := range vs {
+		if c.subst.bound[v] != TidNothing {
+			return true
+		}
+	}
+	return false
 }
 
 // choiceFits checks a choice's arguments against sig and unifies its

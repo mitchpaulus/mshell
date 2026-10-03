@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The match pattern `is T name` does the same check in a match arm, and binds the value.
 - `del` removes a key from a dictionary: `{a: 1, b: 2} "a" del`. Nothing happens when the key is absent.
 - `deepCopy` copies a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original.
+- The interactive shell type checks each line before it runs it, keeping types across lines.
+  A line that does not check is not run and changes nothing.
+  After a line that stops with an error, the stack goes back to what it was before the line, less the new values the line took.
+  `MSH_REPL_CHECK=0` turns it off.
 - The file manager previews PNG, JPEG, and GIF images in terminals that support sixel graphics, such as Windows Terminal, WezTerm, foot, and xterm.
   Other terminals show the image format and size in pixels.
   If images look stretched, set `MSH_CELL_PIXELS` to the real size of a text cell in pixels, such as `9x20`.
@@ -111,6 +115,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Error messages escape control bytes from quoted input and file names.
 
 ### Fixed
+
+- Pressing TAB to complete a command's arguments no longer changes the interactive shell's variables: completion definitions run in a scope of their own.
 
 - `map` on a grid, when a row the quotation gives lacks a column the first row has, is an error.
   Previously the cell was left empty, which crashed later or read as zero.

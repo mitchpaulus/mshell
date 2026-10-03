@@ -987,6 +987,8 @@ type TermState struct {
 	evalState         EvalState
 	callStack         CallStack
 	stdLibDefs        []MShellDefinition
+	// checker checks each line before it runs; nil when checking is off.
+	checker *replChecker
 	initCallStackItem CallStackItem
 	// pathBinManager IPathBinManager
 
@@ -2377,6 +2379,9 @@ func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args [
 			completionList.Items[i] = MShellString{Content: arg}
 		}
 		completionStack := MShellStack{completionList}
+		// A def runs in a scope of its own, as a call to it would: the REPL's
+		// variables are not its to change.
+		completionContext.Variables = map[string]MShellObject{}
 		callStackItem := CallStackItem{MShellParseItem: def.NameToken, Name: def.Name, CallStackType: CALLSTACKDEF}
 		result := state.evalState.Evaluate(def.Items, &completionStack, completionContext, state.stdLibDefs, callStackItem)
 		if !result.Success {
@@ -3426,6 +3431,21 @@ func (state *TermState) InteractiveMode() error {
 
 	state.stdLibDefs = stdLibDefs
 
+	if replCheckEnabled() {
+		checker, startupErrs := newReplChecker(stdLibDefs, state.evalState.StartupDecls, len(state.stack), state.context.Variables)
+		state.checker = checker
+		if len(startupErrs) > 0 {
+			state.leaveRawMode()
+			fmt.Fprintln(os.Stderr, "Type errors in the startup files; lines that use what they declare cannot be checked:")
+			for _, e := range startupErrs {
+				fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
+			}
+			if err := state.enterRawMode(); err != nil {
+				return err
+			}
+		}
+	}
+
 	history = make([]string, 0)
 	state.historyIndex = 0
 
@@ -3823,9 +3843,25 @@ ParseError:
 		fmt.Fprint(os.Stderr, terminalSafeText(err.Error(), true))
 		goto PromptPrint
 	}
+	// The line runs only if it checks (plan stage 9).
+	if state.checker != nil {
+		msgs, ok := state.checker.check(parsed)
+		for _, m := range msgs {
+			fmt.Fprintln(os.Stderr, terminalSafeText(m, true))
+		}
+		if !ok {
+			goto PromptPrint
+		}
+	}
 	if err := state.evalState.RegisterDeclarations(parsed.Items, append(slices.Clone(state.stdLibDefs), parsed.Definitions...)); err != nil {
+		if state.checker != nil {
+			state.checker.abort()
+		}
 		fmt.Fprint(os.Stderr, terminalSafeText(err.Error(), true))
 		goto PromptPrint
+	}
+	if state.checker != nil {
+		state.checker.commit(state.stack)
 	}
 
 	if len(parsed.Definitions) > 0 {
@@ -3843,7 +3879,17 @@ ParseError:
 
 		if !result.Success {
 			fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
+			if state.checker != nil {
+				if dropped := state.checker.failed(&state.stack); dropped > 0 {
+					fmt.Fprintln(os.Stderr, droppedNote(dropped))
+				}
+			}
 		}
+	}
+	if state.checker != nil && !state.checker.inSync(state.stack) {
+		fmt.Fprintf(os.Stderr, "The type checker lost track of the stack (it has %d values, the stack %d); checking is off for the rest of the session. Please report this.\n",
+			state.checker.session.Len(), len(state.stack))
+		state.checker = nil
 	}
 
 PromptPrint:

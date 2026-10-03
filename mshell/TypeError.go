@@ -86,6 +86,10 @@ type TypeError struct {
 	// Fix is an edit that fixes the error, offered by the LSP as a code
 	// action; its Kind is FixNone when there is none.
 	Fix TypeFix
+	// Earlier is set, in a REPL session, on an error from a check an
+	// earlier line made that the current line's types make fail: its
+	// position is on that earlier line (TypeCoreSession.go).
+	Earlier bool
 }
 
 // TypeFixKind says what a TypeFix does.
@@ -116,7 +120,11 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 	if e.Severity == SeverityInfo {
 		prefix = "type info"
 	}
-	fmt.Fprintf(&sb, "%s at line %d, column %d: ", prefix, e.Pos.Line, e.Pos.Column)
+	if e.Earlier {
+		fmt.Fprintf(&sb, "%s at line %d, column %d of an earlier line, given this line: ", prefix, e.Pos.Line, e.Pos.Column)
+	} else {
+		fmt.Fprintf(&sb, "%s at line %d, column %d: ", prefix, e.Pos.Line, e.Pos.Column)
+	}
 	switch e.Kind {
 	case TErrStackUnderflow:
 		fmt.Fprintf(&sb, "stack underflow at '%s'", e.Pos.Lexeme)

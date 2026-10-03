@@ -38,6 +38,38 @@ It reads the signatures of the standard library and the startup file, and trusts
 The language server runs the same checker on every edit.
 </p>
 
+
+<h2 id="type-system-interactive">In the Interactive Shell <a class="section-link" href="#type-system-interactive" aria-label="Permalink">§</a></h2>
+
+<p>
+The interactive shell checks each line before it runs it.
+A line that does not check is not run, and changes nothing: its errors are printed, and the next line starts where the line before it left off.
+What a line leaves behind carries over to the next: the types of the values on the stack, variables, definitions, and <code>type</code> and <code>enum</code> declarations.
+</p>
+
+<pre><code>[] l!
+@l 1 append drop       # l is a list of ints from here on
+@l "a" append drop     # refused: 'append' expected int</code></pre>
+
+<p>
+The same goes for a quotation whose input a later line decides, as a later word would in a file:
+</p>
+
+<pre><code>(len) q!
+"abc" @q x wl          # q takes a str from here on</code></pre>
+
+<p>
+A line that checks can still stop with an error, such as an index out of range or <code>?</code> on <code>none</code>.
+The stack then goes back to what it was before the line, except new values the line took from the stack, which are dropped, since the line may have changed them.
+What the line did to stored values and variables stays.
+</p>
+
+<p>
+<code>return</code> is not allowed at the top level of a line.
+The startup files are not checked: errors in their signatures are printed once when the shell starts, a line that uses a definition with such an error is refused, and a variable they set has a value of unknown type, which a <code>match</code> on its kind can narrow.
+Set <code>MSH_REPL_CHECK=0</code> to turn checking off for a session.
+</p>
+
 <h1 id="type-system-stack-effects">Stack Effects <a class="section-link" href="#type-system-stack-effects" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>

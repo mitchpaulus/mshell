@@ -78,6 +78,7 @@ func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBa
 			continue
 		}
 		parts := res.resolveSig(def.Inputs, def.Outputs)
+		broken := len(res.errs) > 0
 		// A startup file's signature that does not resolve is reported with
 		// its file, as its declarations are: its callers would otherwise see
 		// a type with nothing in it.
@@ -88,6 +89,7 @@ func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBa
 		res.errs = res.errs[:0]
 		sig := newCoreSig(arena, parts)
 		sig.freeOut = outputOnlyGeneric(arena, parts)
+		sig.broken = broken
 		table.setName(id, []coreSig{sig})
 		if e := completionSigError(arena, names, res.rel, table, def, &sig); e != nil {
 			e.Pos = withFile(e.Pos, def.File)
@@ -263,6 +265,9 @@ const (
 	retNone  coreRetKind = iota // no return: a quote body or a `never` def
 	retExact                    // a def: return leaves exactly its outputs
 	retAny                      // top-level code: return ends the script
+	// retLine is the top level of a REPL line: return would end the line
+	// and keep a stack the next line could not know (plan question 23).
+	retLine
 )
 
 // coreVar is a variable of the current scope. Its type is a unification
@@ -279,6 +284,12 @@ type coreVar struct {
 	// origin is the join origin of the value of the first store, when the
 	// variable's type is that value's union (coreSlot.origin).
 	origin uint32
+}
+
+// coreVarUndo is a variable's entry as it was at a session mark.
+type coreVarUndo struct {
+	name NameId
+	v    coreVar
 }
 
 // coreDbg is a `dbg` word, the types on the stack there (bottom first),
@@ -371,6 +382,14 @@ type coreChecker struct {
 	listDepth int
 	ret       coreRetKind
 	retOuts   []TypeId
+	// session is set for a REPL session (TypeCoreSession.go). A session
+	// saves a variable's entry in varUndo before its first change after
+	// each mark: varEpochs[name] is the mark, numbered varEpoch, it was
+	// last saved at. Kept apart from vars, which every check walks.
+	session   bool
+	varEpoch  uint32
+	varEpochs []uint32
+	varUndo   []coreVarUndo
 
 	// vars is indexed by NameId; an entry belongs to the current scope only
 	// when its gen is varGen, so entering a scope clears nothing.
@@ -402,6 +421,9 @@ type coreChecker struct {
 	// choiceVersion is len(uni.pairs) when they were last tried.
 	choices       []coreChoice
 	choiceVersion int
+	// keptChoices is how many of choices earlier REPL lines left open
+	// (TypeCoreSession.go); 0 outside a session.
+	keptChoices int
 	// at is the word being checked, where a deferred check reports.
 	at Token
 	// assertive is set while the patterns of a `=>` are read.
@@ -488,7 +510,7 @@ func (c *coreChecker) beginUnit() {
 	c.litLists = c.litLists[:0]
 	c.setLog, c.daLoops, c.later, c.unsetReads = c.setLog[:0], c.daLoops[:0], 0, c.unsetReads[:0]
 	c.pending = c.pending[:0]
-	c.choices, c.choiceVersion = c.choices[:0], 0
+	c.choices, c.choiceVersion, c.keptChoices = c.choices[:0], 0, 0
 	c.escapes = c.escapes[:0]
 	c.brk, c.cont, c.brkSeen, c.infer = coreLoopCtx{}, coreLoopCtx{}, false, nil
 	c.subst.Reset()
@@ -888,6 +910,17 @@ func (c *coreChecker) word(tok Token) {
 	}
 	if named {
 		if sigs := c.table.name(id); sigs != nil {
+			if sigs[0].broken {
+				// A startup file's def whose signature has an error: the
+				// error is reported with the file. A file check fails
+				// anyway; a REPL line that calls it does not run.
+				if c.session {
+					c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
+						Hint: "the signature of '" + tok.Lexeme + "' has an error (reported at startup), so a call to it cannot be checked"})
+				}
+				c.abandoned = true
+				return
+			}
 			c.call(sigs, tok)
 			return
 		}
@@ -1038,6 +1071,9 @@ func (c *coreChecker) doReturn(tok Token) {
 	case retNone:
 		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
 			Hint: "'return' is not allowed in a def that never returns"})
+	case retLine:
+		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
+			Hint: "'return' is not allowed at the top level of an interactive line: it would end the line with a stack the next line could not know"})
 	case retExact:
 		c.forceTop(len(c.stack))
 		if len(c.stack) != len(c.retOuts) {
@@ -1069,8 +1105,28 @@ func (c *coreChecker) varOf(name NameId) *coreVar {
 	if v.gen != c.varGen {
 		*v = coreVar{gen: c.varGen, t: c.subst.FreshVar(c.arena)}
 		c.unitVars = append(c.unitVars, name)
+		if c.session {
+			c.saveVar(name)
+		}
+	} else if c.session {
+		if c.saveVar(name) {
+			c.varUndo = append(c.varUndo, coreVarUndo{name, *v})
+		}
 	}
 	return v
+}
+
+// saveVar marks name's entry saved at the current session mark, and reports
+// whether it was not already.
+func (c *coreChecker) saveVar(name NameId) bool {
+	if int(name) >= len(c.varEpochs) {
+		c.varEpochs = slices.Grow(c.varEpochs, len(c.vars)-len(c.varEpochs))[:len(c.vars)]
+	}
+	if c.varEpochs[name] == c.varEpoch {
+		return false
+	}
+	c.varEpochs[name] = c.varEpoch
+	return true
 }
 
 func (c *coreChecker) load(tok Token) {

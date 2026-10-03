@@ -34,6 +34,12 @@ type Substitution struct {
 	// writes need no log (logging is false).
 	trail   []substWrite
 	logging bool
+	// unboundBottom makes Apply read an unbound variable as ⊥, the default
+	// a unit is solved with, without binding it: a REPL session solves each
+	// line so, and the variable stays open for the lines after it
+	// (TypeCoreSession.go). Path compression writes the trail, so rolling
+	// back to a checkpoint taken before takes the defaults back.
+	unboundBottom bool
 }
 
 // substWrite records that slot v held t before a write.
@@ -47,6 +53,7 @@ func (s *Substitution) Reset() {
 	s.bound = s.bound[:0]
 	s.trail = s.trail[:0]
 	s.logging = false
+	s.unboundBottom = false
 }
 
 // FreshVar allocates a new generic variable, reserves its slot in the
@@ -64,6 +71,14 @@ func (s *Substitution) set(v TypeVarId, t TypeId) {
 		s.trail = append(s.trail, substWrite{v, s.bound[v]})
 	}
 	s.bound[v] = t
+}
+
+// Commit forgets the trail: no checkpoint taken so far can be rolled back
+// to. It is for the outermost user only (a REPL session, at the end of a
+// line it keeps), and keeps the trail from growing over a session.
+func (s *Substitution) Commit() {
+	s.trail = s.trail[:0]
+	s.logging = false
 }
 
 // SubstCheckpoint records the substitution's state at a point in time
@@ -103,6 +118,9 @@ func (s *Substitution) Apply(a *TypeArena, t TypeId) TypeId {
 	case TKVar:
 		v := TypeVarId(n.A)
 		if int(v) >= len(s.bound) || s.bound[v] == TidNothing {
+			if s.unboundBottom {
+				return TidBottom
+			}
 			return t
 		}
 		r := s.Apply(a, s.bound[v])
