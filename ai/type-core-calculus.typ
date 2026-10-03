@@ -2283,6 +2283,10 @@ is an unknown name (found 2026-10-02).
   only printed, never parsed. A grid's known (exact) schema is `Grid{a: int}`, one that may have other
   columns `Grid{a: int, ...}`, and the unknown one `Grid`. The `| exact` and `| open` the checker used to
   print read as unions, and could not be written. `Maybe[⊥]`, the type of `none`, is printed `none`.
+  A type the checker has not worked out yet, an unsolved variable or a ⊥ elsewhere (an unsolved variable
+  read as ⊥ at the end of a REPL line), is printed `_`, as Rust prints one: `[_]`, `(_ -- _)` (decided
+  2026-10-03, question 25). Which of two unknowns are the same is not shown; their numbers meant nothing
+  to a reader.
 
 == Patterns and validation
 
@@ -2341,12 +2345,50 @@ The alternative of treating every slot as shared at the end of each line would m
 inspection, but would lose new values across lines (`readFile parseJson` on one line, `tryAs Config` on
 the next), which is how a REPL is used.
 
-*Proof obligation* (not yet mechanized): the interpreter's checked-error result carries no heap, so
-the theorem says nothing about the state after an error. The REPL needs: at a checked error the store
-typing still holds for the heap and the scopes, and the type of a location that was shared before the
-line has not changed. The rules for reading types off values follow from facts the proof already has:
-immutable values are typed without the store (`vtyped` with no locations), a value nothing else points
-to is typed by its contents (`dtyped`), and every value has type `unknown`.
+*Mechanized (2026-10-02, eleventh session).* The interpreter's checked error now carries the heap
+(`RErr H`), and the soundness induction says the invariant holds there: the store typing, the scopes and
+the caller's frame keep their types (`err_ok` in `Soundness.v`). `repl_error` in `Repl.v` is the REPL's
+case: for a line checked from its inputs $s_1$ above a frame $s_f$, after a checked error the frame and
+the line's *shared* inputs have the types they had (a shared slot owns no region, so a second copy of it
+can sit in the frame, which the induction protects). `repl_error_commit` adds the new inputs of an
+immutable type, which may be committed before the line.
+
+*Found while proving it: the last two rules above are not right as stated (plan question 20).*
+"Anything else becomes `unknown`, shared" is not sound for an enum value: in the model a new enum's
+payloads can be taken apart while new (`tw_case` on a new value pushes them new) and then committed at
+types no instance of the enum agrees with, `[int | str]` for one and `[int]` for the other of a
+`Pair[a] = pair [a] [a]`. No type `Pair[t]` then holds the value, and a kind pattern on the `unknown`
+value binds `Pair[k]` and could move a `str` from the first list into the second, a stored `[int]`.
+(An argument from the rules, not mechanized. Surface mshell may not reach it: a member pattern always binds, which commits the payloads together.)
+And "a list nothing else points to gets the type read off its contents" needs the model to type objects
+it has stopped tracking (a value overwritten in a new dict, the input of a new `take`), which needs an
+invariant that every closure and enum value in the heap, reachable or not, is well formed.
+*Implemented, pending question 20:* the new inputs of a mutable type are dropped from the restored
+stack, with a note; everything else is restored as above. That is exactly what `repl_error_commit` proves.
+
+*Checking a session.* No new theorem is needed while no line fails: types are erased and evaluation is
+deterministic, so running lines one after another is running their concatenation, and checking each
+line as the continuation of the ones before is checking that concatenation. Each prefix only needs
+_some_ typing, so the substitution may grow from line to line: a line is solved when it ends with every
+unsolved variable read as $bot$, the defaults are not kept, and every check that still mentions an
+unsolved variable is made again after each later line (`TypeCoreSession.go`). So `[] l!` on one line and
+`@l 1 append` on the next check, and `@l "a" append` on a third does not. A line that does not check
+leaves the session as it was.
+An overload choice still open when a line ends stays open as well (2026-10-03), as one does in a file
+until a later word decides it: the line is checked with each open choice made with its first candidate
+that fits (and leaves every other choice a candidate), so the line has a typing of its own, and the
+choice is then taken back. So `(len) q!` on one line and `"abc" @q x` on the next check, and `[] l!`,
+`@l sort drop`, `@l 5 append drop` give `l : [int]`. Overload choices need no proof (@sec-infer), and each
+prefix of the session has a typing, which is all the argument above uses. At most 16 choices stay open;
+past that the oldest is made for good at the end of the line, in the same way, so the cost of a line stays bounded.
+A quote that reads a variable no line has stored yet (`(@v 1 +) q!`) is refused as an unknown name,
+though a file accepts it when a later store exists (decided 2026-10-03, question 24): the checker
+checks that a variable exists in ordinary code, and a misspelled name should be caught on the line
+that has it.
+The line's inputs, the frame of `repl_error`, are the fewest top slots it
+checks with: the checker is run with the slots below out of reach, as a list literal's body is.
+`return` at the top level of a line is refused (plan question 23): it ends the line with a stack the next
+line could not know, where in a script nothing reads it.
 
 = What changes for users
 

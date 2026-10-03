@@ -26,8 +26,10 @@ put the answer in the Typst design doc and remove the row.
 
 | # | Question | Context |
 |---|---|---|
-
-None open (2026-10-02).
+| 20 | After a REPL line stops with a runtime error, what happens to the *new* values it had taken off the stack? (a) They are dropped from the restored stack, with a note; everything else is restored as the design says. (b) The design as written: read a type off each one's contents. Recommended: (a) now, (b) later if it is missed. | Stage 9. (a) needs only a small model change (the store typing holds at a checked error) and the frame of the existing proof. (b) needs more: the model leaves some objects with no store type (a value overwritten in a new dict, the input of a new `take`), so typing them again from their contents needs a new invariant that every closure and enum value in the heap is well formed, even in objects nothing reaches. Working (b) through also showed that "anything else becomes `unknown`, shared" is not sound as stated for an enum value: in the model a new enum's payloads can be taken apart while new and committed at incompatible types, and then no instance of the enum types it, so a kind pattern on the `unknown` value could write a `str` into a stored `[int]`. I could not build this in surface mshell (member patterns always bind, which commits the payloads together), but (b) would need a rule for it. |
+| 21 | When a startup file (std or the init file) has a type error, does the REPL still check lines? Proposed: report the errors once at startup, check lines as usual, and refuse a line that calls a def whose signature has an error. | Your `~/.config/msh/init.msh` has one now (a generic in a union, line 52), so this decides whether checking works for you on day one. |
+| 22 | Is there a way to run a line without checking it? Proposed: `MSH_REPL_CHECK=0` turns checking off for the session; no per-line escape. A per-line escape would mean the checker no longer knows the stack's or variables' types afterwards, so checking would have to stop for the rest of the session anyway. | A line the checker refuses but you know is fine (a checker gap, or the checker being conservative). |
+| 23 | `return` at the top level of a REPL line ends the line and keeps the stack, so the script rule (`return` with any stack) is unsound across lines. Proposed: refuse it at the top level of a REPL line. The alternative is to treat it as an early end of the line, joined with the line's end. | Stage 9. |
 
 ## 3. Files
 
@@ -168,7 +170,7 @@ The same applies to runtime work: `deepCopy`, the cycle-safe walkers and `valida
 
 Each stage lists its work, its tests, and when it is done.
 
-Status (end of 2026-10-02, tenth session): done: stages 0 through 7, and three independent reviews whose holes are fixed (progress log). Open questions: none. Left: stage 8's final pass at release.
+Status (2026-10-03, twelfth session): done: stages 0 through 7, and three independent reviews whose holes are fixed (progress log). Stage 9 (the REPL checks each line) is implemented and proved for the rule of question 20 (a); overload choices stay open across lines (twelfth session); questions 20-23 are open. Left: stage 8's final pass at release.
 Stages 2–5 depend on each other in order. Runtime groundwork is independent and can land any time. The soundness oracle can start after the core checker.
 
 ### Stage 0: Baseline and measurements
@@ -378,9 +380,22 @@ Throughout, with a final pass at the switch-over.
 - `BuiltInList.go` entries for new builtins.
 - `CHANGELOG.md` under Unreleased: user-facing changes only, grouped.
 
+### Stage 9: The REPL checks each line (started 2026-10-02, eleventh session)
+
+The REPL checks each line live, keeping the checker's state across lines, and runs a line only if it checks (decided 2026-09-29; live checking 2026-09-30; design doc §Checking by default). Open questions 20-23.
+
+Why a session is sound without a new proof, as long as no line fails at run time: types are erased and `eval` is deterministic, so running lines 1..k+1 one after another is running their concatenation. The checker checks line k+1 as the continuation of lines 1..k, which is checking the concatenation, so `soundness` covers the session. Each prefix only needs *some* typing: the substitution may grow from one line to the next, as long as every earlier line's checks still hold under it.
+
+Work:
+
+1. **Rocq: the state after a checked error.** `RErr` carries the heap; `res_ok` for it says the store typing and the caller's frame still hold (the same `INV` as a normal result, with whatever stack the error left). Then the REPL theorem for question 20 (a): the slots below the line's static input depth are its frame and keep their types; the shared slots it took keep theirs (they can be put in the frame as well, since a shared slot owns no region); the new ones it took are dropped.
+2. **A session checker** (`TypeCoreSession.go`): the script unit stays open across lines. Each line is checked from the stack and variables the previous lines left; at its end the unit is solved *without* committing the defaults (unsolved variables are ⊥ for the checks and stay open afterwards), and every check that still mentions an unsolved variable is kept, to be made again after each later line; checks that are ground and pass are dropped, so a line costs the same at the start and the end of a long session. A refused line rolls the checker back to where it was before it (substitution trail, variables, stack, definitions, declarations). The line's static input depth is recorded for the revert.
+3. **The REPL**: check each line before running it; print the errors and do not run a refused line; on a runtime error, restore the stack (question 20) and tell the checker. `return` at the top level of a line (question 23). Startup errors (question 21). The opt-out (question 22).
+4. Benchmarks: per-line cost at the start of a session and after thousands of lines; allocations per line.
+5. Docs (`doc/` interactive mode pages, not `mshell.md`), changelog.
+
 ### Later, not in this plan
 
-- The REPL checks each line live, keeping the checker's state across lines, and runs a line only if it checks, once the new checker is working and battle tested (decided 2026-09-29; live checking 2026-09-30). After a runtime error in a line that checked, the stack goes back to what it was before the line (no copy; shared slots keep their types, new slots the line popped get types read from their values); design doc §Checking by default. First extend the proof: the store typing holds at a checked error, and shared locations keep their types.
 - A read-only list view type (§new lists), if an `O(1)` tail is ever needed.
 - The "top-fresh" slot mark (§deepCopy).
 - When default parameters land and empty option dicts go away, type `{}` as `{str: T}` with a new variable `T`, as `[]` is `[T]` (decided 2026-10-01; design doc §Joins, "Why `none` needs nothing").

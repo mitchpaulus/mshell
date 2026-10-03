@@ -944,3 +944,128 @@ Mitchell: `exact` and `open` are shown in messages and hover only, never typed b
 ### Question 17 answered (2026-10-02, tenth session, continued)
 
 Mitchell: generics are single letters. A name in a user or std signature is a generic only when it is one letter, optionally followed by digits, and names no declared type; any other unknown name is an error, reported once per signature, with a hint for `numeric`/`number`, `string`, `integer`, `boolean`, `double`, `date`, `binary`, `quote`/`quotation`/`function`, `any` (`isGenericName`, `notATypeHints` in `TypeCoreResolve.go`). The builtin table's own signatures are not restricted; enum parameters (declared in brackets) are not either. Every generic in `lib/std.msh`, the tests, `tests/msh-scripts` and the init file here was already one letter; `msh-scripts` still 135 of 150. Tests `tests/typecheck_fail/sig_not_a_type.msh`, `sig_long_generic.msh`. Docs: `type_system.inc.html`, `mshell.md`; changelog: Changed. Open questions: none.
+
+## Eleventh session (2026-10-02): stage 9, the REPL checks each line
+
+Started from `8d02fcf`; all suites passed there (`test.sh` 365 passed, `typecheck_test.sh` 467, soundness 0 mismatches, `go test` ok). Stages 0-7 were done and no question was open, so this session started the plan's next item, the REPL checking each line live (moved from "Later" to stage 9). Not committed.
+
+### Proof first (`formal-ver/`)
+
+- `RErr` carries the heap (`RErr H`). `res_ok` for it is `err_ok`: the invariant holds with whatever stack the error left above the caller's frame, the store typing and scopes kept. Error sites use `err_here`; errors from a sub-evaluation (a quote, a def call, `each`/`map` bodies, loops) pass through `err_lift`, `err_frame`, `err_weaken`. Examples use `is_err`.
+- `Repl.v`: `repl_error` (a line checked from inputs `s1` above a frame `sf` that stops with a checked error leaves the frame and the line's shared inputs at their types: the shared inputs get a second copy in the frame, which the induction protects, and the stack above is committed and dropped) and `repl_error_commit` (new inputs of an immutable type too, by committing first, `ss_forget`/`ss_imm`).
+- `make check`: 9 theorems closed under the global context (`repl_error`, `repl_error_commit` added to the list). Oracle: 23 examples agree.
+- Found while working out the design's revert rule (question 20): "anything else becomes `unknown`, shared" is not sound as stated for an enum value whose payloads were taken apart while new (argued, not mechanized), and reading a type off an object the model stopped tracking needs a heap-wide well-formedness invariant. Implemented instead: new inputs of a mutable type are dropped, which is exactly what `repl_error_commit` proves. Design doc "Checking by default" updated.
+
+### The session checker (`mshell/TypeCoreSession.go`, `ReplCheck.go`)
+
+- `CoreBase.NewSession`: the script unit stays open across lines. `Check` declares the line's definitions and declarations (def bodies in a second checker `dc` sharing the arena and tables), walks the line, and solves it with unsolved variables read as ⊥ (`Substitution.unboundBottom`; path compression goes through the trail and is rolled back). `Commit` keeps the line and drops every check that is ground or equal-sided; `Abort` restores the line's start. `RuntimeError` restores the stack after a runtime error.
+- Rollback: `sessionMark` holds slice lengths and a unifier checkpoint; variables' entries go in an undo log written by `varOf` the first time a line touches them (`varEpochs`, kept out of `coreVar` so file checks don't pay for it); maps of definitions and declarations are copied only for lines that declare.
+- The line's input depth (the frame of `repl_error`) is the fewest top slots it checks with, found by checking with `c.floor` raised (the mechanism list literals already rely on), doubling then halving; the slots below are compared after each trial, so the depth is checked, not trusted.
+- `return` at the top of a line is refused (`retLine`, question 23). A startup def whose signature has an error is marked `broken`; a session line calling it is refused (question 21). Variables set by startup files are unknown to the checker; the error says so.
+- The REPL (`Main.go`): check, then register declarations (abort on error), commit, run; on a runtime error restore the stack and say how many new values were dropped; if the checker's stack length ever differs from the runtime's, checking stops with a message. `MSH_REPL_CHECK=0` turns it off (question 22). Startup errors are printed once.
+
+### Tests
+
+- `TestCoreSession` (scenarios: cross-line inference, refused lines leave nothing, definitions and declarations, `return`, depth, the revert), `TestCoreSessionRuntimeErrorKeep`.
+- `TestCoreSessionAbortRestores`: the test corpus split into lines; every line also checked, aborted, and checked again after a refused line, in a second session; the two must agree (by error kind and position: type variables are numbered by creation).
+- `TestSessionProgramsSound`: generated programs split at random item boundaries into REPL lines, some lines made to stop with a runtime error after taking their inputs, run through `replChecker` and the runtime; fails on a type mismatch, a panic or the stacks out of step. Lines that diverge are taken as stopped with an error. Checked that it fails when every input is kept after an error (seed 18).
+- `TestSessionScript` (`MSH_SESSION_FILE`): runs a file as a session, one text line per REPL line, printing each line's outcome; for review by hand.
+- Smoke-tested the real REPL through a pty (`ls`, pipes, redirects, captures used on the next line, a refused line, a runtime error, `return`).
+
+### Benchmarks (FX-8350, one CPU)
+
+| | |
+|---|---|
+| `BenchmarkCoreSessionLine/after10` | 5.4 µs, 6 allocs per line |
+| `BenchmarkCoreSessionLine/after10000` | 5.4 µs, 6 allocs per line (13 µs before the variable undo log) |
+| `BenchmarkCoreSessionLine/refused` | 6.1 µs, 20 allocs |
+| `BenchmarkCoreCheckGenerated`, against `8d02fcf` in a worktree | 3.98 ms against 3.92 ms min, same 4,550 allocs |
+| `BenchmarkCoreCheckCorpus` | 15.15 ms against 15.26 ms min, same allocs |
+
+### Docs
+
+`type_system.inc.html` ("In the Interactive Shell"), changelog (Added). Not in `mshell.md` (interactive mode).
+
+### Independent review of stage 9 (three read-only subagents, frozen binaries)
+
+Areas: session state and rollback; the revert after a runtime error and the input depth; cross-line inference. Each wrote sessions and ran them through `TestSessionScript` (and the real REPL through a pty). Found, each fixed with a test:
+
+- **Hole (all three found it): variables set by startup files.** The checker did not know them, so a line that first-stores one and then stops before the store (or stores it on an untaken path, read in a quote) fixed its type while the runtime still held the startup value: `"hello" x!` in the init file, then `[] 0 nth drop 5 x!`, then `@x 1 +` checked and added 1 to a string. The design's argument ("a variable the line never stored reads as unset") assumed every runtime variable is the checker's. Now the session starts with them as set, of type `unknown` (`NewSession(stackLen, vars...)`). `TestCoreSessionStartupVariables`.
+- **Hole, also a plain bug: TAB completion ran completion definitions in the REPL's variable map**, so `__mshCompletion`'s `options!` and the git completion's stores overwrote the user's variables. Completion definitions now run in a scope of their own, as a call does. `TestCompletionDefsOwnVariables`. Changelog: Fixed.
+- **Cliff: partly new marks were never reset in a session**; past 65,535 every partly new literal was treated as shared. `Commit` compacts them past 1,024, keeping the ones the stack, the stack before the line and the kept checks refer to. `TestCoreSessionPartsPastCap` (fails without it).
+- **Quadratic: checks left open were all made again every line** (`none rN!` 8,000 times: 8.7 s). Now each open check is watched by the variables it mentions, and a line makes again only those whose variables it bound (read off the substitution's trail); closed ones are tombstoned and compacted past half. `BenchmarkCoreSessionOpenChecks`: 2.2 ms and 10,858 allocs per line before, 5.8 µs and 6 after. `TestCoreSessionOpenChecksCompact` (fails when watching is turned off).
+- False rejection: a def could not use an enum member declared in the session (the def checker's constructor table was nil when the startup files declare nothing). Fixed.
+- A def could take the name of a type or enum an earlier line declared. Refused now.
+- Message: an earlier line's check failing because of this line was reported at a position that read as this line's. Now "at line 1, column 12 of an earlier line, given this line" (`TypeError.Earlier`).
+- Harness: a split could leave a stored quote with no `break` and a line `loop`, which never ends; diverging lines are now taken as stopped by an error (`CoreSession.Diverges`).
+
+Held, per the reviewers: the input depth (every walker form guards on the floor, and the slot comparison is a second guard); freshness and immutability of kept inputs; writes through stored values; rollback of refused lines under name reuse (variables, bindings, declarations, defs, mutual recursion); escape checks across lines; dropping equal-sided checks; about 25,000 generated sessions with refused lines, aborted checks and injected runtime failures.
+
+Follow-ups, not changed:
+
+- An overload choice still open when its line ends is made then (first candidate when the outputs agree), so `(len) q!` then `"abc" @q x` is refused, and `[] l!`, `@l sort drop`, `@l 5 append` fixes `l` at `[str]`. A file decides these by later use. Keeping choices open across lines is sound if one candidate fits at each line's end; not done.
+- `(@v 1 +) q!` before `v` is stored is refused as unknown (a file accepts a later store).
+- Messages name inference variables (`T28`, `k4`) and show `<bottom>` for an open variable read as ⊥.
+- New inputs a line only moved (not changed) are dropped after an error too; reading types off values (question 20 (b)) would keep them.
+- `c.origins` and `c.litLists` still grow with a session (no cap is reached; memory only).
+
+Suites after the review's fixes: `test.sh` 365 passed; `typecheck_test.sh` 467, 0 failed; `soundness_test.sh` 0 mismatches; `go test ./...` ok; `make check` 9 theorems closed; oracle 23 agree; `typst compile` ok; docs rebuilt. Session seeds run (`TestSessionProgramsSound`, 3,000 each): 600000-602999, 1000000-1002999, no mismatch. Nothing committed; `gofmt` not run on any file.
+
+## Twelfth session (2026-10-03): stage 9 follow-ups
+
+Started from `8d02fcf` with the eleventh session's stage 9 work uncommitted; every suite passed there (`test.sh` 365, `typecheck_test.sh` 467, soundness 0 mismatches, `go test` ok). Nothing committed.
+
+### Overload choices stay open across lines
+
+An overload choice still open when a line ended was made then (the first candidate when the outputs agreed, an "ambiguous" error otherwise), so `(len) q!` then `"abc" @q x` was refused, `[] l!`, `@l sort drop`, `@l 5 append drop` fixed `l` at `[str]`, and `(+) p!` was refused outright. A file decides these by a later word.
+
+- `finishLine` (`TypeCoreSession.go`) makes the choices a retry forces for good, then, under a checkpoint, makes each one still open with its first candidate that fits and leaves every other choice a candidate (`pickChoice`), checks the line with that, and takes the picks back. So every prefix of the session has a typing, which is all the session argument needs; overload choices need no proof (design doc §Inference). `Commit` keeps the open choices with the variables they mention (`coreChoice.watch`); `retryChoices` tries a kept one again only once one of those is bound (`keptChoices`, `anyBound`), so they cost nothing on lines that do not touch them. A refused line resets them (`restore`).
+- An error from a kept choice is marked as an earlier line's ("no matching overload for 'len' at line 1, column 2 of an earlier line").
+- At most 16 stay open (`maxOpenChoices`); past that the oldest is made for good at the end of the line, in the same way. Each open choice costs about 1 µs per line.
+- Design doc "Checking a session", `type_system.inc.html` (one example).
+
+### Bounded session tables
+
+`c.origins` (join origins) and `c.litLists` (list literals of string literals) grew with every line. `Commit` now compacts them as it does partly new marks (`compact`): past a limit, the entries a kept slot (the stack, the stack before the line, open choices' arguments) or a variable refers to are kept, renumbered, and the limit becomes twice that many (at least 1,024), so compacting is a constant per line on average and never runs every line. `compactParts` also visits open choices' arguments. `TestCoreSessionRefsPastCap` keeps a join's union and a literal name list on the stack through 3,000 churned lines, then uses both.
+
+### A join kept less than it could (files too)
+
+That test found that a join cleared the literal text, literal names, partly new mark and join origin of every slot, including slots no arm touched: `["y"]`, then `true if 1 else 2 end drop`, then `[| x, y; 1, "a" |] swap select "y" gridCol ("b" +) map` was refused (the column read as unknown). A false rejection, in files as in the REPL. `joinSlot` now returns a slot unchanged when every arm leaves it identical: that is the value from before the branch, since anything that copies, stores or rewrites it changes the slot.
+
+### Tests
+
+- `TestCoreSession`: open choices across lines (`len`, `sort`, `+`; an error from an earlier line's choice), and a refused line leaving a choice open. Three `Bad` lines used `++`, which is not an mshell word, so they were refused as unknown identifiers rather than for the reason meant; they use `+` now and name the error they expect.
+- `TestCoreSessionChoicesPastCap`, `TestCoreSessionRefsPastCap`; `BenchmarkCoreSessionLine/openChoices` (16 open choices).
+- `TestSessionProgramsSound`: in 300 generated programs, 3,558 lines ended with a choice open (counted with a temporary counter, removed), so the generator exercises this.
+
+### Benchmarks (FX-8350, one CPU, interleaved; minimum of the runs)
+
+| | |
+|---|---|
+| `BenchmarkCoreSessionLine/after10`, `after10000` | 5.3 µs and 5.4 µs, 6 allocs per line (as recorded in the eleventh session) |
+| `BenchmarkCoreSessionLine/openChoices` (16 open) | 18.5 µs, 6 allocs per line |
+| `BenchmarkCoreSessionLine/refused` | 6.1 µs, 20 allocs |
+| `BenchmarkCoreCheckGenerated` against `8d02fcf` in a worktree | 3.97 ms against 3.88 ms, same 4,550 allocs |
+
+The 2% on file checks is stage 9's (the eleventh session measured 3.98 against 3.92); this session's join change measures the same with and without it (ten 3-second runs each). The two profiles show no hot spot: `Substitution.Apply`, which now tests `unboundBottom`, is 14.8% against 14.0%.
+
+### Suites
+
+`test.sh` 365 passed; `typecheck_test.sh` 467, 0 failed; `soundness_test.sh` 0 mismatches; `go test ./...` ok; generated programs, seeds 710000-712999, no mismatch; generated sessions, seeds 700000-702999 (before the join change) and 720000-722999, no mismatch; `typst compile` ok; docs rebuilt. `formal-ver/` unchanged: no typing rule changed. `gofmt` not run.
+
+### Open
+
+Questions 20-25 in the plan (24 and 25 are new: a quote reading a variable no line has stored yet; how messages print types not worked out yet). Still a follow-up: new inputs a line only moved are dropped after a runtime error too (question 20 (b)).
+
+### Questions 24 and 25 answered, and the init file checked as itself (2026-10-03, twelfth session, continued)
+
+- 24 (Mitchell): no. A quote that reads a variable no line has stored yet stays refused in the REPL, since the checker checks that a variable exists in ordinary code. Design doc "Checking a session".
+- 25 (Mitchell): `_`. `FormatType` prints an unsolved variable and a ⊥ outside `Maybe` (an unsolved variable read as ⊥ at the end of a REPL line) as `_`: "the stack has ([_] int)". `TestFormatTypeVar` updated. Abstract types from patterns keep their names. Design doc "Printing"; one sentence in `type_system.inc.html`.
+- Mitchell reported "already defined in the standard library" on every def while editing his init file. The language server loaded the init file as a startup file and then checked the open document, the same file, against it; the command line did the same (`msh --type-check-only ~/.config/msh/init.msh` stopped at `'gd' is already defined at …/init.msh:1:5`, itself). Now a startup file that is the file being run or checked is the program: it and the files after it are not loaded as startup files (`startupFilesBefore`, by `os.SameFile`; `startupLoadOptions.script` on the command line). So the init file is checked with the standard library only, and the standard library (when `MSHSTDLIB` names the file being checked) with neither. The language server keeps the startup files one by one (`lspStartupFile`) and checks a document that is one of them in a base of the files before it (`baseFor`, built once per prefix); every other document sees all of them as before. Diagnostics and fix-all take the document's URI for this (`computeDiagnostics(uri, text)`, `coreErrors(uri, file)`).
+- The checker's collision messages named "the standard library" for any startup def. A def or a declared name that takes a startup def's name now says where that def is ("'zzinit' is already defined at …/init.msh:1:5"; `coreTable.startupDefs`).
+- Tests: `TestDiagnosticsStartupFileItself` (fails with the old base choice). Mitchell's init file now checks to three real errors: raw `Json` given to `each` (line 100) and `get` (line 107), and `buildings` (line 35) returning a new value without `new`. Changelog: Fixed (running or checking a startup file itself).
+- Suites: `test.sh` 365; `typecheck_test.sh` 467, 0 failed; `soundness_test.sh` 0 mismatches; `go test ./...` ok; the language server tests under `-race` ok; `typst compile` ok.
+
+### Committed (2026-10-03, twelfth session)
+
+On `type-checker-enhancements`, not pushed: `329ff46` (Rocq: the state after a checked error, `Repl.v`), `5413fe3` (a join keeps a slot neither arm touched, with `tests/success/join_keeps_untouched_slot.msh`), `6e87202` (the REPL checks each line: the eleventh session's stage 9 with this session's follow-ups), `a0d8d16` (a startup file checked as the program), `210a22c` (`_` for a type not worked out yet), and the design-notes commit after them. `gofmt` not run.
