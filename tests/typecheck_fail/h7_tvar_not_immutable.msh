@@ -1,0 +1,7 @@
+# H7 (ai/type-core-calculus.typ): a def's input of generic type is shared, and
+# a generic may be a list, so validating it in place as [str] could give a
+# stored [int] the type [str].
+def g (a -- Maybe[[str]]) tryAs [str] end
+[] as [int] xs!
+@xs g ? "a" append drop
+@xs (1 +) map drop

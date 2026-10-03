@@ -1,0 +1,3 @@
+# A command is a list of its arguments at run time, so gridAddCol makes
+# each argument a cell.
+[| x; 1 |] "c" [echo] * gridAddCol "c" gridCol :0: ; wl

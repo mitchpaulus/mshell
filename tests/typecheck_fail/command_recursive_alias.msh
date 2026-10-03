@@ -1,0 +1,4 @@
+# A command argument whose type may contain itself: the runtime flattens
+# a command's lists without looking for cycles.
+type A = [str | A]
+def f (A -- ) l! ["echo" @l] ; end

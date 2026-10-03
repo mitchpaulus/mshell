@@ -245,7 +245,7 @@ func TestHTTPCookieJarHTTPIntegration(t *testing.T) {
 @first :body? utf8Str wl
 {'url': 'BASE/update', 'cookieJar': @jar} httpGet ? :status? wl
 @first :cookieJar? :0: :value? wl
-@jar toJson parseJson restored!
+@jar toJson parseJson tryAs [Cookie] ? restored!
 {'url': 'BASE/account', 'cookieJar': @restored} httpGet ? :body? utf8Str wl
 {'url': 'BASE/delete', 'cookieJar': @jar} httpGet ? drop
 @first :cookieJar? len wl

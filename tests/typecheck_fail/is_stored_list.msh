@@ -1,0 +1,8 @@
+# An `is` arm validates the value in place: a stored [int] cannot become an
+# [int | str].
+[1 2] xs!
+@xs match
+    is [int | str] ys : @ys "a" append drop,
+    _ : ,
+end
+@xs (1 +) map drop

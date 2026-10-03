@@ -1,0 +1,3 @@
+# return takes no quote; the runtime does not run `return.` as a word.
+def f (-- (--)) return. end end
+f drop "ok" wl

@@ -1,0 +1,6 @@
+# A new dict around a stored list may gain optional keys; the list keeps
+# its type, and a write through the dict reaches it.
+[1 2] xs!
+{a: @xs} as {a: [int], b?: int} d!
+@d :a? 3 append drop
+@xs len wl

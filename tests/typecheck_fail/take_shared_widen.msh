@@ -1,0 +1,2 @@
+[[1]] xs!
+@xs 1 take as [[int | str]] drop

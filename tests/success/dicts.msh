@@ -19,19 +19,19 @@
 {
     -1 : '-1',
     -00002 : '-2' # This should get normalized to 2.
-} d!
+} neg!
 
-@d "-1" get? wl
-@d "-2" get? wl
+@neg "-1" get? wl
+@neg "-2" get? wl
 
 # Try again with no space around the colon. This is to test the handling of a STARTINDEXER token vs. a INTEGER token.
 {
     -1:'-1',
     -00002:'-2' # This should get normalized to 2.
-} d!
+} neg!
 
-@d "-1" get? wl
-@d "-2" get? wl
+@neg "-1" get? wl
+@neg "-2" get? wl
 
 
 
@@ -42,8 +42,8 @@
 {
     "hello": "world",
     'single quote "" string': 'should work'
-} d! @d str wl
-@d keys uw
+} quoted! @quoted str wl
+@quoted keys uw
 
 {
     "key": 1,
@@ -84,9 +84,9 @@
 { "b" : 1, "a": 2 } keyValues (pair! @pair :k? key! @pair :v? value! $"{@key} {@value 1 +}") map uw
 
 # A literal `get` key resolves the specific shape field type, not the union of
-# every field value type. Both spellings resolve `count` to `int` (so `2 +`
-# type-checks); a dynamic/unknown key would type as `int | str` and be rejected.
+# every field value type, so `count` is an `int` and `2 +` type-checks. A key
+# in a variable is known only at run time, so it reads `int | str`.
 { "count": 3, "label": "widgets" } rec!
 @rec "count" get? 2 + str wl              # inline literal key
-"count" ckey! @rec @ckey get? 2 + str wl  # key bound to a variable
+"count" ckey! @rec @ckey get? match int count : @count 2 + str wl, _ : end  # key in a variable
 @rec "label" get? wl                      # str field

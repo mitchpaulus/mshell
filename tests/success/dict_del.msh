@@ -1,0 +1,5 @@
+# del removes a key from a dict and gives the dict back.
+{a: 1, b: 2} as {str: int} d!
+@d "a" del drop
+@d keys len wl
+@d "missing" del keys len wl

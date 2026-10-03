@@ -1,0 +1,9 @@
+# A match on an enum must cover every member, or have a `_` arm.
+enum Shape = circle float | rect float float | dot end
+def area (Shape -- float)
+    match
+        circle r : @r,
+        dot : 0.0,
+    end
+end
+dot area str wl

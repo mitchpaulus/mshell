@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Enums: `enum Shape = circle float | rect float float | dot end` declares a type whose values are one of its members.
+  A member's name makes a value from its payload (`2.0 circle`), and a `match` arm takes it apart (`circle r : ...`).
+  The enum's name is a match pattern for any of its members (`Shape s : ...`).
+  Enums may have parameters (`enum Box[a] = box [a] | empty end`) and may refer to themselves.
+  `str` gives `circle(2)`, `toJson` gives `{"circle": 2}`, and `=` compares the member and its payloads.
+- `tryAs T` checks at run time that a value conforms to the type `T`, and gives `just` the same value or `none`:
+  `"people.json" parseJson tryAs [Person] ?`.
+  Every element, dictionary value and enum payload is checked, in place, with no copy.
+  The match pattern `is T name` does the same check in a match arm, and binds the value.
+- `del` removes a key from a dictionary: `{a: 1, b: 2} "a" del`. Nothing happens when the key is absent.
+- `deepCopy` copies a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original.
+- The interactive shell type checks each line before it runs it, keeping types across lines.
+  A line that does not check is not run and changes nothing.
+  After a line that stops with an error, the stack goes back to what it was before the line, less the new lists, dictionaries and grids the line took.
 - The file manager previews PNG, JPEG, and GIF images in terminals that support sixel graphics, such as Windows Terminal, WezTerm, foot, and xterm.
   Other terminals show the image format and size in pixels.
   If images look stretched, set `MSH_CELL_PIXELS` to the real size of a text cell in pixels, such as `9x20`.
@@ -28,6 +42,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Every script is type-checked before it runs, and runs only if it checks: a file, `-c` code, or code read from standard input.
+  There is no way to run a script unchecked; `--check-types` is still accepted and changes nothing.
+  `--type-check-only` checks and exits, as before.
+  A script that the checker refuses must be fixed before it runs again; `msh --type-check-only` on your scripts shows what needs changing.
+- The type checker checks the standard library's and the startup file's definitions as well as the script's.
+  A definition there with a type error stays defined, but code that calls it is refused, with the error; code that does not call it is checked as before.
+- The match pattern for a date/time is `datetime`, the same as the type name: `datetime d : ...`. Previously it was `date`.
+- `return` at the top level of an interactive line exits the shell, as it ends a script. Previously it ended only the line.
+- A bare word in a list literal is a string, exactly as if it were quoted: `[ls -l]` is `["ls" "-l"]`.
+  `typeof` gives `String`, a `str` match arm matches it, and every word that takes a string takes it.
+  `<`, `parseCsv`, `parseHtml` and `parseJson` read a string as the text itself, so a bare word given to them is text, not a file name: write a path (`` `data.csv` ``) to name a file.
+  A printed list shows the word quoted.
+- A number too large to read, in a literal, an index such as `:99999999999999999999:`, or a positional argument, is an error when the script is read, not when that code runs.
+  A slice like `1:99999999999999999999` used to crash.
+- The type checker (run on every script, by `--type-check-only`, and by the language server) is new.
+  It is built so that a script it accepts never stops with a type mismatch at run time,
+  and it rejects code that the old checker accepted and that then failed. In particular:
+  - A stored value keeps the type it was made with: a list, dictionary or grid passed on, stored or duplicated is never seen at a second, wider type.
+    A new value, such as a literal written where it is used, may be given any type it fits: `[1 2] as [int | str]`.
+    `deepCopy` makes a new value from a stored one.
+  - A variable has one type in each definition and in the script.
+    Store values of a different type under a new name, or widen the first store with `as`.
+  - `parseJson` gives `Json`, which must be checked before use, with `match` or `tryAs`.
+  - `as` needs evidence: it widens a type, or retypes a new value. Use `tryAs` to check data from outside.
+  - A redirect or a type-changing grid update needs a new list or grid: `[cmd] *`, not `@cmd *`.
+  - A definition that returns a new list, dictionary or grid says so: `def load ( -- new Json)`.
+  - A definition that never returns says so: `def die (str -- never)`.
+  - `break` and `continue` work in a quotation written at the `loop`, `each`, `map`, or other word that runs it, not in a stored one.
+  - A `?` that can only fail, such as on a key a dictionary's type says is absent, is pointed out by the language server.
+- A name can be defined only once. A second definition of a name, in the script, the init file or the standard library,
+  is an error, as is a definition with the name of a builtin or an enum member.
+  Previously the first definition silently won, so a later one never ran.
+- `enum` and `tryAs` are keywords.
+- A `type` name can be declared only once, and not with the name of an enum, an enum member, a builtin or a built-in type.
+  A `type` or `enum` declaration that names an unknown type, refers to itself with nothing in between (`type A = A`),
+  or has a union of two lists or two dictionaries is an error before the script runs, with or without the type checker.
+- `parseJson` gives an `int` for a JSON number with no fraction or exponent, such as `30`, and a `float` for any other, such as `30.0` or `3e1`.
+  Previously every JSON number was a `float`.
 - Format string interpolations can hold any code: string literals, dictionaries, and nested format strings all work inside `{...}`.
   Interpolations are parsed once when the script is read, not each time the string is built,
   and errors inside them point at the right line and column.
@@ -52,6 +104,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Write `cond (value return) iff` as `cond if value return end`, and leave a loop early with `break`.
 - The type checker rejects a `return` that leaves more values than the definition declares,
   such as `def name (-- str) 5 "a" return end`.
+- `map` on a grid with no rows gives a grid with no columns. Previously it kept the input grid's columns.
+- In a signature, a generic is a single letter, optionally followed by digits (`a`, `T`, `T1`).
+  Any other name that is not a type is an error, with a hint for names such as `string` (`str`) and `numeric` (`int | float`).
+  Previously a misspelled type silently became a generic.
+- The type checker is about twice as fast, and checking a file again, as the language server does on every edit, allocates almost nothing.
+  Deeply nested quotations no longer take quadratic time.
 
 ### Security
 
@@ -65,6 +123,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Pressing TAB to complete a command's arguments no longer changes the interactive shell's variables: completion definitions run in a scope of their own.
+- Running or type checking a startup file itself (the init file, or the standard library through `MSHSTDLIB`) no longer also loads it as a startup file first, which defined everything in it twice.
+
+- `map` on a grid, when a row the quotation gives lacks a column the first row has, is an error.
+  Previously the cell was left empty, which crashed later or read as zero.
+- `updateCol` whose quotation adds rows to the grid it is updating is an error. Previously it crashed.
+- The language server:
+  - publishes diagnostics only for a document's newest text, and none for a closed document.
+    Previously an older check could finish last and leave errors for text that no longer existed,
+    and fast typing in a large document could use gigabytes of memory.
+  - puts diagnostics, hover, completion and rename at the right column on lines with characters such as emoji.
+  - renames a variable everywhere in its scope: inside `if` and `match` arms, prefix quotations, and match and `=>` bindings.
+  - fixes every `new` mark of a large file at once in a fraction of a second. Previously it took seconds and blocked other requests.
+  - shows errors in the startup files, as the command line does.
+- `chunk` with a size of 0 or less exits with an error. Previously it never finished.
+- `ssh` completion after an option it has no list for offers the options and hosts. Previously it gave back a quotation instead of a list.
+- `loop` on a stored quotation runs it in the variables it captured, as `x` and `each` do.
+  Previously it read and wrote the variables of the code around the loop.
+- `=` and `!=` on two `Maybe`s that hold values of different kinds, such as `null` and an int from a `Maybe[int | null]`, give false.
+  Previously one order was an error.
+- A slice of a pipe (`@p 1:`) is a new list. Previously it shared storage with the pipe, so `setAt` or `append` on the slice could change the pipe.
+- `=` and `!=` on two `Maybe` values compare their contents. Previously every comparison of two `Maybe`s was false, including `none none =`.
+- `str` and `toJson` on a list or dict that contains itself are an error. Previously they crashed with a Go stack overflow or never finished.
+  Printing, `toJson` and `=` also work on values nested any number of levels deep,
+  and `=` finishes on dicts that contain themselves.
 - The type checker now checks list literals, dict values, and grid cells on their own empty stack, as they run.
   Code like `1 [drop]` or `1 {a: drop}` is a type error instead of a type checker crash or a pass that fails at runtime,
   and a dict value must produce exactly one value (#341).
@@ -89,6 +172,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It used to leave only the `if` or `match`, and the rest of the definition kept running.
 - A definition called as the last item of a redirected quotation run by `iff`, such as ``true (myDef) `out.txt` > iff``, now writes to the file.
   The file used to be closed before the definition ran.
+- `and` and `or` with a quote give an error, not a crash, when the left value is not a `bool`.
+  A `break` in the quote no longer drops a value from the stack.
+- `mod` with a top value that is not a number gives an error. It used to drop both values silently.
+- `parseCsv` and `parseHtml` give an error, not a crash, on input that is not a string or path.
+- `=` and `!=` with `null` on one side work in both orders. `null 1 =` is `false`; it used to be an error.
+- `toFixed` with a negative number of places gives an error instead of printing `%!(BADPREC)`.
+- `toJson` writes `null` for a NaN or infinite float, as JavaScript does. It used to write nothing, giving invalid JSON.
+- `leftPad` counts code points, not bytes, so it no longer cuts a multi-byte pad character.
+- The strings from `binPaths` compare equal to other strings.
+- `psub` with input that is not a string no longer leaves a temporary file behind.
+- Some error messages named the wrong function, such as `date` saying `day`. They now name the function that failed.
+- `gridSetCell` writes a value of a different kind than the rest of its column, such as a string into a column of integers. It used to drop the value silently.
+- The quotes `completionDefs` gives run their definition as a call: its variables no longer overwrite the caller's, and a `return` in it no longer returns from the caller.
+- A pipe (`|`) has its own copy of its list of commands. Previously changing the list afterwards also changed the pipe.
+- `seq` and `leftPad` with an impossibly large count give an error instead of crashing.
+- `numFmt` with `sigFigs` above 17 gives an error. A float holds about 17 significant digits, so more gave wrong digits.
 
 ### Added
 
@@ -364,7 +463,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dict type expressions now require an implicit (or `str`) key. `{V}` and `{str: V}` are accepted; anything else (`{int: V}`, `{path: V}`, etc.) is a parse error. Dict keys are always `str` at runtime, and the type system no longer pretends otherwise. Every dict-related builtin signature (`keys`, `values`, `get`, `set`, `setd`, `getDef`, `map`, `filter`, `in`, `len`, `keyValues`, `listToDict`) drops the `K` generic accordingly.
 - `Error loading startup files:` now includes the script path, whether a version was pinned, the full MSHSTDLIB/MSHINIT and standard-location lookup order, and concrete resolution steps
 - Tightened the grid form of `groupBy`: the aggregation-spec list is typed as `[{agg: (GridView -- V)}]` instead of `[{str: V}]`, so the required `agg` field and its quotation shape are now enforced statically. The agg quote's output type is generic per element, so a single list may mix specs whose quotations return different scalar types. Width subtyping still allows the optional `name` and `meta` fields.
-- `[head ...rest]` (and any other spread in a `match` list pattern) now binds the rest as a zero-copy sub-slice of the source list. Appending to the rest still allocates a fresh backing array because cap equals len, so the source is never overwritten. The behavioral difference is that `setAt` on the rest list now mutates the shared backing — historically rest was an independent copy. This makes recursive list-walking idioms (e.g. `def f [head ...rest] : ... @rest f`) run in linear time instead of O(N²); the previous copy was the dominant cost on large lists.
 - Extended the `:name` getter (and `get` built-in) to accept `Grid` and `GridView`. On a grid the getter returns the named column as `Maybe[[T]]` — the materialized column when present, `none` when the column is absent — making `g :n?` a shorthand for `g "n" gridCol`. On a `GridView` the values are projected through the view's row indices. The type checker now resolves the element type from the grid's schema when known. The runtime error message for `:` on an unsupported type now lists `Grid` and `GridView` alongside `dict` and `GridRow`.
 - The type checker now rejects `pivot` aggregation quotations whose return type resolves to a container (`[T]`, `{V}`, shape, `Grid`, `GridView`, `GridRow`), mirroring the runtime constraint that pivoted cells must be scalars. The check fires only when the quote's output is concretely a container after substitution; if the output stays as an unconstrained type variable (e.g. `(:foo?)` quotes that infer through a synthesized fresh input), the call still type-checks and the runtime still catches it.
 - Tightened the `w` / `wl` / `we` / `wle` write-builtin type signatures to match the runtime: `wl` / `wle` are now `(str -- ) | (int -- )`, and `w` / `we` are now `(str -- ) | (int -- ) | (bytes -- )`. Previously these were typed as `(T -- )` and silently accepted floats, bools, datetimes, lists, etc. — all of which crash at runtime. Convert with `str` first (`1.5 str wl`) for other types.

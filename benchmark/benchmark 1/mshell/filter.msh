@@ -4,7 +4,7 @@
 "value" (toFloat?) updateCol
 "id" (toInt?) updateCol g!
 
-@g (:value? 50 >) filter result!
+@g (:value? 50.0 >) filter result!
 
 @result gridRows rows!
 @result "id" gridCol sum sumId!

@@ -1,0 +1,4 @@
+# An enum that holds a quotation cannot be validated against: the validator
+# cannot look inside a quotation.
+enum F = f (int -- int) end
+(1 +) f tryAs F drop

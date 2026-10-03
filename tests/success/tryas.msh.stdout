@@ -1,0 +1,14 @@
+a, b
+rejected
+0
+5
+http://x
+cfg2 rejected
+cfg3 ok
+3
+str is not list
+not all ints
+path ok
+five is not a str
+maybe ok
+none is a Maybe

@@ -1,0 +1,4 @@
+# A member pattern on a value of unknown type binds a list whose element
+# type is known only inside the arm; it cannot be bound to a name.
+enum Box[a] = box [a] | empty end
+def g (a -- ) match box xs : @xs len str wl, _ : end end

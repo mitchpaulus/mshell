@@ -1,0 +1,57 @@
+# deepCopy gives every list, dict and grid a new object, once per path.
+
+# One list reached along two paths becomes two lists.
+[1 2] xs!
+{a: @xs, b: @xs} deepCopy d!
+@d :a? 3 append drop
+@d :a? toJson wl
+@d :b? toJson wl
+@xs toJson wl
+
+# Nested lists are copied too.
+[[1] [2]] l!
+@l deepCopy c!
+@c 0 nth 9 append drop
+@l toJson wl
+@c toJson wl
+
+# Maybe: the payload is copied.
+[1] just m!
+@m deepCopy mc!
+@mc ? 5 append drop
+@m toJson wl
+@mc toJson wl
+
+# Immutable values are unchanged.
+"text" deepCopy wl
+5 deepCopy str wl
+none deepCopy str wl
+
+# A quote is shared, and still runs.
+(2 *) deepCopy q!
+4 @q x str wl
+
+# A command keeps its redirects.
+[echo hello] * deepCopy ; trim wl
+
+# A pipe's commands are copied.
+[[echo a] [echo b]] | p!
+@p deepCopy pc!
+@pc toJson wl
+
+# Grids: the copy has its own columns.
+[| x, y; 1, "a"; 2, "b" |] g!
+@g deepCopy gc!
+@gc "x" 0 10 gridSetCell drop
+@g toJson wl
+@gc toJson wl
+
+# A grid view is copied as a view of a new grid holding its rows.
+@g (:x? 1 >) filter v!
+@v deepCopy vc!
+@vc gridValues toJson wl
+@vc len str wl
+
+# A grid row is copied as a row of a new one-row grid.
+@g :1: deepCopy rc!
+@rc :y? wl

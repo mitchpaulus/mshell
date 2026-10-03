@@ -1,0 +1,2 @@
+# get on a value of unknown contents: it may not be a dict.
+{"a": 1} as {} "a" get ? "b" get drop

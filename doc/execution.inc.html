@@ -192,6 +192,14 @@ and <code>[cmd] 2>&amp;1 1>&amp;2</code> (circular merge) are all rejected.
 <code>2>&amp;1</code> also cannot be combined with <code>&lt;&gt;</code>, since stderr text would be written back into the edited file.
 </p>
 
+<p>
+A redirect or capture changes the list it is written on; it does not make a new one.
+So a redirect goes on a list nothing else refers to: straight after the list literal (<code>[cmd] *</code>), or on a copy.
+On a list stored in a variable, <code>@c *</code> is a type error, since <code>c</code> would then hold a command with a capture where the checker expects one without; write <code>@c deepCopy *</code>.
+<code>&lt;</code> and <code>&amp;</code> change nothing the checker tracks, so they are fine on any list.
+See <a href="type_system.html#type-system-in-place">Changing a Type in Place</a>.
+</p>
+
 <table>
   <caption>Summary of external command operators</caption>
   <thead>
@@ -236,7 +244,7 @@ Capture the individual command lists inside the quotation instead — for exampl
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">cmd1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">cmd2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellASTERISK">*</span> <span class="mshellBANG">!</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLINECOMMENT"># Run each command, collect stdouts as a list of strings.</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">cmd1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">cmd2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">deepCopy</span> <span class="mshellASTERISK">*</span> <span class="mshellBANG">!</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLINECOMMENT"># Run each command, collect stdouts as a list of strings.</span>
 </code>
 </pre>
 
@@ -288,6 +296,13 @@ Use <code>&lt;</code> to feed data into stdin. The type of the value on top of t
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`myfile.txt`</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Equivalent to shell input redirection from a file</span>
 <span class="mshellEOF"></span></code>
 </pre>
+
+<p>
+A bare word in a list literal is a string, so it is fed as text, not read as a file:
+<code>[echo [wc -c] data.txt &lt; * !] !</code> counts the 8 characters of <code>data.txt</code>.
+Write a path to name a file: <code>[echo [wc -c] `data.txt` &lt; * !] !</code>.
+On the interactive command line, <code>wc -c &lt; data.txt</code> reads the file: there the word after <code>&lt;</code> becomes a path.
+</p>
 
 <p><code>Binary</code> values are written directly without any string conversion.</p>
 

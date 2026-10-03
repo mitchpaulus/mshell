@@ -1,0 +1,3 @@
+# A prefix quote names its word without one trailing dot: `drop..` calls `drop.`,
+# not drop (the runtime refuses it).
+5 drop.. end wl

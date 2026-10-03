@@ -1,0 +1,3 @@
+# An alias that is only itself has no values.
+type A = A
+1 wl

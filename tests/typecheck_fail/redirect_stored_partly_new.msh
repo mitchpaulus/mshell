@@ -1,0 +1,3 @@
+# Once stored, the list is shared: a redirect would give the stored
+# command a second type.
+["a" "b"] fs!  [echo @fs] c!  @c * ; drop

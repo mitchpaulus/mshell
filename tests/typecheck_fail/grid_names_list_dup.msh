@@ -1,0 +1,3 @@
+# A list literal of names, duplicated and changed through the copy: the
+# names select reads are the changed ones.
+[| a, b; 1, "x" |] ["a"] dup "b" 0 setAt drop select gridValues :0: :0: 1 + wl

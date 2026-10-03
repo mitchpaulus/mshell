@@ -1,0 +1,5 @@
+# A dict that contains itself, through a list, cannot be turned into JSON.
+type D = {str: [D]}
+{} as D d!
+@d "items" [@d] set drop
+@d toJson wl

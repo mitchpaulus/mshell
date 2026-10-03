@@ -1,0 +1,3 @@
+# A generic enum whose name is not ASCII takes arguments written against it.
+enum Bøx[a] = bøx a end
+5 bøx as Bøx[int] match bøx n : @n 1 + wl end

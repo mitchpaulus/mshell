@@ -1,0 +1,44 @@
+# tryAs and `is` against recursive aliases, enums and unions.
+
+type Person = {name: str, age: int, friends: [Person]}
+type Config = {url: str, timeout?: float}
+enum Shape = circle float | rect float float end
+enum Box[a] = box [a] | empty end
+
+# A recursive alias: every friend is validated too.
+"[{\"name\": \"a\", \"age\": 3, \"friends\": [{\"name\": \"b\", \"age\": 4, \"friends\": []}]}]" parseJson
+tryAs [Person] ? :0: :friends? :0: :age? wl
+"[{\"name\": \"a\", \"age\": 3, \"friends\": [{\"name\": \"b\", \"age\": \"4\", \"friends\": []}]}]" parseJson
+tryAs [Person] match just _ : "people" wl, none : "a friend's age is not an int" wl, end
+
+# A def whose output is new gives a value that can be validated in place.
+def loadConfig ( -- new Json) "{\"url\": \"http://example.com\", \"timeout\": 2.5}" parseJson end
+loadConfig tryAs Config ? :timeout? str wl
+
+# A stored value is validated against a type it does not have only as a copy.
+{age: 1} ages!
+@ages deepCopy tryAs {str: int | str} ? "age" "one" set :age? wl
+@ages :age? wl
+
+# Enum values are validated by enum, member and payloads.
+[2.0 circle 1.0 3.0 rect] tryAs [Shape] ? len wl
+[1] box tryAs Box[int | str] ? match box xs : @xs "x" append len wl, empty : "empty" wl, end
+"[1]" parseJson tryAs [Shape] match just _ : "shapes" wl, none : "not shapes" wl, end
+
+# `is` arms: each validates the value; together they may cover its type. The
+# input is shared and `int | [Json]` is not below `[Json]`, so the arms
+# validate a copy.
+def describe (int | [Json] -- str)
+    deepCopy match
+        is int n : $"int {@n str}",
+        is [Json] items : $"{@items len str} items",
+    end
+end
+5 describe wl
+"[1, \"a\"]" parseJson tryAs [Json] ? describe wl
+
+# `is T _ :>` keeps the value on the stack, at type T.
+"{\"url\": \"x\"}" parseJson match
+    is Config _ :> :url? wl,
+    _ : "not a config" wl,
+end

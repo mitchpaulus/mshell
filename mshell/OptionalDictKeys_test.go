@@ -2,9 +2,9 @@ package main
 
 import "testing"
 
-// allCheckerErrors runs the full program checker and returns every
-// diagnostic, including SeverityInfo ones (the CLI entry point filters
-// those out, but the LSP path surfaces them, so tests inspect them here).
+// allCheckerErrors runs the checker and returns every diagnostic,
+// including SeverityInfo ones (the CLI leaves those out, but the language
+// server shows them, so tests inspect them here).
 func allCheckerErrors(t *testing.T, src string) []TypeError {
 	t.Helper()
 	l := NewLexer(src, nil)
@@ -13,11 +13,8 @@ func allCheckerErrors(t *testing.T, src string) []TypeError {
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
-	arena := NewTypeArena()
-	names := NewNameTable()
-	checker := NewChecker(arena, names)
-	checker.CheckProgram(file)
-	return checker.Errors()
+	errs, _, _ := NewCoreBase(nil, nil).Diagnostics(file)
+	return errs
 }
 
 func fatalErrorCount(errs []TypeError) int {
@@ -248,13 +245,14 @@ func TestGetLiteralKeyIsFieldPrecise(t *testing.T) {
 	}
 }
 
-// The key value rides the stack as a `str` refinement, so it resolves even
-// when it reaches `get` through a variable rather than inline — the literal
-// need not be adjacent to `get`.
-func TestGetLiteralKeyThroughVariable(t *testing.T) {
+// A key read from a variable is known only at run time, even when the
+// variable was stored from a literal: a literal key is one written right
+// before `get` (design doc, "Runtime keys"). So it reads the join of every
+// field value type, which writeFile rejects.
+func TestGetKeyThroughVariableIsRuntimeKey(t *testing.T) {
 	src := `{ "url": "https://example.com" } httpGet? "body" k! @k get? "out.bin" writeFile`
-	if n := fatalErrorCount(allCheckerErrors(t, src)); n != 0 {
-		t.Fatalf("a literal key bound to a variable should still resolve `body` to bytes; got %d errors", n)
+	if n := fatalErrorCount(allCheckerErrors(t, src)); n == 0 {
+		t.Fatalf("a key from a variable should read every field's type, which writeFile rejects")
 	}
 }
 

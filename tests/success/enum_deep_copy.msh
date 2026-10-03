@@ -1,0 +1,9 @@
+# deepCopy of an enum value copies the lists in its payloads.
+enum Box[a] = box [a] | empty end
+[1 2] xs!
+@xs box b!
+@b deepCopy c!
+@c match box ys : @ys 3 append drop, empty : end
+@b str wl
+@c str wl
+empty deepCopy str wl

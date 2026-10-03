@@ -1,0 +1,4 @@
+# A second definition of a name would never run, so it is an error.
+def f ( -- int) 1 end
+def f ( -- int) 2 end
+f str wl

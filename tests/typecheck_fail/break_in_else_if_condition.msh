@@ -1,0 +1,2 @@
+# break and continue are refused in an else-if condition.
+0 (false if 1 else* break true *if 2 else 3 end drop) loop

@@ -1,0 +1,16 @@
+# A slice of a pipe is a new list: changing it leaves the pipe unchanged.
+
+[[echo a] [echo b] [echo c]] | p!
+
+@p :2 q!
+@q [echo "z"] append drop
+@q [echo "y"] 0 setAt drop
+@p toJson wl
+
+@p 1: r!
+@r [echo "w"] 0 setAt drop
+@p toJson wl
+
+@p 0:1 s!
+@s [echo "v"] append drop
+@p toJson wl

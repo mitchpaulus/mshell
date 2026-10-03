@@ -1,0 +1,3 @@
+# An enum member cannot take a builtin's name.
+enum Size = small | len end
+small str wl

@@ -1,0 +1,34 @@
+# Json equals the same union in another order (alg_json_teq)
+sub 30 (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0))))))) (mu (union (dict (rv 0)) (union (list (rv 0)) (union str (union int bool)))))	yes
+sub 30 (mu (union (dict (rv 0)) (union (list (rv 0)) (union str (union int bool))))) (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0)))))))	yes
+# alg_int_json, alg_list_json
+sub 30 int (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0)))))))	yes
+sub 30 (list (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0)))))))) (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0)))))))	yes
+# a {name, age, friends} literal is a Person (alg_person_lit)
+sub 30 (rec ((friends (req (list (mu (rec ((name (req str)) (age (req int)) (friends (req (list (rv 0))))) open))))) (age (req int)) (name (req str))) abs) (mu (rec ((name (req str)) (age (req int)) (friends (req (list (rv 0))))) open))	yes
+# a stored [int] is not Json; a fresh one may become one (alg_ints_json)
+sub 30 (list int) (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0)))))))	no
+rsub 30 (list int) (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0)))))))	yes
+# alg_a_to_c
+rsub 30 (mu (rec ((x (req (list (rv 0)))) (y (req int))) open)) (mu (rec ((x (req (list (rv 0)))) (y (req (union int str)))) open))	yes
+# H12: one assumption set per relation (alg_h12)
+rsub 30 (mu (rec ((x (req (list int))) (f (req (quote () ((rv 0)))))) abs)) (mu (rec ((x (req (list (union int str)))) (f (req (quote () ((rv 0)))))) abs))	no
+# H13: type V = int | V; str is not below V (alg_h13)
+sub 30 str (mu (union int (rv 0)))	no
+# cache_early: A <= B is no
+sub 30 (mu (rec ((x (req (list int))) (f (req (quote () ((rv 0)))))) abs)) (mu (rec ((x (req (list (union int str)))) (f (req (quote () ((rv 0)))))) abs))	no
+sub 30 (quote () ((mu (rec ((x (req (list int))) (f (req (quote () ((rv 0)))))) abs)))) (quote () ((mu (rec ((x (req (list (union int str)))) (f (req (quote () ((rv 0)))))) abs))))	no
+# joins (alg_join_*)
+join 30 (shared int) (fresh (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0))))))))	(shared (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0))))))))
+join 30 (fresh (list int)) (fresh (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0))))))))	(fresh (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0))))))))
+join 30 (shared (list int)) (fresh (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0))))))))	none
+join 30 (fresh (list (mu (rec ((name (req str)) (age (req int)) (friends (req (list (rv 0))))) open)))) (fresh (list (rec ((friends (req (list (mu (rec ((name (req str)) (age (req int)) (friends (req (list (rv 0))))) open))))) (age (req int)) (name (req str))) abs)))	(fresh (list (mu (rec ((name (req str)) (age (req int)) (friends (req (list (rv 0))))) open))))
+join 30 (fresh (mu (rec ((x (req (list (rv 0)))) (y (req int))) open))) (fresh (mu (rec ((x (req (list (rv 0)))) (y (req str))) open)))	none
+# joins by kind and by one side being below (alg_join_two_enums, alg_join_never_quote, ...)
+join 30 (shared (enum Shape imm () ())) (shared (enum LoadError imm () ()))	(shared (union (enum Shape imm () ()) (enum LoadError imm () ())))
+join 30 (shared (quote (str) never)) (shared (quote (str) (str)))	(shared (quote (str) (str)))
+join 30 (fresh (quote (int) (int))) (fresh (quote (int) (str)))	none
+join 30 (shared (union int str)) (shared (union int (union str bool)))	(shared (union int (union str bool)))
+# type L = [L] is a list of itself (not an example in Rocq; a yes is a proof by subq_sound)
+sub 30 (mu (list (rv 0))) (list (mu (list (rv 0))))	yes
+sub 30 (list (mu (list (rv 0)))) (mu (list (rv 0)))	yes

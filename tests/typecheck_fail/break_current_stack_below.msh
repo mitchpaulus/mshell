@@ -1,0 +1,3 @@
+# The stack below map on a Maybe holds a str where the loop's stack has an
+# int, so a break in its quote leaves the loop at the wrong type.
+0 ( drop "s" 5 just (drop break) map drop ) loop 1 + wl

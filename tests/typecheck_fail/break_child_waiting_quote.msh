@@ -1,0 +1,5 @@
+# A quote literal below each is still waiting for its consumer when a break
+# in each's quote leaves the loop. Deciding whether that break may leave the
+# loop must not fix the literal's type without checking its body: ("a" +)
+# is not the (int -- int) the loop's stack holds.
+(1 +) ( drop ("a" +) [1] (drop break) each ) loop  2 swap x wl

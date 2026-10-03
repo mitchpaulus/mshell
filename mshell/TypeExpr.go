@@ -20,6 +20,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // tokDesc returns a short human-readable description of a token, used
@@ -214,6 +215,19 @@ func (a *TypeQuoteExpr) DebugString() string {
 	}
 	return "(" + strings.Join(ins, " ") + " -- " + strings.Join(outs, " ") + ")"
 }
+
+// TypeNewExpr is a def output marked `new`: `( -- new Json)`. The body
+// must leave a new (fresh) value there, and callers get it as new
+// (ai/type-core-calculus.typ, "New def outputs").
+type TypeNewExpr struct {
+	Tok   Token
+	Inner MShellParseItem
+}
+
+func (a *TypeNewExpr) GetStartToken() Token { return a.Tok }
+func (a *TypeNewExpr) GetEndToken() Token   { return a.Inner.GetEndToken() }
+func (a *TypeNewExpr) ToJson() string       { return fmt.Sprintf("{\"new\": %s}", a.Inner.ToJson()) }
+func (a *TypeNewExpr) DebugString() string  { return "new " + a.Inner.DebugString() }
 
 // TypeUnionExpr is a union `A | B | C`.
 type TypeUnionExpr struct {
@@ -605,6 +619,23 @@ func (parser *MShellParser) parseTypeNamed(errs *[]TypeError) MShellParseItem {
 	node := &TypeNamed{Tok: tok, Name: tok.Lexeme}
 	if tok.Lexeme == "Maybe" {
 		parser.applyMaybeArgs(node, errs)
+	} else if parser.curr.Type == LEFT_SQUARE_BRACKET && parser.curr.Start == tok.Start+utf8.RuneCountInString(tok.Lexeme) {
+		// Arguments of a generic enum, written against the name: `Box[int]`,
+		// `Pair[int str]`. `Foo [int]` with a space is a name and then a list.
+		parser.NextToken() // consume [
+		for parser.curr.Type != RIGHT_SQUARE_BRACKET && parser.curr.Type != EOF {
+			arg, subErrs := parser.parseTypeExpr()
+			*errs = append(*errs, subErrs...)
+			node.Args = append(node.Args, arg)
+		}
+		if parser.curr.Type != RIGHT_SQUARE_BRACKET {
+			*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ']' to close the arguments of " + tok.Lexeme})
+		} else {
+			parser.NextToken()
+		}
+		if len(node.Args) == 0 {
+			*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: tok, Hint: tok.Lexeme + "[] has no arguments; leave the brackets out"})
+		}
 	}
 	return node
 }
@@ -631,7 +662,7 @@ func (parser *MShellParser) applyMaybeArgs(node *TypeNamed, errs *[]TypeError) {
 // shape with that field name.
 func isPrimitiveLiteralType(lex string) bool {
 	switch lex {
-	case "bytes", "null", "Maybe", "Grid", "GridView", "GridRow":
+	case "binary", "null", "Maybe", "Grid", "GridView", "GridRow":
 		return true
 	}
 	return false
@@ -655,8 +686,23 @@ func (parser *MShellParser) parseDefSignature() ([]MShellParseItem, []MShellPars
 		return nil, nil, err
 	}
 	for parser.curr.Type != RIGHT_PAREN && parser.curr.Type != EOF {
+		// `new T` marks a new output. A lone `new` before `)` stays a
+		// generic of that name.
+		var newTok *Token
+		if parser.curr.Type == LITERAL && parser.curr.Lexeme == "new" {
+			tok := parser.curr
+			parser.NextToken()
+			if parser.curr.Type == RIGHT_PAREN {
+				outputs = append(outputs, &TypeNamed{Tok: tok, Name: tok.Lexeme})
+				break
+			}
+			newTok = &tok
+		}
 		item, subErrs := parser.parseTypeExpr()
 		errs = append(errs, subErrs...)
+		if newTok != nil {
+			item = &TypeNewExpr{Tok: *newTok, Inner: item}
+		}
 		outputs = append(outputs, item)
 	}
 	if err := parser.Match(parser.curr, RIGHT_PAREN); err != nil {
@@ -666,131 +712,4 @@ func (parser *MShellParser) parseDefSignature() ([]MShellParseItem, []MShellPars
 		return nil, nil, fmt.Errorf("%s", joinTypeErrs(errs))
 	}
 	return inputs, outputs, nil
-}
-
-// Resolution --------------------------------------------------------------
-
-// typeResolveCtx is the per-call scope used while resolving a type AST to
-// a TypeId. It carries the per-def map of generic names so two occurrences
-// of `a` in one signature share a TypeVarId. A nil context (top-level
-// `type X = ...` resolution, or `as T` casts) flags any unknown LITERAL
-// as an unknown-type error rather than implicitly generalizing.
-type typeResolveCtx struct {
-	generics map[string]TypeVarId
-	next     uint32
-}
-
-func (c *Checker) resolveTypeExpr(node MShellParseItem, ctx *typeResolveCtx) TypeId {
-	switch n := node.(type) {
-	case *TypePrim:
-		return n.Tid
-	case *TypeListExpr:
-		return c.arena.MakeList(c.resolveTypeExpr(n.Elem, ctx))
-	case *TypeDictExpr:
-		return c.arena.MakeDict(c.resolveTypeExpr(n.Key, ctx), c.resolveTypeExpr(n.Value, ctx))
-	case *TypeShapeExpr:
-		fields := make([]ShapeField, 0, len(n.Fields))
-		for _, f := range n.Fields {
-			fields = append(fields, ShapeField{
-				Name:     c.names.Intern(f.Name),
-				Type:     c.resolveTypeExpr(f.Type, ctx),
-				Optional: f.Optional,
-			})
-		}
-		return c.arena.MakeShape(fields)
-	case *TypeQuoteExpr:
-		ins := make([]TypeId, 0, len(n.Inputs))
-		for _, in := range n.Inputs {
-			ins = append(ins, c.resolveTypeExpr(in, ctx))
-		}
-		outs := make([]TypeId, 0, len(n.Outputs))
-		for _, out := range n.Outputs {
-			outs = append(outs, c.resolveTypeExpr(out, ctx))
-		}
-		return c.arena.MakeQuote(QuoteSig{Inputs: ins, Outputs: outs})
-	case *TypeUnionExpr:
-		arms := make([]TypeId, 0, len(n.Arms))
-		for _, a := range n.Arms {
-			arms = append(arms, c.resolveTypeExpr(a, ctx))
-		}
-		return c.arena.MakeUnion(arms, NameNone)
-	case *TypeNamed:
-		switch n.Name {
-		case "bytes":
-			return TidBytes
-		case "none":
-			// `none` is the empty constructor of Maybe (like Haskell's
-			// Nothing), not a type. Reject it in type position with a
-			// pointer to the right tool. Without this case it would
-			// silently become an implicit generic inside a def signature.
-			c.errors = append(c.errors, TypeError{
-				Kind: TErrTypeParse, Pos: n.Tok,
-				Hint: "'none' is not a type; it is the empty constructor of Maybe. Use 'Maybe[T]' for an optional value, or 'null' for the JSON null type",
-			})
-			return TidNothing
-		case "null":
-			return TidNull
-		case "path":
-			return TidPath
-		case "datetime":
-			return TidDateTime
-		case "Grid":
-			return c.arena.MakeGrid(0)
-		case "GridView":
-			return c.arena.MakeGridView(0)
-		case "GridRow":
-			return c.arena.MakeGridRow(0)
-		case "Maybe":
-			if len(n.Args) != 1 {
-				return TidNothing
-			}
-			return c.arena.MakeMaybe(c.resolveTypeExpr(n.Args[0], ctx))
-		}
-		if id := c.LookupType(n.Name); id != TidNothing {
-			return id
-		}
-		if ctx != nil {
-			if id, ok := ctx.generics[n.Name]; ok {
-				return c.arena.MakeVar(id)
-			}
-			id := TypeVarId(ctx.next)
-			ctx.next++
-			if ctx.generics == nil {
-				ctx.generics = map[string]TypeVarId{}
-			}
-			ctx.generics[n.Name] = id
-			return c.arena.MakeVar(id)
-		}
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrTypeParse, Pos: n.Tok,
-			Hint: "unknown type '" + n.Name + "'",
-		})
-		return TidNothing
-	}
-	return TidNothing
-}
-
-// resolveSigItems resolves a list of type AST nodes against a shared
-// generic-scope context and returns the parallel TypeId slice.
-func (c *Checker) resolveSigItems(items []MShellParseItem, ctx *typeResolveCtx) []TypeId {
-	out := make([]TypeId, 0, len(items))
-	for _, it := range items {
-		out = append(out, c.resolveTypeExpr(it, ctx))
-	}
-	return out
-}
-
-// ResolveDefSig resolves a def signature (inputs / outputs in AST form)
-// into a fully-baked QuoteSig with fresh TypeVarIds. Generics are scoped
-// to this def: identical names across inputs and outputs share a var;
-// across distinct calls each gets its own ctx.
-func (c *Checker) ResolveDefSig(inputs, outputs []MShellParseItem) QuoteSig {
-	ctx := &typeResolveCtx{}
-	ins := c.resolveSigItems(inputs, ctx)
-	outs := c.resolveSigItems(outputs, ctx)
-	gens := make([]TypeVarId, 0, len(ctx.generics))
-	for _, v := range ctx.generics {
-		gens = append(gens, v)
-	}
-	return QuoteSig{Inputs: ins, Outputs: outs, Generics: gens}
 }

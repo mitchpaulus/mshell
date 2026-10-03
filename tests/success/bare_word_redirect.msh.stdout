@@ -1,0 +1,8 @@
+String
+str
+str
+from quote
+bare_word_redirect.msh
+# A bare word in a list literal is a string, exactly as if it were quoted.
+22
+

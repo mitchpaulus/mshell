@@ -255,7 +255,7 @@ Each column can have optional metadata specified as a dictionary immediately aft
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLITERAL">gridValues</span>  <span class="mshellLINECOMMENT"># [[1 2] [3 4]]</span>
 
 <span class="mshellLINECOMMENT"># Add a new column</span>
-<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"z"</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">10</span> <span class="mshellINTEGER">20</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">gridAddCol</span>  <span class="mshellLINECOMMENT"># Grid with x, y, z columns</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLITERAL">deepCopy</span> <span class="mshellSTRING">&#34;z&#34;</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">10</span> <span class="mshellINTEGER">20</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">gridAddCol</span>  <span class="mshellLINECOMMENT"># A new grid with x, y, z columns</span>
 
 <span class="mshellLINECOMMENT"># Set a cell value</span>
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"x"</span> <span class="mshellINTEGER">0</span> <span class="mshellINTEGER">100</span> <span class="mshellLITERAL">gridSetCell</span>  <span class="mshellLINECOMMENT"># Sets grid[0]["x"] = 100</span>
@@ -267,7 +267,7 @@ Each column can have optional metadata specified as a dictionary immediately aft
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"y"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">exclude</span>  <span class="mshellLINECOMMENT"># Grid with only x</span>
 
 <span class="mshellLINECOMMENT"># Derive a new column with metadata</span>
-<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"sum"</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"kind"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"derived"</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">x</span><span class="mshellQUESTION">?</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">y</span><span class="mshellQUESTION">?</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">derive</span>  <span class="mshellLINECOMMENT"># Grid with x, y, sum</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">&#34;sum&#34;</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">&#34;kind&#34;</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;derived&#34;</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellVARSTORE">r!</span> <span class="mshellVARRETRIEVE">@r</span> <span class="mshellCOLON">:</span><span class="mshellINTERPRET">x</span><span class="mshellQUESTION">?</span> <span class="mshellVARRETRIEVE">@r</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">y</span><span class="mshellQUESTION">?</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">derive</span>  <span class="mshellLINECOMMENT"># Grid with x, y, sum</span>
 
 <span class="mshellLINECOMMENT"># Group rows and compute multiple aggregations in one pass</span>
 <span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">region</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">sales</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"East"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">10</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"West"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">5</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"East"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">7</span> <span class="mshellGRID_CLOSE">|]</span>
@@ -278,8 +278,8 @@ Each column can have optional metadata specified as a dictionary immediately aft
 <span class="mshellRIGHT_SQUARE_BRACKET">]</span>
 <span class="mshellLITERAL">groupBy</span>  <span class="mshellLINECOMMENT"># Grid with region, n, sales_total</span>
 
-<span class="mshellLINECOMMENT"># Update a string column in place to typed values</span>
-<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"x"</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">toFloat</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">updateCol</span>  <span class="mshellLINECOMMENT"># Mutates column x</span></code>
+<span class="mshellLINECOMMENT"># Update a string column of a new grid in place to typed values</span>
+<span class="mshellSTRING">&#34;x,y\n1,2\n3,4\n&#34;</span> <span class="mshellLITERAL">parseCsv</span> <span class="mshellLITERAL">toGrid</span> <span class="mshellSTRING">&#34;x&#34;</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">toFloat</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">updateCol</span>  <span class="mshellLINECOMMENT"># Column x now holds floats</span></code>
 </pre>
 
 <h1 id="grid-view">GridView <a class="section-link" href="#grid-view" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
@@ -296,7 +296,7 @@ To materialize a GridView into a real Grid (with copied data), use <code>gridCom
 
 <pre>
 <code><span class="mshellLINECOMMENT"># Filter creates a GridView</span>
-<span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">x</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">2</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">3</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">4</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">x</span> <span class="mshellINTEGER">2</span> <span class="mshellGREATERTHAN">></span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span>  <span class="mshellLINECOMMENT"># GridView with rows where x > 2</span>
+<span class="mshellGRID_OPEN">[|</span> <span class="mshellINTERPRET">x</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">2</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">3</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">4</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellINTERPRET">x</span><span class="mshellQUESTION">?</span> <span class="mshellINTEGER">2</span> <span class="mshellGREATERTHAN">&gt;</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span>  <span class="mshellLINECOMMENT"># GridView with rows where x &gt; 2</span>
 
 <span class="mshellLINECOMMENT"># Materialize to a Grid</span>
 <span class="mshellLITERAL">gridCompact</span>  <span class="mshellLINECOMMENT"># Now a real Grid with copied data</span></code>
@@ -362,7 +362,7 @@ GridRows support dictionary-like access:
         </tr>
         <tr id="func-map">
             <td><code>map</code></td>
-            <td>Transform rows using a quotation. The quotation receives a GridRow and should return a GridRow or dict. Returns a new Grid.</td>
+            <td>Transform rows using a quotation. The quotation receives a GridRow and should return a GridRow or dict. Returns a new Grid. On a grid with no rows, the new Grid has no columns.</td>
             <td><code>(Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- <span class="sig-type sig-type-gridrow">GridRow</span>|<span class="sig-type sig-type-dict">dict</span>) -- Grid)</code></td>
         </tr>
         <tr id="func-each">
@@ -389,17 +389,17 @@ GridRows support dictionary-like access:
 <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">students!</span>
 
 <span class="mshellLINECOMMENT"># Filter: students with score >= 80</span>
-<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">score</span> <span class="mshellINTEGER">80</span> <span class="mshellGREATERTHANOREQUAL">>=</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span>
+<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">score</span><span class="mshellQUESTION">?</span> <span class="mshellINTEGER">80</span> <span class="mshellGREATERTHANOREQUAL">&gt;=</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span>
 <span class="mshellLINECOMMENT"># GridView with Alice and Bob</span>
 
-<span class="mshellLINECOMMENT"># Map: add a "passed" column</span>
-<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span>
-   <span class="mshellLITERAL">toDict</span>
-   <span class="mshellLITERAL">dup</span> <span class="mshellSTRING">"score"</span> <span class="mshellLITERAL">get</span><span class="mshellQUESTION">?</span> <span class="mshellINTEGER">70</span> <span class="mshellGREATERTHANOREQUAL">>=</span> <span class="mshellSTRING">"passed"</span> <span class="mshellLITERAL">set</span>
-<span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span>
+<span class="mshellLINECOMMENT"># Map: each row gives a dict, and the dicts make a new grid</span>
+<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellVARSTORE">r!</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@r</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">name</span><span class="mshellQUESTION">?</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">passed</span><span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@r</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">score</span><span class="mshellQUESTION">?</span> <span class="mshellINTEGER">70</span> <span class="mshellGREATERTHANOREQUAL">&gt;=</span><span class="mshellRIGHT_CURLY">}</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span>
+
+<span class="mshellLINECOMMENT"># Derive: add a &#34;passed&#34; column</span>
+<span class="mshellVARRETRIEVE">@students</span> <span class="mshellSTRING">&#34;passed&#34;</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">score</span><span class="mshellQUESTION">?</span> <span class="mshellINTEGER">70</span> <span class="mshellGREATERTHANOREQUAL">&gt;=</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">derive</span>
 
 <span class="mshellLINECOMMENT"># Each: print each student's name</span>
-<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">name</span> <span class="mshellLITERAL">wl</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">each</span>
+<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">name</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">wl</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">each</span>
 <span class="mshellLINECOMMENT"># Prints: Alice, Bob, Carol (one per line)</span></code>
 </pre>
 

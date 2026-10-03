@@ -34,7 +34,7 @@ A trailing comma after the last store is not allowed, since commas also separate
 Storing values at once is useful in definitions, so that the variables appear in order of the stack, instead of revserse.
 </p>
 
-<pre><code><span class="mshellDEF">def</span> <span class="mshellLITERAL">myDef</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEINT">int</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">path</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellRIGHT_PAREN">)</span>
+<pre><code><span class="mshellDEF">def</span> <span class="mshellLITERAL">myDef</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEINT">int</span> <span class="mshellSTR">str</span> <span class="mshellBASETYPE">path</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellRIGHT_PAREN">)</span>
     <span class="mshellVARSTORE">myInt!</span><span class="mshellCOMMA">,</span> <span class="mshellVARSTORE">myStr!</span><span class="mshellCOMMA">,</span> <span class="mshellVARSTORE">myPath!</span>
     <span class="mshellLINECOMMENT"># Do things..</span>
 <span class="mshellEND">end</span>
@@ -55,7 +55,7 @@ Reading a missing environment variable with <code><span class="mshellVARRETRIEVE
 Environment variables are always exported to subprocesses, so setting them affects subsequent command executions.
 Remove one with the <code>unsetenv</code> built-in, which takes the name as a string.
 Unsetting a variable that does not exist is not an error.
-When the variable name is not known statically, set one with the <code>setenv</code> built-in, which takes the value then the name.
+When the variable name is not known statically, set one with the <code>setenv</code> built-in, which takes the name, then the value.
 </p>
 
 <p>
@@ -69,7 +69,7 @@ Only the latest 256 events per variable are retained, older events are discarded
 
 <pre>
 <code><span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellLITERAL">unsetenv</span>
-<span class="mshellSTRING">"info"</span> <span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellLITERAL">setenv</span>
+<span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellSTRING">"info"</span> <span class="mshellLITERAL">setenv</span>
 <span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellLITERAL">envInspect</span></code>
 </pre>
 

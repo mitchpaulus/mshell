@@ -1,8 +1,7 @@
 package main
 
-// Static type-check errors collected by the Checker. Format() materializes
-// human-readable text only at print time, so the hot path can append errors
-// without touching the arena's name machinery.
+// Type checker diagnostics. Format() makes the text only when one is
+// printed, so the checker appends errors without touching names or types.
 
 import (
 	"fmt"
@@ -17,24 +16,14 @@ const (
 	TErrStackUnderflow
 	TErrTypeMismatch
 	TErrUnknownIdentifier
-	TErrMaybeUnset // variable bound on some control-flow paths but not others
-	TErrLeftoverStack // top-level program left items on the stack at end (informational; not always an error)
 	TErrBranchStackSize
 	TErrDefBodyMismatch // def's declared sig and body stack effect disagree
 	TErrNonExhaustiveMatch
 	TErrNoMatchingOverload
-	// TErrAmbiguousTyping is emitted when the branching walker reaches
-	// the end of a program (or a synchronization point) with more than
-	// one surviving branch whose typings disagree. The user must add
-	// an annotation upstream to disambiguate. Hint lists the surviving
-	// final stacks.
+	// TErrAmbiguousTyping is an overload choice still open when its unit
+	// is solved, whose candidates give different outputs: an annotation
+	// is needed. Hint says which.
 	TErrAmbiguousTyping
-	TErrReservedTypeName
-	TErrDuplicateTypeName
-	// TErrRebrand is emitted when a `type X = ...` right-hand side is
-	// already a branded type (re-branding is not allowed for unions).
-	TErrRebrand
-	TErrInvalidCast
 	TErrTypeParse
 	// TErrChildStack is emitted when code the runtime runs on its own
 	// stack (a dict value, grid cell, or format-string interpolation) leaves
@@ -43,15 +32,32 @@ const (
 	// TErrInvalidMatchPattern is emitted when a match arm pattern is not
 	// one of the recognized forms. Hint lists the legal forms.
 	TErrInvalidMatchPattern
-	// TErrDebugDump is emitted by the `dbg` builtin at each branch
-	// that walks past it. Informational severity — does not fail the
-	// type check. Hint holds the formatted snapshot of stack + vars.
+	// TErrDebugDump is the snapshot of the stack and variables the `dbg`
+	// word asks for. Informational: it does not fail the check.
 	TErrDebugDump
 	// TErrUnwrapAlwaysFails is an informational diagnostic emitted when a
 	// `?` unwraps a value the checker can prove is always `None` — a getter
 	// for a field a shape does not declare, or a `none`. Informational
 	// severity (does not fail the type check); Hint holds the message.
 	TErrUnwrapAlwaysFails
+
+	// TErrVarType is a store whose value does not fit the variable's one
+	// type. Name is the variable, Expected its type, Actual the value's.
+	TErrVarType
+	// TErrNoJoin is two values that meet (if arms, list elements) with no
+	// common type. Hint holds the message.
+	TErrNoJoin
+	// TErrCoreUnsupported is a construct the checker has no rule for: a
+	// gap in the checker, reported rather than accepted. Hint names it.
+	TErrCoreUnsupported
+	// TErrCoreInternal is a check the checker made that failed when
+	// repeated with the final types: a bug in the checker, never a reason
+	// to accept a program. Hint holds the details.
+	TErrCoreInternal
+	// TErrDeclaration is a `type` or `enum` declaration the checker
+	// refuses: a name already taken, recursion with nothing in between.
+	// Hint holds the message.
+	TErrDeclaration
 )
 
 // TypeErrorSeverity classifies a diagnostic. Severity-error blocks
@@ -77,6 +83,33 @@ type TypeError struct {
 	ArgIndex int    // 0-based index into the failing sig's inputs (TypeMismatch only)
 	Name     string // identifier name for UnknownIdentifier
 	Hint     string
+	// Fix is an edit that fixes the error, offered by the LSP as a code
+	// action; its Kind is FixNone when there is none.
+	Fix TypeFix
+	// Earlier is set, in a REPL session, on an error from a check an
+	// earlier line made that the current line's types make fail: its
+	// position is on that earlier line (TypeCoreSession.go).
+	Earlier bool
+}
+
+// TypeFixKind says what a TypeFix does.
+type TypeFixKind uint8
+
+const (
+	FixNone TypeFixKind = iota
+	// FixInsert inserts Text before the token At.
+	FixInsert
+	// FixDelete deletes the text from the start of At to the start of
+	// Until.
+	FixDelete
+)
+
+// TypeFix is an edit to the source that fixes a type error.
+type TypeFix struct {
+	Kind      TypeFixKind
+	Title     string
+	At, Until Token
+	Text      string
 }
 
 // Format builds a human-readable message. The arena and name table are
@@ -87,7 +120,11 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 	if e.Severity == SeverityInfo {
 		prefix = "type info"
 	}
-	fmt.Fprintf(&sb, "%s at line %d, column %d: ", prefix, e.Pos.Line, e.Pos.Column)
+	if e.Earlier {
+		fmt.Fprintf(&sb, "%s at line %d, column %d of an earlier line, given this line: ", prefix, e.Pos.Line, e.Pos.Column)
+	} else {
+		fmt.Fprintf(&sb, "%s at line %d, column %d: ", prefix, e.Pos.Line, e.Pos.Column)
+	}
 	switch e.Kind {
 	case TErrStackUnderflow:
 		fmt.Fprintf(&sb, "stack underflow at '%s'", e.Pos.Lexeme)
@@ -106,13 +143,12 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 				FormatType(arena, names, e.Expected),
 				e.ArgIndex,
 				FormatType(arena, names, e.Actual))
+			if e.Hint != "" {
+				fmt.Fprintf(&sb, "; %s", e.Hint)
+			}
 		}
 	case TErrUnknownIdentifier:
 		fmt.Fprintf(&sb, "unknown identifier '%s'", e.Name)
-	case TErrMaybeUnset:
-		fmt.Fprintf(&sb, "variable '%s' may be unset here: it is bound on some control-flow paths but not all", e.Name)
-	case TErrLeftoverStack:
-		fmt.Fprintf(&sb, "values left on stack at end of program: %s", e.Hint)
 	case TErrBranchStackSize:
 		fmt.Fprintf(&sb, "branches produce stacks of differing sizes: %s", e.Hint)
 	case TErrNonExhaustiveMatch:
@@ -125,19 +161,6 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "dbg: %s", e.Hint)
 	case TErrUnwrapAlwaysFails:
 		fmt.Fprintf(&sb, "%s", e.Hint)
-	case TErrReservedTypeName:
-		fmt.Fprintf(&sb, "cannot redefine reserved type name '%s'", e.Name)
-		if e.Hint != "" {
-			fmt.Fprintf(&sb, " (%s)", e.Hint)
-		}
-	case TErrDuplicateTypeName:
-		fmt.Fprintf(&sb, "type '%s' is already declared", e.Name)
-	case TErrRebrand:
-		fmt.Fprintf(&sb, "cannot declare type '%s': right-hand side is already a branded type", e.Name)
-	case TErrInvalidCast:
-		fmt.Fprintf(&sb, "invalid cast: cannot cast %s to %s",
-			FormatType(arena, names, e.Actual),
-			FormatType(arena, names, e.Expected))
 	case TErrTypeParse:
 		fmt.Fprintf(&sb, "type parse error: %s", e.Hint)
 	case TErrChildStack:
@@ -152,15 +175,27 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		// description. Pos is the def's name token (the body could
 		// span many lines, so the name is the most stable anchor).
 		fmt.Fprintf(&sb, "definition and body do not match for '%s': %s", e.Name, e.Hint)
+	case TErrVarType:
+		fmt.Fprintf(&sb, "variable '%s' has type %s, so it cannot store a value of type %s; use a new name, or widen the first store with `as`",
+			e.Name, FormatType(arena, names, e.Expected), FormatType(arena, names, e.Actual))
+		if e.Hint != "" {
+			fmt.Fprintf(&sb, "; %s", e.Hint)
+		}
+	case TErrNoJoin:
+		fmt.Fprintf(&sb, "%s", e.Hint)
+	case TErrCoreUnsupported:
+		fmt.Fprintf(&sb, "the type checker has no rule for %s; please report this", e.Hint)
+	case TErrCoreInternal:
+		fmt.Fprintf(&sb, "internal checker error: %s", e.Hint)
+	case TErrDeclaration:
+		fmt.Fprintf(&sb, "%s", e.Hint)
 	default:
 		fmt.Fprintf(&sb, "unknown type error")
 	}
 	return sb.String()
 }
 
-// FormatType renders a TypeId to source-shaped text. Primitives and the
-// Phase-3 composite kinds are covered. Type variables (Phase 6) and grid
-// schemas (Phase 8) extend this further.
+// FormatType renders a TypeId to source-shaped text.
 func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 	switch id {
 	case TidNothing:
@@ -174,7 +209,7 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 	case TidStr:
 		return "str"
 	case TidBytes:
-		return "bytes"
+		return "binary"
 	case TidNone:
 		return "none"
 	case TidNull:
@@ -184,66 +219,42 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 	case TidDateTime:
 		return "datetime"
 	case TidBottom:
-		return "<bottom>"
+		// ⊥ in a message is a type nothing has fixed yet (a variable left
+		// unsolved reads as ⊥), printed like one (plan question 25).
+		return "_"
+	case TidUnknown:
+		return "unknown"
 	}
 	n := arena.Node(id)
 	switch n.Kind {
-	case TKStrLit:
-		// A literal is a `str` subtype; present it as `str` so diagnostics
-		// read the same whether a value arrived as a literal or not.
-		return "str"
-	case TKMaybe:
-		return "Maybe[" + FormatType(arena, names, TypeId(n.A)) + "]"
 	case TKList:
 		return "[" + FormatType(arena, names, TypeId(n.A)) + "]"
-	case TKDict:
-		return "{" + FormatType(arena, names, TypeId(n.A)) + ": " + FormatType(arena, names, TypeId(n.B)) + "}"
-	case TKShape:
-		var sb strings.Builder
-		sb.WriteByte('{')
-		for i, f := range arena.shapeFields[n.Extra] {
-			if i > 0 {
-				sb.WriteString(", ")
-			}
-			sb.WriteString(names.Name(f.Name))
-			if f.Optional {
-				sb.WriteByte('?')
-			}
-			sb.WriteString(": ")
-			sb.WriteString(FormatType(arena, names, f.Type))
-		}
-		sb.WriteByte('}')
-		return sb.String()
 	case TKUnion:
 		var sb strings.Builder
-		if n.A != 0 {
-			sb.WriteString(names.Name(NameId(n.A)))
-			sb.WriteByte('(')
-		}
 		for i, arm := range arena.unionMembers[n.Extra] {
 			if i > 0 {
 				sb.WriteString(" | ")
 			}
 			sb.WriteString(FormatType(arena, names, arm))
 		}
-		if n.A != 0 {
-			sb.WriteByte(')')
-		}
 		return sb.String()
-	case TKBrand:
-		return names.Name(NameId(n.A)) + "(" + FormatType(arena, names, TypeId(n.B)) + ")"
 	case TKCommand:
 		var parts []string
-		if n.B != uint32(CommandCaptureNone) {
-			parts = append(parts, "stdout="+formatCommandCapture(CommandCaptureMode(n.B)))
+		name := "Command["
+		out := CommandCaptureMode(n.B)
+		if out&CommandPipe != 0 {
+			name, out = "Pipe[", out&^CommandPipe
+		}
+		if out != CommandCaptureNone {
+			parts = append(parts, "stdout="+formatCommandCapture(out))
 		}
 		if n.Extra != uint32(CommandCaptureNone) {
 			parts = append(parts, "stderr="+formatCommandCapture(CommandCaptureMode(n.Extra)))
 		}
 		if len(parts) == 0 {
-			return "Command[" + FormatType(arena, names, TypeId(n.A)) + "]"
+			return name + FormatType(arena, names, TypeId(n.A)) + "]"
 		}
-		return "Command[" + FormatType(arena, names, TypeId(n.A)) + "; " + strings.Join(parts, ", ") + "]"
+		return name + FormatType(arena, names, TypeId(n.A)) + "; " + strings.Join(parts, ", ") + "]"
 	case TKQuote:
 		sig := arena.quoteSigs[n.Extra]
 		var sb strings.Builder
@@ -255,6 +266,9 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 			sb.WriteString(FormatType(arena, names, in))
 		}
 		sb.WriteString(" -- ")
+		if sig.Diverges && len(sig.Outputs) == 0 {
+			sb.WriteString("never")
+		}
 		for i, out := range sig.Outputs {
 			if i > 0 {
 				sb.WriteByte(' ')
@@ -263,30 +277,113 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		}
 		sb.WriteByte(')')
 		return sb.String()
-	case TKOverloadedQuote:
-		sigs := arena.overloadedQuoteSigs[n.Extra]
-		var sb strings.Builder
-		sb.WriteString("overload{")
-		for i, sig := range sigs {
-			if i > 0 {
-				sb.WriteString(" | ")
-			}
-			sb.WriteString(FormatType(arena, names, arena.MakeQuote(sig)))
-		}
-		sb.WriteByte('}')
-		return sb.String()
 	case TKVar:
-		return fmt.Sprintf("T%d", n.A)
+		// A type not worked out yet; its number means nothing to the
+		// reader (plan question 25).
+		return "_"
 	case TKRigid:
 		return names.Name(NameId(n.A))
-	case TKGrid:
-		return "Grid"
-	case TKGridView:
-		return "GridView"
-	case TKGridRow:
-		return "GridRow"
+	case TKGrid, TKGridView, TKGridRow:
+		name := "Grid"
+		switch n.Kind {
+		case TKGridView:
+			name = "GridView"
+		case TKGridRow:
+			name = "GridRow"
+		}
+		if n.A == 0 {
+			return name
+		}
+		if arena.Node(TypeId(n.A)).Kind != TKRecord {
+			// A schema not known yet.
+			return name + "[" + FormatType(arena, names, TypeId(n.A)) + "]"
+		}
+		return name + formatSchema(arena, names, arena.records[arena.Node(TypeId(n.A)).Extra])
+	case TKRecord:
+		return formatRecord(arena, names, arena.records[n.Extra])
+	case TKEnum:
+		decl := arena.enumDecls[n.A]
+		args := arena.enumArgs[n.Extra]
+		if n.A == EnumMaybe && args[0] == TidBottom {
+			// The type of `none`: a Maybe that can hold nothing else.
+			return "none"
+		}
+		if len(args) == 0 {
+			return names.Name(decl.Name)
+		}
+		parts := make([]string, len(args))
+		for i, t := range args {
+			parts[i] = FormatType(arena, names, t)
+		}
+		return names.Name(decl.Name) + "[" + strings.Join(parts, " ") + "]"
+	case TKAlias:
+		return names.Name(arena.aliases[n.A].Name)
+	case TKAbstract:
+		return fmt.Sprintf("k%d", n.A)
+	case TKParam:
+		return fmt.Sprintf("$%d", n.A)
 	}
 	return fmt.Sprintf("<%s #%d>", n.Kind, uint32(id))
+}
+
+// formatRecord writes a dict-kinded type in the design document's notation:
+// `{str: T}` for a dictionary, and otherwise the declared labels followed by
+// the remainder, which is `*: T`, `| open` or `| exact`.
+func formatRecord(arena *TypeArena, names *NameTable, r RecordType) string {
+	if len(r.Fields) == 0 && r.Rest.Status == FieldDeletable {
+		return "{str: " + FormatType(arena, names, r.Rest.Type) + "}"
+	}
+	var parts []string
+	for _, f := range r.Fields {
+		name := names.Name(f.Name)
+		switch f.Status {
+		case FieldRequired:
+			parts = append(parts, name+": "+FormatType(arena, names, f.Type))
+		case FieldOptional:
+			parts = append(parts, name+"?: "+FormatType(arena, names, f.Type))
+		case FieldDeletable:
+			parts = append(parts, name+"?del: "+FormatType(arena, names, f.Type))
+		case FieldAbsent:
+			parts = append(parts, name+": absent")
+		case FieldOpen:
+			parts = append(parts, name+": open")
+		}
+	}
+	body := strings.Join(parts, ", ")
+	switch r.Rest.Status {
+	case FieldOptional:
+		if body != "" {
+			body += ", "
+		}
+		return "{" + body + "*: " + FormatType(arena, names, r.Rest.Type) + "}"
+	case FieldDeletable:
+		return "{" + body + " | str: " + FormatType(arena, names, r.Rest.Type) + "}"
+	case FieldAbsent:
+		// A literal's type: these keys and no others. No type a user
+		// writes means that, so it is marked; it is printed only.
+		return "exact {" + body + "}"
+	case FieldRequired:
+		return "{" + body + " | *!: " + FormatType(arena, names, r.Rest.Type) + "}"
+	}
+	// Other keys may exist, unknown: what a written shape type means.
+	return "{" + body + "}"
+}
+
+// formatSchema prints a core grid's schema: its columns, and what other
+// columns there may be. A known schema, the usual case, is the columns in
+// braces (`Grid{a: int}`); one that may have other columns ends in `...`;
+// the unknown one is printed as nothing at all, so the type is `Grid`.
+func formatSchema(arena *TypeArena, names *NameTable, r RecordType) string {
+	switch r.Rest.Status {
+	case FieldOpen:
+		if len(r.Fields) == 0 {
+			return ""
+		}
+		return strings.TrimSuffix(formatRecord(arena, names, r), "}") + ", ...}"
+	case FieldAbsent:
+		return strings.TrimPrefix(formatRecord(arena, names, r), "exact ")
+	}
+	return formatRecord(arena, names, r)
 }
 
 func formatCommandCapture(mode CommandCaptureMode) string {
@@ -294,7 +391,7 @@ func formatCommandCapture(mode CommandCaptureMode) string {
 	case CommandCaptureStr:
 		return "str"
 	case CommandCaptureBytes:
-		return "bytes"
+		return "binary"
 	case CommandCaptureLines:
 		return "[str]"
 	case CommandDestFile:

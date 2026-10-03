@@ -1,0 +1,2 @@
+# A list pattern with a rest binding does not match a pipe.
+[[echo a] [cat]] | match [...r] : , end

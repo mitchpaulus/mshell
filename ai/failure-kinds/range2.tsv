@@ -1,0 +1,157 @@
+6843	M	unlines: stack underflow
+6848	M	unlines: arg not a list; signature ([str] -- str)
+6858	M	unlines: list item not str/literal (joinStringItems); list is [str], literals accepted
+6864	M	lines: stack underflow
+6869	M	lines: arg not MShellString; signature (str -- ...). REACHABLE today: a bare word in a list literal is typed str but is an MShellLiteral at runtime ([abc] (lines) each); runtime bug, should accept MShellLiteral
+6891	M	setAt: Pop3 underflow
+6896	M	setAt: index not int; signature ([a] a int)
+6901	M	setAt: receiver not a list; signature ([a] a int)
+6909	C	setAt: index out of range
+6920	M	insert: Pop3 underflow
+6925	M	insert: index not int; signature ([a] a int)
+6930	M	insert: receiver not a list; signature ([a] a int)
+6938	C	insert: index out of range
+6946	M	del: Pop2 underflow
+6959	C	del: index out of range (list below, int on top)
+6964	M	del: int on top but below is not a list; overloads ([a] int) / (int [a]) / ({str: a} str|path)
+6974	C	del: index out of range (int below, list on top)
+6979	M	del: list on top but below is not an int; overloads rule it out
+6985	M	del: str/path key but below is not a dict; overload ({str: a} str|path)
+6991	M	del: top is not int/list/str/path. REACHABLE today with an MShellLiteral key typed str ({} as {str: int} d! [foo] (@d swap del drop) each); runtime bug, the case should include MShellLiteral
+6996	M	readFile: stack underflow
+7001	M	readFile: CastString fails (not str/path/literal/int); signature (str | path -- str)
+7006	C	readFile: os.ReadFile error
+7013	M	clip: stack underflow
+7018	M	clip: CastString fails; signature (str | path -- )
+7022	C	clip: writeSystemClipboard error (OS / external tool)
+7027	M	readFileBytes: stack underflow
+7032	M	readFileBytes: CastString fails; signature (str | path -- bytes)
+7037	C	readFileBytes: os.ReadFile error
+7044	M	cd: stack underflow
+7049	M	cd: CastString fails; signature (str | path -- )
+7069	M	mshFileManager: stack underflow
+7074	M	mshFileManager: CastString fails; signature (str | path -- )
+7087	M	in: Pop2 underflow
+7092	M	in: search key CastString fails; key is str | path
+7102	M	in: haystack neither dict nor castable to string; overloads ({} key) / (key key)
+7110	M	/: Pop2 underflow
+7117	C	/: int divide by zero
+7123	M	/: float / int mix; overloads (int int) (float float) (path path)
+7127	C	/: float divide by zero (runtime refuses 0.0 divisor; value, not kind)
+7132	M	/: int / float mix; overloads rule it out
+7137	M	/: numeric but not int/float; IsNumeric is only true for int and float, unreachable
+7149	M	/: path on top, non-path below; overload (path path)
+7152	M	/: non-numeric non-path operands; overloads rule it out
+7158	M	exit: stack underflow
+7163	M	exit: code not int; signature (int -- never)
+7167	C	exit: code outside 0-255 (value range; builtin table comment says checked)
+7174	C	exit: used inside a format string interpolation (builtin table comment says checked)
+7186	M	toFloat: stack underflow
+7203	M	toFloat: not str/int/float. REACHABLE today: MShellLiteral typed str hits default ([abc] (toFloat drop) each); runtime bug, should treat MShellLiteral like MShellString
+7208	M	toInt: stack underflow
+7225	M	toInt: not str/int/float. REACHABLE today via MShellLiteral typed str ([abc] (toInt drop) each); runtime bug, should treat MShellLiteral like MShellString
+7232	M	toBase: Pop2 underflow
+7236	M	toBase: base not int; signature (int int -- str)
+7240	M	toBase: value not int; signature (int int -- str)
+7243	C	toBase: base outside 2-36 (value range)
+7251	M	fromBase: Pop2 underflow
+7255	M	fromBase: base not int; signature (str int)
+7258	C	fromBase: base outside 2-36 (value range)
+7267	M	fromBase: value not str/literal; signature (str int)
+7277	M	toDt: stack underflow
+7290	M	toDt: not str/literal/datetime; overloads (str) (datetime)
+7297	C	commented-out line (dead code, not a live site): would be a date parse failure; toDt now returns Maybe
+7306	C	files/dirs: os.ReadDir error
+7327	M	isDir/isFile: stack underflow
+7332	M	isDir/isFile: CastString fails; signature (str | path -- bool)
+7340	C	isDir/isFile: os.Stat error other than not-exist
+7349	M	isDir/isFile: unknown lexeme, internal unreachable
+7355	M	mkdir/mkdirp: stack underflow
+7360	M	mkdir/mkdirp: CastString fails; signature (str | path -- )
+7370	C	mkdir/mkdirp: OS error
+7377	C	pwd: os.Getwd error
+7383	M	psub: stack underflow
+7390	C	psub: os.CreateTemp error
+7400	C	psub: write to temp file error (str)
+7406	C	psub: write to temp file error (literal)
+7409	M	psub: not str/literal; signature (str -- str)
+7420	M	date: stack underflow
+7425	M	date: not datetime; signature (datetime -- datetime)
+7434	M	day: stack underflow
+7439	M	day: not datetime; signature (datetime -- int)
+7446	M	month: stack underflow
+7451	M	month: not datetime; signature (datetime -- int)
+7459	M	year: stack underflow
+7464	M	year: not datetime; signature (datetime -- int)
+7471	M	hour: stack underflow
+7476	M	hour: not datetime; signature (datetime -- int)
+7483	M	minute: stack underflow
+7488	M	minute: not datetime; signature (datetime -- int)
+7495	M	mod: stack underflow
+7500	M	mod: stack underflow (one item)
+7508	C	mod: int mod by zero
+7513	M	mod: int divisor, non-int dividend; overloads (int int) (float float)
+7520	C	mod: float mod by zero
+7525	M	mod: float divisor, non-float dividend; overloads rule it out
+7531	M	basename/dirname/ext/stem: stack underflow
+7536	M	basename/dirname/ext/stem: CastString fails; signature (str | path -- ...)
+7554	M	toPath: stack underflow
+7559	M	toPath: CastString fails; signature (str | path -- path)
+7566	M	setenv: stack underflow
+7571	M	setenv: value CastString fails; signature (str | path str | path -- )
+7576	M	setenv: stack underflow (one item)
+7581	M	setenv: name CastString fails; signature (str | path str | path -- )
+7586	C	setenv: EnvironmentHistory.Set fails only on os.Setenv error (bad name, e.g. empty or containing '=' / NUL)
+7596	M	unsetenv: stack underflow
+7601	M	unsetenv: CastString fails; signature (str | path -- )
+7606	C	unsetenv: EnvironmentHistory.Unset fails only on os.Unsetenv error
+7616	M	dateFmt: stack underflow
+7621	M	dateFmt: stack underflow (one item)
+7627	M	dateFmt: format not MShellString; signature (datetime str). REACHABLE today via MShellLiteral typed str ([abc] (now swap dateFmt wl) each); runtime bug, should accept MShellLiteral
+7632	M	dateFmt: date not datetime; signature (datetime str)
+7640	M	trim/trimStart/trimEnd: stack underflow
+7645	M	trim/trimStart/trimEnd: CastString fails; signature (str | path -- str)
+7659	M	upper/lower/title: stack underflow
+7681	M	upper/lower/title: not str/literal/path; overloads (str) (path)
+7686	M	numFmt: Pop2 underflow
+7691	M	numFmt: options not a dict; signature (int | float NumFmtOptions)
+7701	M	numFmt: number not int/float; signature (int | float NumFmtOptions)
+7706	M	numFmt: getIntOption 'decimals' wrong kind only; NumFmtOptions has decimals?: int (field types invariant)
+7713	M	numFmt: getIntOption 'sigFigs'/'sigfigs' wrong kind only; both declared ?: int
+7717	M	numFmt: getBoolOption 'preserveInt' wrong kind only; declared preserveInt?: bool
+7721	M	numFmt: getStringOption 'thousandsSep' wrong kind only; declared str | path
+7725	M	numFmt: getStringOption 'decimalPoint' wrong kind only; declared str | path
+7729	E	numFmt: getGroupingOption; wrong kind (not list / non-int item) is M, non-positive group size is C (see helpers)
+7733	C	numFmt: negative 'decimals' (value range)
+7736	C	numFmt: non-positive 'sigfigs' (value range)
+7809	M	hardLink: stack underflow
+7814	M	hardLink: stack underflow (one item)
+7819	M	hardLink: source CastString fails; signature (str | path str | path -- )
+7825	M	hardLink: target CastString fails; signature (str | path str | path -- )
+7830	C	hardLink: os.Link error
+7835	C	tempFile: os.CreateTemp error
+7838	C	tempFile: close error
+7845	M	tempFileExt: stack underflow
+7850	M	tempFileExt: CastString fails; signature (str | path -- path)
+7859	C	tempFileExt: os.CreateTemp error (also a pattern error if ext contains a path separator: value of the string)
+7862	C	tempFileExt: close error
+7872	M	endsWith/startsWith: Pop2 underflow
+7877	M	endsWith/startsWith: top CastString fails; signature (str | path str | path -- bool)
+7882	M	endsWith/startsWith: below CastString fails; signature (str | path str | path -- bool)
+7894	M	leftPad: Pop3 underflow
+7899	M	leftPad: length not int; signature (str | path str | path int -- str)
+7904	M	leftPad: pad CastString fails; signature str | path
+7908	C	leftPad: empty pad string (value)
+7913	M	leftPad: input CastString fails; signature str | path
+7917	C	leftPad: negative total length (value range)
+7946	M	isWeekend/isWeekday/dow: stack underflow
+7951	M	isWeekend/isWeekday/dow: not datetime; signature (datetime -- ...)
+7966	M	toUnixTime*: stack underflow
+7970	M	toUnixTime*: not datetime; signature (datetime -- int)
+7986	M	toOleDate: stack underflow
+7991	M	toOleDate: not datetime; signature (datetime -- float)
+7999	M	fromUnixTime*: stack underflow
+8004	M	fromUnixTime*: not int; signature (int -- datetime)
+8023	M	fromOleDate: stack underflow
+8027	M	fromOleDate: not int/float; signature (int | float -- datetime)
+8036	M	writeFile/appendFile: Pop2 underflow

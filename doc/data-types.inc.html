@@ -15,6 +15,7 @@
     <li><a href="#data-type-datetime">Date/Time</a></li>
     <li><a href="#data-type-maybe">Maybe</a></li>
     <li><a href="#data-type-null">Null</a></li>
+    <li><a href="#data-type-enum">Enum</a></li>
     <li><a href="#data-type-pipe">Pipe</a></li>
     <li><a href="#data-type-binary">Binary</a></li>
     <li><a href="#data-type-grid">Grid</a></li>
@@ -33,6 +34,11 @@ Since brevity is a strong design goal, like most shells, many basic tokens can b
 But unlike in most shells, we limit where the number of places literal tokens can be used.
 They can only be used in list literals, because that's how commands are input.
 Outside of lists, it will result in an error.
+</p>
+
+<p>
+A literal token is a string, exactly as if it were quoted: <code>[ls -l]</code> is the same list as <code>["ls" "-l"]</code>.
+So where a string is the text itself, as in <code>&lt;</code> or <code>parseJson</code>, a literal token is text too; name a file with a path.
 </p>
 
 <p>
@@ -327,14 +333,14 @@ Division for integers will result in an integer without the remainder.
 </pre>
 
 <p>
-Division is only supported for similar types, it is a runtime error to divide a float by an integer (or an integer by a float).
-For the other operations, if the types are mixed, the result is a float.
+Arithmetic is only supported between numbers of the same type: it is an error to add, subtract, multiply or divide an integer and a float.
+Convert one side first with <code>toFloat</code> or <code>toInt</code>.
 </p>
 
 <pre>
-<code><span class="mshellINTEGER">2</span> <span class="mshellFLOAT">2.5</span> <span class="mshellASTERISK">*</span> <span class="mshellLINECOMMENT"># 5.0 float</span>
-<span class="mshellINTEGER">3</span> <span class="mshellFLOAT">2.5</span> <span class="mshellMINUS">-</span> <span class="mshellLINECOMMENT"># 0.5 float</span>
-<span class="mshellINTEGER">3</span> <span class="mshellFLOAT">2.5</span> <span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># 5.5 float</span></code>
+<code><span class="mshellINTEGER">2</span> <span class="mshellLITERAL">toFloat</span> <span class="mshellFLOAT">2.5</span> <span class="mshellASTERISK">*</span> <span class="mshellLINECOMMENT"># 5.0 float</span>
+<span class="mshellINTEGER">3</span> <span class="mshellLITERAL">toFloat</span> <span class="mshellFLOAT">2.5</span> <span class="mshellMINUS">-</span> <span class="mshellLINECOMMENT"># 0.5 float</span>
+<span class="mshellINTEGER">3</span> <span class="mshellLITERAL">toFloat</span> <span class="mshellFLOAT">2.5</span> <span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># 5.5 float</span></code>
 </pre>
 
 
@@ -390,7 +396,7 @@ A <code>null</code> is created with the <code>null</code> literal, and <a href="
 </p>
 
 <pre>
-<code><span class="mshellLITERAL">null</span> <span class="mshellLITERAL">toJson</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Prints: null</span>
+<code><span class="mshellBASETYPE">null</span> <span class="mshellLITERAL">toJson</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Prints: null</span>
 <span class="mshellSTRING">&#39;{&#34;a&#34;: 1, &#34;b&#34;: null}&#39;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellLITERAL">toJson</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># {&#34;a&#34;: 1, &#34;b&#34;: null}</span></code>
 </pre>
 
@@ -400,13 +406,91 @@ A union like <code>int | null</code> is covered exhaustively by an <code>int</co
 </p>
 
 <pre>
-<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">classify</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">null</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_PAREN">)</span>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">classify</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellBASETYPE">null</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_PAREN">)</span>
     <span class="mshellMATCH">match</span>
         <span class="mshellTYPEINT">int</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#39;int&#39;</span><span class="mshellCOMMA">,</span>
         <span class="mshellLITERAL">null</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#39;null&#39;</span><span class="mshellCOMMA">,</span>
     <span class="mshellEND">end</span>
 <span class="mshellEND">end</span></code>
 </pre>
+
+<h1 id="data-type-enum">Enum <a class="section-link" href="#data-type-enum" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
+
+<p>
+An <code>enum</code> declares a type whose values are one of a fixed set of members.
+Each member has a name, and may carry values of declared types, its payload.
+The declaration ends with <code>end</code>, and members are separated by <code>|</code>.
+A member's name is a word that makes a value: it takes its payload from the stack.
+</p>
+
+<pre>
+<code><span class="mshellENUM">enum</span> <span class="mshellLITERAL">Shape</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">circle</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">rect</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">dot</span> <span class="mshellEND">end</span>
+
+<span class="mshellFLOAT">2.0</span> <span class="mshellLITERAL">circle</span>    <span class="mshellLINECOMMENT"># a circle of radius 2</span>
+<span class="mshellFLOAT">1.5</span> <span class="mshellFLOAT">2.0</span> <span class="mshellLITERAL">rect</span>  <span class="mshellLINECOMMENT"># a 1.5 by 2 rectangle</span>
+<span class="mshellLITERAL">dot</span>           <span class="mshellLINECOMMENT"># a dot, with no payload</span></code>
+</pre>
+
+<p>
+A leading <code>|</code> is allowed, so the members can be written one per line:
+</p>
+
+<pre>
+<code><span class="mshellENUM">enum</span> <span class="mshellLITERAL">Shape</span> <span class="mshellEQUALS">=</span>
+    <span class="mshellPIPE">|</span> <span class="mshellLITERAL">circle</span> <span class="mshellTYPEFLOAT">float</span>
+    <span class="mshellPIPE">|</span> <span class="mshellLITERAL">rect</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellTYPEFLOAT">float</span>
+    <span class="mshellPIPE">|</span> <span class="mshellLITERAL">dot</span>
+<span class="mshellEND">end</span></code>
+</pre>
+
+<p>
+<code>str</code> gives the member's name, followed by its payload in parentheses.
+<code>toJson</code> gives the member's name as a string, or an object whose one key is the member's name.
+</p>
+
+<pre>
+<code><span class="mshellFLOAT">2.0</span> <span class="mshellLITERAL">circle</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span>     <span class="mshellLINECOMMENT"># circle(2)</span>
+<span class="mshellFLOAT">1.5</span> <span class="mshellFLOAT">2.0</span> <span class="mshellLITERAL">rect</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span>   <span class="mshellLINECOMMENT"># rect(1.5 2)</span>
+<span class="mshellLITERAL">dot</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span>            <span class="mshellLINECOMMENT"># dot</span>
+<span class="mshellFLOAT">2.0</span> <span class="mshellLITERAL">circle</span> <span class="mshellLITERAL">toJson</span> <span class="mshellLITERAL">wl</span>  <span class="mshellLINECOMMENT"># {&#34;circle&#34;: 2}</span>
+<span class="mshellFLOAT">1.5</span> <span class="mshellFLOAT">2.0</span> <span class="mshellLITERAL">rect</span> <span class="mshellLITERAL">toJson</span> <span class="mshellLITERAL">wl</span>  <span class="mshellLINECOMMENT"># {&#34;rect&#34;: [1.5, 2]}</span>
+<span class="mshellLITERAL">dot</span> <span class="mshellLITERAL">toJson</span> <span class="mshellLITERAL">wl</span>         <span class="mshellLINECOMMENT"># &#34;dot&#34;</span></code>
+</pre>
+
+<p>
+A <a href="control-flow.html#control-flow-enum-patterns"><code>match</code></a> takes a value apart.
+A member pattern names the member and then one name for each payload value.
+</p>
+
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">area</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">Shape</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellTYPEFLOAT">float</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellMATCH">match</span>
+        <span class="mshellLITERAL">circle</span> <span class="mshellLITERAL">r</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@r</span> <span class="mshellVARRETRIEVE">@r</span> <span class="mshellASTERISK">*</span> <span class="mshellFLOAT">3.14159</span> <span class="mshellASTERISK">*</span><span class="mshellCOMMA">,</span>
+        <span class="mshellLITERAL">rect</span> <span class="mshellLITERAL">w</span> <span class="mshellLITERAL">h</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@w</span> <span class="mshellVARRETRIEVE">@h</span> <span class="mshellASTERISK">*</span><span class="mshellCOMMA">,</span>
+        <span class="mshellLITERAL">dot</span> <span class="mshellCOLON">:</span> <span class="mshellFLOAT">0.0</span><span class="mshellCOMMA">,</span>
+    <span class="mshellEND">end</span>
+<span class="mshellEND">end</span>
+
+<span class="mshellFLOAT">2.0</span> <span class="mshellLITERAL">circle</span> <span class="mshellLITERAL">area</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># 12.56636</span></code>
+</pre>
+
+<p>
+An enum may have parameters, written in brackets after its name, and may refer to itself.
+A type that uses a generic enum gives the arguments the same way: <code>Box[int]</code>.
+</p>
+
+<pre>
+<code><span class="mshellENUM">enum</span> <span class="mshellLITERAL">Box</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">a</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">box</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">a</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">empty</span> <span class="mshellEND">end</span>
+<span class="mshellENUM">enum</span> <span class="mshellLITERAL">Tree</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">leaf</span> <span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">node</span> <span class="mshellLITERAL">Tree</span> <span class="mshellLITERAL">Tree</span> <span class="mshellEND">end</span>
+
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">box</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span>                  <span class="mshellLINECOMMENT"># box([1 2])</span>
+<span class="mshellINTEGER">1</span> <span class="mshellLITERAL">leaf</span> <span class="mshellINTEGER">2</span> <span class="mshellLITERAL">leaf</span> <span class="mshellLITERAL">node</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span>         <span class="mshellLINECOMMENT"># node(leaf(1) leaf(2))</span></code>
+</pre>
+
+<p>
+Two enum values are equal when they are the same member of the same enum, with equal payloads.
+Member names are global, and no name is used twice: a member, an enum, a <code>type</code>, a definition and a builtin each need a name of their own.
+</p>
 
 <h1 id="data-type-pipe">Pipe <a class="section-link" href="#data-type-pipe" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 

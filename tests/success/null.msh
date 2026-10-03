@@ -28,7 +28,7 @@ end
 
 5 classify wl
 null classify wl
-'null' parseJson classify wl
+'null' parseJson tryAs int | null ? classify wl
 
 # Building JSON with an explicit null value.
 {

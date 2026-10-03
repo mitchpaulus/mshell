@@ -1,0 +1,157 @@
+10472	M	sum on a list of datetime; sum is ([int] -- int) | ([float] -- float) only
+10478	M	max/min on [datetime] found a non-datetime element; list elements are invariant
+10493	M	max/min/sum list of an element kind other than int/float/datetime; signatures rule it out
+10498	M	toFixed Pop2 underflow
+10503	M	toFixed decimals not an int; signature (int | float int -- str)
+10507	M	toFixed value not numeric; signature takes int | float
+10517	M	countSubStr Pop2 underflow
+10522	M	countSubStr substring not castable; signature str | path
+10527	M	countSubStr string not castable; signature str | path
+10536	M	uniq empty stack
+10540	M	uniq on a non-list; all uniq signatures take a list
+10593	M	uniq element not str/path/int/float/datetime; the widest uniq form is [str | path | int | float | datetime]
+10605	M	just empty stack
+10611	M	filter Pop2 underflow
+10616	M	filter quote is not a quotation; signature takes a quote
+10631	C	EvaluateQuote error on list filter: comes from BuildExecutionContext (redirect file open, same-path append-mode conflict on runtime paths)
+10637	M	list filter quote left != 1 value; quote type (a -- bool) on a child stack
+10643	M	list filter quote result not bool; quote type (a -- bool)
+10662	C	EvaluateQuote error on dict filter: redirect file open / runtime-path conflict in BuildExecutionContext
+10668	M	dict filter quote left != 1 value; dictMapFilter types the quote (v -- bool)
+10674	M	dict filter quote result not bool; dictMapFilter types the quote (v -- bool)
+10706	C	EvaluateQuote error on grid filter: redirect file open / runtime-path conflict in BuildExecutionContext
+10712	M	grid filter quote left an empty stack; quote type (GridRow_s -- bool)
+10718	M	grid filter quote result not bool; quote type (GridRow_s -- bool)
+10728	M	filter receiver not list/dict/Grid/GridView; signatures rule it out
+10734	M	map Pop2 underflow
+10740	M	map quote is not a quotation
+10757	C	EvaluateQuote error on list map: redirect file open / runtime-path conflict in BuildExecutionContext
+10763	M	list map quote left != 1 value; quote type (a -- b) on a child stack
+10778	C	EvaluateQuote error on Maybe map: redirect file open / runtime-path conflict in BuildExecutionContext
+10784	M	Maybe map quote changed stack depth by != 1; quote type (a -- b) on the current stack
+10816	C	EvaluateQuote error on grid map: redirect file open / runtime-path conflict in BuildExecutionContext
+10824	M	grid map quote left an empty stack; gridMap types the quote (GridRow_s -- b)
+10858	M	grid map quote result not GridRow or dict; gridMap requires b <= dict | GridRow (deferred when b has vars)
+10909	C	EvaluateQuote error on dict map: redirect file open / runtime-path conflict in BuildExecutionContext
+10916	M	dict map quote left != 1 value; dictMapFilter types the quote (v -- b)
+10923	M	map receiver not list/Maybe/Grid/GridView/dict
+10929	M	map2 Pop3 underflow
+10935	M	map2 quote is not a quotation; signature (Maybe[a] Maybe[b] (a b -- c) -- Maybe[c])
+10943	M	map2 operands not both Maybe
+10957	C	EvaluateQuote error on map2: redirect file open / runtime-path conflict in BuildExecutionContext
+10965	M	map2 quote changed stack depth by != 1; quote type (a b -- c) on the current stack
+10975	M	each Pop2 underflow
+10980	M	each quote is not a quotation
+10991	C	EvaluateQuote error on list each: redirect file open / runtime-path conflict in BuildExecutionContext
+11021	C	EvaluateQuote error on grid each: redirect file open / runtime-path conflict in BuildExecutionContext
+11028	M	each receiver not list/Grid/GridView
+11033	M	isNone empty stack
+11039	M	isNone on a non-Maybe; signature (Maybe[a] -- bool)
+11045	M	maybe Pop2 underflow
+11051	M	maybe receiver not a Maybe; signature (Maybe[a] a -- a)
+11063	M	addDays Pop2 underflow
+11067	M	addDays count not numeric; signature (datetime int | float -- datetime)
+11071	M	addDays receiver not a datetime
+11083	M	isCmd empty stack
+11088	M	isCmd argument not castable; signature str | path
+11098	M	parseHtml empty stack
+11108	C	parseHtml os.Open of the path failed (OS error)
+11121	C	html.Parse error: only I/O errors from the reader (file read)
+11131	M	inc empty stack
+11136	M	inc on a non-int; signature (int -- int)
+11146	M	keyValues empty stack
+11151	M	keyValues on a non-dict; signature (dict -- [{k: str, v: T}])
+11178	M	extend Pop2 underflow
+11185	M	extend list receiver with a non-list source; signature ([a] [a] -- [a])
+11194	E	extendGrid: receiver/source kind errors are M; column-set mismatch (validateGridSchemaMatch) is C when either schema is not exact (gridExtend skips the column check then)
+11198	M	extend grid receiver with a non-grid source; gridExtend requires a Grid or GridView
+11201	M	extend receiver not list/Grid/GridView
+11207	M	index/lastIndexOf Pop2 underflow
+11212	M	index/lastIndexOf substring not castable; signature str | path
+11217	M	index/lastIndexOf string not castable; signature str | path
+11232	M	absPath empty stack
+11237	M	absPath argument not castable; signature (str | path -- path)
+11243	C	filepath.Abs failed (os.Getwd error, OS)
+11251	M	bind Pop2 underflow
+11257	M	bind quote is not a quotation; signature (Maybe[a] (a -- Maybe[b]) -- Maybe[b])
+11263	M	bind receiver not a Maybe
+11274	C	EvaluateQuote error on bind: redirect file open / runtime-path conflict in BuildExecutionContext
+11280	M	bind quote changed stack depth by != 1; quote type (a -- Maybe[b]) on the current stack
+11286	M	bind quote result not a Maybe; quote type (a -- Maybe[b])
+11294	M	md5 empty stack
+11307	M	md5 path CastString failed; never fails for a path
+11311	C	md5 os.Open of the path failed (OS error)
+11318	C	md5 io.ReadAll of the file failed (I/O error)
+11322	M	md5 on a value other than str/bytes/path; signature (str | path | bytes -- str)
+11331	M	deepCopy Pop1 underflow
+11335	C	DeepCopy error: only a cyclic value (DeepCopy.go:385)
+11342	M	take Pop2 underflow
+11348	M	take count not an int; signature ([a] int -- [a]) | (str int -- str)
+11352	C	take with a negative count (value out of range)
+11370	C	take on str: SliceEnd bounds error; unreachable as written (count is clamped to the length and non-negative), but it is an index check
+11374	M	take receiver not list or str
+11379	M	skip Pop2 underflow
+11385	M	skip count not an int; signature ([a] int -- [a]) | (str int -- str)
+11389	C	skip with a negative count (value out of range)
+11408	C	skip on str: SliceStart bounds error; unreachable as written (count is clamped), but it is an index check
+11412	M	skip receiver not list or str
+11424	C	uuid: crypto random source failed (OS error)
+11430	C	uuid7: crypto random source failed (OS error)
+11436	M	removeWindowsVolumePrefix empty stack
+11441	M	removeWindowsVolumePrefix argument not castable; signature (str | path -- str)
+11452	M	pop empty stack
+11464	M	pop on a non-list; signature ([a] -- Maybe[a])
+11469	M	sortByCmp Pop2 underflow
+11474	M	sortByCmp quote is not a quotation
+11488	M	sortByCmp getGridSourceAndIndices error; unreachable, the case already matched a Grid or GridView
+11504	M	sortByCmp receiver not list/Grid/GridView
+11509	M	strCmp Pop2 underflow
+11514	M	strCmp argument not castable; signature (str | path str | path -- int)
+11519	M	strCmp argument not castable; signature (str | path str | path -- int)
+11526	M	versionSortCmp Pop2 underflow
+11532	M	versionSortCmp argument not castable; signature (str | path str | path -- int)
+11537	M	versionSortCmp argument not castable; signature (str | path str | path -- int)
+11545	M	httpGet/httpPost empty stack
+11550	M	httpGet/httpPost argument not a dict; signature (HttpRequest -- Maybe[HttpResponse])
+11555	M	request missing required 'url' key; HttpRequest has url: str required
+11560	M	request 'url' not a str; HttpRequest url: str
+11573	M	request 'timeout' not an int; HttpRequest timeout?: int (S2 forbids a source that may hold it at another type)
+11577	C	request 'timeout' <= 0 (value out of range)
+11588	M	request 'followRedirects' not a bool; HttpRequest followRedirects?: bool
+11606	M	unknown HTTP method; internal unreachable, only httpGet/httpPost reach this case
+11617	M	request 'body' not castable; HttpRequest body?: str | int | path, all castable
+11628	C	http.NewRequest failed: the url text does not parse
+11636	M	request 'headers' not a dict; HttpRequest headers?: {str: str | int | path}
+11643	M	header value not castable; values are str | int | path, all castable
+11654	E	newHTTPListCookieJar: kind errors (not a list, not a dict, string/bool field kinds) are M; timestamp, sameSite, domain, path, cookie validity, prefix rules, duplicates, partitioned are C
+11657	C	cookieJar combined with a 'Cookie' header; header names are data in {str: ...}
+11693	C	io.ReadAll of the HTTP response body failed (network error)
+11704	M	urlEncode empty stack
+11725	M	urlEncode dict list element not castable; urlEncodeDict allows only [str], [int], [path], [str | int | path]
+11730	M	urlEncode dict value not castable; urlEncodeDict allows str, int, path or those lists
+11738	M	urlEncode on a value other than str/dict; signature (str -- str) plus dict form
+11746	M	base64encode empty stack
+11751	M	base64encode on a non-bytes; signature (bytes -- str)
+11760	M	base64decode empty stack
+11765	M	base64decode on a non-str; signature (str -- bytes)
+11770	C	base64 text does not decode
+11778	M	utf8Str empty stack
+11783	M	utf8Str on a non-bytes; signature (bytes -- str)
+11793	M	utf8Bytes empty stack
+11798	M	utf8Bytes on a non-str; signature (str -- bytes)
+11808	M	sleep empty stack
+11813	M	sleep on a non-number; signature (int | float -- )
+11827	M	parseLinkHeader empty stack
+11832	M	parseLinkHeader on a non-str; signature (str -- new [Link])
+11838	C	ParseLinkHeaders: the header text does not parse
+11860	M	fileExists empty stack
+11865	M	fileExists argument not castable; signature str | path
+11875	C	os.Lstat failed with an error other than not-exist (permissions, I/O)
+11881	M	floatCmp Pop2 underflow
+11887	M	floatCmp argument not a float; signature (float float -- int)
+11891	M	floatCmp argument not a float; signature (float float -- int)
+11906	M	intCmp Pop2 underflow
+11912	M	intCmp argument not an int; signature (int int -- int)
+11916	M	intCmp argument not an int; signature (int int -- int)
+11931	M	dateTimeCmp Pop2 underflow
+11937	M	dateTimeCmp argument not a datetime; signature (datetime datetime -- int)

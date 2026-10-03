@@ -243,8 +243,9 @@ Other types are not allowed. For strings, they must be quoted, they cannot be li
 <p>
 Match against a type name.
 Supported type patterns: <code>int</code>, <code>float</code>, <code>str</code>, <code>bool</code>,
-<code>list</code>, <code>dict</code>, <code>path</code>, <code>date</code>,
-<code>quotation</code>, <code>maybe</code>, <code>binary</code>.
+<code>list</code>, <code>dict</code>, <code>path</code>, <code>datetime</code>,
+<code>quotation</code>, <code>maybe</code>, <code>binary</code>,
+and the name of a declared <a href="#control-flow-enum-patterns"><code>enum</code></a>.
 </p>
 
 <pre>
@@ -266,6 +267,28 @@ Follow a type pattern with a name to bind the matched value, just like <code>jus
     <span class="mshellLITERAL">_</span>     : <span class="mshellSTRING">"other"</span>,
 <span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: 5</span></code>
 </pre>
+
+<h2 id="control-flow-is-patterns">Typed Patterns: <code>is</code></h2>
+
+<p>
+<code>is T name</code> matches a value that conforms to the type <code>T</code>, checked at run time, and binds the value to <code>name</code> (or <code>_</code> to bind nothing).
+<code>T</code> is any type expression, such as a declared <code>type</code> or <code>enum</code>, <code>[int]</code> or <code>{float}</code>; see <a href="type_system.html#type-system-validation">Validating Data</a>.
+The value is checked in place, not copied.
+</p>
+
+<pre>
+<code><span class="mshellTYPE">type</span> <span class="mshellLITERAL">Config</span> <span class="mshellEQUALS">=</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">url</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">timeout</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEFLOAT">float</span><span class="mshellRIGHT_CURLY">}</span>
+
+<span class="mshellSTRING">&#34;{\&#34;url\&#34;: \&#34;http://example.com\&#34;}&#34;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">is</span> <span class="mshellLITERAL">Config</span> <span class="mshellLITERAL">c</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@c</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">url</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">_</span> <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;not a config&#34;</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span></code>
+</pre>
+
+<p>
+<code>is</code> has this meaning only at the start of a match arm.
+A match whose <code>is</code> arms each name exactly one member of the value's type, such as <code>is int n</code> and <code>is [Json] items</code> for an <code>int | [Json]</code>, needs no <code>_</code> arm.
+</p>
 
 <h2>Wildcard</h2>
 
@@ -310,6 +333,39 @@ The <code>just</code> pattern binds the inner value to a variable:
 <span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: just something</span></code>
 </pre>
 
+<h2 id="control-flow-enum-patterns">Enum Patterns</h2>
+
+<p>
+A value of an <a href="data-types.html#data-type-enum"><code>enum</code></a> is matched by its member.
+A member pattern is the member's name, then a name for each payload value, or <code>_</code> to skip one.
+A match on an enum covers every member, or has a <code>_</code> arm.
+</p>
+
+<pre>
+<code><span class="mshellENUM">enum</span> <span class="mshellLITERAL">Shape</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">circle</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">rect</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">dot</span> <span class="mshellEND">end</span>
+
+<span class="mshellFLOAT">1.5</span> <span class="mshellFLOAT">2.0</span> <span class="mshellLITERAL">rect</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">circle</span> <span class="mshellLITERAL">r</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@r</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">rect</span> <span class="mshellLITERAL">w</span> <span class="mshellLITERAL">_</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@w</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">dot</span> <span class="mshellCOLON">:</span> <span class="mshellFLOAT">0.0</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># 1.5</span></code>
+</pre>
+
+<p>
+The enum's own name is a pattern too: it matches any member of that enum.
+Like a type pattern, it may be followed by a name for the value.
+This is how an enum is picked out of a union:
+</p>
+
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">describe</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">Shape</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEINT">int</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellMATCH">match</span>
+        <span class="mshellLITERAL">Shape</span> <span class="mshellLITERAL">s</span> <span class="mshellCOLON">:</span> <span class="mshellFORMATSTRINGSTART">$&#34;a shape: {</span><span class="mshellVARRETRIEVE">@s</span> <span class="mshellSTR">str</span><span class="mshellFORMATSTRINGEND">}&#34;</span><span class="mshellCOMMA">,</span>
+        <span class="mshellTYPEINT">int</span> <span class="mshellLITERAL">n</span> <span class="mshellCOLON">:</span> <span class="mshellFORMATSTRINGSTART">$&#34;the number {</span><span class="mshellVARRETRIEVE">@n</span> <span class="mshellSTR">str</span><span class="mshellFORMATSTRINGEND">}&#34;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellEND">end</span>
+<span class="mshellEND">end</span></code>
+</pre>
+
 <h2>List Destructuring</h2>
 
 <p>Match lists by shape and bind elements to variables:</p>
@@ -345,7 +401,8 @@ and <code>..._</code> to accept and discard zero or more elements.
 <span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: 20</span></code>
 </pre>
 
-<p><code>...rest</code> can also appear in the middle of the pattern. Items before it match from the front, items after it match from the back, and the spread binding receives everything in between.</p>
+<p><code>...rest</code> can also appear in the middle of the pattern. Items before it match from the front, items after it match from the back, and the spread binding receives everything in between.
+The spread binding is a new list, so changing it does not change the matched list.</p>
 
 <pre>
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>

@@ -1,0 +1,4 @@
+# A quote typed on its own whose if arm reads below its pushes: the
+# other arm must see that input too, so the arms differ in size.
+( if drop end ) q!
+5 "x" false @q x 1 + wl

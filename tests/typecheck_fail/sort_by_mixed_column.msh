@@ -1,0 +1,2 @@
+# sortBy compares values of one kind; the runtime refuses a str next to an int.
+[| a; 1; "x" |] "a" sortBy drop

@@ -1,0 +1,4 @@
+# A declaration whose body has an error stops the script before it runs,
+# with or without the type checker.
+type A = A
+5 tryAs int drop

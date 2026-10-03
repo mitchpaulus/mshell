@@ -1,0 +1,3 @@
+def toText (bytes -- str)
+    utf8Str
+end

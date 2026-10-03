@@ -1,0 +1,3 @@
+# Inside its own declaration an enum is used with its own parameters.
+enum Nest[a] = nest a Nest[[a]] | stop end
+1 wl

@@ -1,0 +1,3 @@
+def g ({timeout?: int, *: int} -- ) len str wl end
+{} as {str: int} d!
+@d g

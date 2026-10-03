@@ -1,0 +1,3 @@
+# A pipe is its own runtime object: a `list` arm does not match it, so the
+# arm does not make the match exhaustive.
+[[echo a] [cat]] | match list xs : @xs ;, end

@@ -1,0 +1,4 @@
+# A stored child of the wrong type keeps the new node from being a P.
+type P = {name: str, kids: [P]}
+[] as [[int]] xs!
+{name: "a", kids: @xs} as P p!

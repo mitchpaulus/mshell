@@ -1,0 +1,8 @@
+# H12: retyping A to B assumes the pair (A, B); the quote at f then asks
+# A <= B, which only a checker with one assumption set for both relations
+# answers yes. f would hand out the stored [int] in r as an [int | str].
+type A = {xs: [int], f: (-- A)}
+type B = {xs: [int | str], f: (-- B)}
+def mk ( -- new A) {xs: [1], f: (mk)} end
+mk r!
+{xs: [2], f: (@r)} as A as B drop

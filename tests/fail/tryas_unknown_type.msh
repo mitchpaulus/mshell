@@ -1,0 +1,2 @@
+# The type of a tryAs must be one the program declares.
+5 tryAs Nope drop

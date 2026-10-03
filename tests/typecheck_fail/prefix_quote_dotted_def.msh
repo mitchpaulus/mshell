@@ -1,0 +1,4 @@
+# `.g.` calls the def `.g`, not `g`: the result is an int.
+def .g ((--) -- int) drop 5 end
+def g ((--) -- str) drop "s" end
+.g. end "a" + wl

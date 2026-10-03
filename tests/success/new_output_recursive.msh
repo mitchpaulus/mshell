@@ -1,0 +1,2 @@
+def f (int -- new [int]) dup 0 = if drop [] else 1 - f end end
+3 f as [int | str] "a" append str wl

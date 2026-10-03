@@ -1,0 +1,2 @@
+# As grid_names_list_dup, with groupBy keys.
+[| a, b; 1, [1]; 2, [2] |] ["a"] dup "b" 0 setAt drop [{"agg": (gridRows)}] groupBy gridRows wl

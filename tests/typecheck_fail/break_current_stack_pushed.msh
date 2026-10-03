@@ -1,0 +1,3 @@
+# A break in a quote run on the current stack keeps what the quote pushed:
+# here a str where the loop's stack has an int.
+0 0 ( drop 5 just (drop "s" break) map drop 0 ) loop + wl

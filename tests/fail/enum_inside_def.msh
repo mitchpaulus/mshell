@@ -1,0 +1,2 @@
+# An enum is declared at the top level.
+def f ( -- ) enum E = a end end

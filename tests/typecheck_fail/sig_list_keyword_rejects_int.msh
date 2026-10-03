@@ -1,0 +1,5 @@
+# Static: `list` in a signature is a list of any one type, not a generic; an int must not flow in.
+def f (list -- int)
+    len
+end
+1 f wl

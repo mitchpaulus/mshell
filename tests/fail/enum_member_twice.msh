@@ -1,0 +1,3 @@
+# Member names are global: two enums cannot both have `none_left`.
+enum A = none_left | some_left end
+enum B = none_left end

@@ -1,0 +1,2 @@
+# pivot with a row key column named twice.
+[| k, c, v; 1, "x", 2 |] ["k" "k"] "c" (gridRows) pivot toJson wl

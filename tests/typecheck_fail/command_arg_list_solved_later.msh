@@ -1,0 +1,2 @@
+# The list's element type is fixed by the append after the quote: bool.
+[] l!  ([@l] ;) q!  @l true append drop  @q x

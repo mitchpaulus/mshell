@@ -1,0 +1,2 @@
+# Static: outside a signature there is no generic for the value type; write {str: T}.
+{a: 1} as {str: int} as dict drop

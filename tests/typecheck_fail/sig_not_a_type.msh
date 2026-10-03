@@ -1,0 +1,3 @@
+# A type-like name that is not a type is an error, not a generic.
+def f (numeric -- numeric) end
+5 f wl

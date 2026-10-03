@@ -1,0 +1,6 @@
+# A literal holding break, waiting below an if, stored in one arm and run
+# outside any loop later.
+(drop) q!
+( (break) false if [1] swap each else q! end break ) loop
+5 @q x
+"after" wl

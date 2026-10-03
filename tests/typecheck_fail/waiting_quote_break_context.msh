@@ -1,0 +1,3 @@
+# A literal holding break, waiting below an if: one arm runs it on a child
+# stack (break allowed), the other runs it inline with values on the stack.
+"s" ( (break) false if [1] swap each else 5 swap x end ) loop "t" + wl
