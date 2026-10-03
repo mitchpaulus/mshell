@@ -396,7 +396,7 @@ A <code>null</code> is created with the <code>null</code> literal, and <a href="
 </p>
 
 <pre>
-<code><span class="mshellLITERAL">null</span> <span class="mshellLITERAL">toJson</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Prints: null</span>
+<code><span class="mshellBASETYPE">null</span> <span class="mshellLITERAL">toJson</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Prints: null</span>
 <span class="mshellSTRING">&#39;{&#34;a&#34;: 1, &#34;b&#34;: null}&#39;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellLITERAL">toJson</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># {&#34;a&#34;: 1, &#34;b&#34;: null}</span></code>
 </pre>
 
@@ -406,7 +406,7 @@ A union like <code>int | null</code> is covered exhaustively by an <code>int</co
 </p>
 
 <pre>
-<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">classify</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">null</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_PAREN">)</span>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">classify</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellBASETYPE">null</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_PAREN">)</span>
     <span class="mshellMATCH">match</span>
         <span class="mshellTYPEINT">int</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#39;int&#39;</span><span class="mshellCOMMA">,</span>
         <span class="mshellLITERAL">null</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#39;null&#39;</span><span class="mshellCOMMA">,</span>

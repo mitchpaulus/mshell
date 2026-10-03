@@ -694,7 +694,7 @@ It only accepts or rejects: no word behaves differently because of it.
 
 Signatures list inputs before `--` and outputs after it; the rightmost input is the top of the stack.
 A single letter, optionally followed by digits, that is not a type is a generic (`def first ([a] -- a)`, `T1`); any other unknown name is an error.
-In a signature, `dict` is short for `{str: T}` and `list` for `[T]`, each with its own generic.
+In a signature, `dict` is short for `{T}` and `list` for `[T]`, each with its own generic.
 
 ```mshell
 def addOne (int -- int)
@@ -707,8 +707,8 @@ Type expressions:
 ```mshell
 int float bool str path datetime binary null  # base types; null is JSON null
 [str]                 # list of str
-{str: int}            # dictionary: any keys, int values
-{int}                 # short for {str: int}
+{int}                 # dictionary: any keys, int values
+{str: int}            # long form of {int}; error messages use it
 {name: str, age?: int} # shape: name present, age may be missing, other keys unknown
 {url: str, *: int}    # shape whose other keys hold int
 Maybe[int]            # just an int, or none (none is a value, not a type)
@@ -723,7 +723,7 @@ A generic cannot be a union member.
 `match` takes a union apart by kind (`int n :`, `list xs :`), binding the member's own type.
 
 `type Name = T` is an alias, interchangeable with `T`; it may be recursive through a list, dict, field, quotation or enum (`type Person = {name: str, friends: [Person]}`).
-Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {str: Json}`, what `parseJson` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`; and `UrlEncodable` (`str | path | int | [str | path | int]`), the values `urlEncode` takes in a dict.
+Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {Json}`, what `parseJson` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`; and `UrlEncodable` (`str | path | int | [str | path | int]`), the values `urlEncode` takes in a dict.
 
 ### New and stored values
 
@@ -754,24 +754,24 @@ The mark must match the body exactly: missing on an output that is new on every 
 `tryAs T` checks at run time that the value conforms to `T`, giving `just` the same value or `none`; it never copies.
 Every element, dict value and enum payload is checked; a written shape allows other keys; a value that contains itself conforms to a type it has.
 `T` cannot be a quotation type, an enum holding one, or a def's generic.
-A check over 67,108,864 steps stops the program.
+A check over 67,108,864 (1 << 26) steps stops the program.
 On a new value (`parseJson tryAs T ?`) any `T` is allowed; a stored value can only be checked against a type it already has, or one with no list or dict in it (otherwise `deepCopy tryAs T`).
 `is T name` in a match arm does the same check and binds the value.
 
 ```mshell
 type Person = {name: str, age: int}
-"[{\"name\": \"Ada\", \"age\": 36}]" parseJson tryAs [Person] ? (:age?) map sum wl
+'[{"name": "Ada", "age": 36}]' parseJson tryAs [Person] ? (:age?) map sum wl
 ```
 
 ### Dicts
 
-`{str: T}` allows any key to be read, set (`setd`, `set`) and deleted (`del`).
+`{T}` allows any key to be read, set (`setd`, `set`) and deleted (`del`).
 A written shape `{name: str}` says nothing about other keys; a shape literal's type is exact.
 `name?: T` is an optional key, which differs from `name: Maybe[T]` (key present, value may be `none`).
 `:field` gives `Maybe[T]`, `:field?` unwraps it; `get` with a literal key right before it reads that field.
 `get` with a key known only at run time gives `Maybe` of a type covering every field (unknown for a written shape).
-`keys`, `values`, `in`, `len` take any dict; `setd`, `del` and runtime-key `set` need `{str: T}`.
-A shape fits another that names fewer of its fields; a value lacking an optional key fits `timeout?: int` only when new; a shape never fits `{str: T}`; a `{str: T}` fits a shape only whose fields are all optional of type `T`.
+`keys`, `values`, `in`, `len` take any dict; `setd`, `del` and runtime-key `set` need `{T}`.
+A shape fits another that names fewer of its fields; a value lacking an optional key fits `timeout?: int` only when new; a shape never fits `{T}`; a `{T}` fits a shape only whose fields are all optional of type `T`.
 A new dict may gain keys: `{} "name" "Ada" set "age" 36 set` is a `{name: str, age: int}`.
 
 ### Lists, grids, quotations
@@ -801,7 +801,7 @@ A store that does not fit is an error; widen the first store with `as`, or use a
 A variable must be set on every path before it is read.
 Match bindings are variables of the enclosing scope: two arms binding one name must agree on its type (use `int n`, `str s`).
 A kind pattern on a value of unknown type (an undeclared field of a written shape, a cell of an unknown grid) cannot bind a name; keep it on the stack with `:>`, or check it with `tryAs`/`is`.
-An error about an unknown names the read that made it; `get` with a runtime key on `{a: str}` gives `Maybe[unknown]`, so write `{a: str, *: str}` or `{str: str}`.
+An error about an unknown names the read that made it; `get` with a runtime key on `{a: str}` gives `Maybe[unknown]`, so write `{a: str, *: str}` or `{str}`.
 
 For more detail, see the generated Type System help page.
 
@@ -1297,7 +1297,7 @@ end wl # Output: 11
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. A count of 0 or less produces an empty list. `(int -- [int])`
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
 - `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
-- `urlEncode`: URL-encode a string or dictionary of parameters; a list value gives its key once per element. `(str -- str)`, `({str: UrlEncodable} -- str)`. A dict literal is given that type where it is passed; a stored dict needs it where it is made (`{...} as {UrlEncodable} params!`), with any stored list in it typed `[str | path | int]` where that list is made.
+- `urlEncode`: URL-encode a string or dictionary of parameters; a list value gives its key once per element. `(str -- str)`, `({UrlEncodable} -- str)`. A dict literal is given that type where it is passed; a stored dict needs it where it is made (`{...} as {UrlEncodable} params!`), with any stored list in it typed `[str | path | int]` where that list is made.
 - `deepCopy`: Copy a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original. A list reached through two places is copied twice; immutable values and quotes are shared. A value that contains itself is an error. `(a -- a)`
 - `toJson`: Serialize any value to a JSON string. Binary is base64 encoded; typed wrappers like path, date, Maybe, and pipe preserve their shape. Types that map directly to JSON types round-trip; extended types (like path or date) do not. `(a -- str)`
 - `sleep`: Sleep for a floating-point number of seconds. `(numeric -- )`
@@ -1434,7 +1434,7 @@ end wl # Output: 11
 - `2id`: Two-argument identity quote. `(T1 T2 -- T1 T2)`
 - `3id`: Three-argument identity quote. `(T1 T2 T3 -- T1 T2 T3)`
 - `2tuple`: Pack the top two stack values into a new two-element list, `(a b -- [a b])`
-- `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`. On a dictionary, remove a key (nothing happens when it is absent): `({str: a} str -- {str: a})`
+- `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`. On a dictionary, remove a key (nothing happens when it is absent): `({a} str -- {a})`
 - `extend`: Extends an existing list with items from another list, or a `Grid`/`GridView` with rows from another `Grid`/`GridView`. Difference between this and `+` is that it modifies the receiver in place. For grids, see the Grid section below. `(originalList toAddList -- list)` or `(Grid|GridView Grid|GridView -- Grid|GridView)`
 - `insert`: Insert element into list, `(list element index -- list)`
 - `setAt`: Set element at index, negative index is allowed.  `(list element index -- list)`
@@ -1636,7 +1636,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTTP Requests
 
-- `httpGet`: Make a HTTP GET request. Signature is `(dict -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: binary, cookieJar?: [dict]}])`. Takes the request information in a dictionary that should have the following keys:
+- `httpGet`: Make a HTTP GET request. Signature is `(dict -- Maybe[{status: int, reason: str, headers: {[str]}, body: binary, cookieJar?: [dict]}])`. Takes the request information in a dictionary that should have the following keys:
 
   - `url`: Full URL, including all the query parameters (required, string)
   - `timeout`: Request timeout in seconds (optional, positive integer; default 30)

@@ -4770,12 +4770,16 @@ func HtmlFromInput(input string) string {
 
 	sb := strings.Builder{}
 	sb.WriteString("<code>")
-	for _, t := range tokens {
+	for i, t := range tokens {
 		if t.Type == WHITESPACE {
 			sb.WriteString(t.Lexeme)
 		} else {
 			sb.WriteString("<span class=\"mshell")
-			sb.WriteString(t.Type.String())
+			if htmlBaseTypeName(tokens, i) {
+				sb.WriteString("BASETYPE")
+			} else {
+				sb.WriteString(t.Type.String())
+			}
 			sb.WriteString("\">")
 			sb.WriteString(html.EscapeString(t.Lexeme))
 			sb.WriteString("</span>")
@@ -4783,6 +4787,25 @@ func HtmlFromInput(input string) string {
 	}
 	sb.WriteString("</code>")
 	return sb.String()
+}
+
+// htmlBaseTypeName reports whether tokens[i] is a base type name that the
+// lexer reads as a plain literal. A name followed by ':' is a dictionary key.
+func htmlBaseTypeName(tokens []Token, i int) bool {
+	if tokens[i].Type != LITERAL {
+		return false
+	}
+	switch tokens[i].Lexeme {
+	case "path", "datetime", "binary", "null":
+	default:
+		return false
+	}
+	for _, next := range tokens[i+1:] {
+		if next.Type != WHITESPACE {
+			return next.Type != COLON
+		}
+	}
+	return true
 }
 
 func runBinCommand(args []string) int {
