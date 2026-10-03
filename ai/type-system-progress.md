@@ -1092,3 +1092,89 @@ Found while answering question 21 with real code: the checker trusted the startu
 - Cost: `BenchmarkCoreBase` (std's defs) 0.61 ms and 2,058 allocs before, 2.78 ms and 3,409 after, once per checked script, shell start, or language server; `BenchmarkCoreCheckGenerated` unchanged. Checking std's bodies alone measured 1.8 ms, parsing std (every run) 4.1 ms, a whole one-line script run about 50 ms.
 - Mitchell's startup files (std and init) have no errors under this check (verified 2026-10-03); the three errors noted earlier this session were from an older version of his init file.
 - Tests: `TestCoreStartupBodies` (good, bad body, bad signature, a def calling a bad one, a script def calling one), `TestCoreSessionStartupBodies`, `TestDiagnosticsStartupDefErrors`; the real shell through a pty. Docs: `type_system.inc.html`, `mshell.md`, design doc "Checking by default", changelog (Changed). Plan: no open questions.
+
+## Thirteenth session (2026-10-03): the cost of checking a script
+
+Started from `327259b`; every suite passed there (`test.sh` 366 passed, `typecheck_test.sh` 468, soundness 289 run, 0 mismatches). Stages 0-9 were done and no question was open. The next step the design points to, checking scripts by default, is Mitchell's decision: plan question 26. Meanwhile, the checker's per-run cost, which every checked script pays. Not committed.
+
+### Where a checked script's time goes (FX-8350)
+
+A one-line script takes about 25 ms unchecked and 30 ms with `--check-types` (minimum of 30 runs; medians swing by 10 ms between runs on this machine). Inside the process the check took about 3 ms the first time and 0.6 ms when repeated in the same process: a cold start (code and data pages, caches) and a garbage collection that the startup's earlier allocations trigger during it (with `GOGC=off`, 1.4 ms).
+
+Outside the checker, for Mitchell (not changed): about 19 of the 25 ms is the PATH scan at startup (`NewPathBinManager` stats every file on PATH, 6,248 `newfstatat` calls here, on every run), and parsing the standard library is about 4 ms. `--version` takes 2.4 ms.
+
+### A script's check reaches only the startup defs it calls
+
+Building the base checked all 87 standard library bodies (2.1 of its 2.8 ms) on every `--check-types` run, though a script calls few of them. `CoreTypeCheckProgram` now uses a lazy base (`newCoreBase(..., lazy)`, `CoreBase.checkLazy` in `TypeCore.go`): the startup defs' signatures are resolved as before, and their bodies are checked once a check calls them.
+
+- The script is checked trusting the signatures; each call to a startup def not checked yet is recorded (`coreSig.unchecked`, `coreChecker.needBody`, in `word`, where every call to a def is resolved; `completionDefs` records every def with `complete` metadata).
+- Then the bodies of those defs and of every startup def they call: a probe pass checks each new def once, trusting every signature, to find what it calls, until nothing new; then the whole set is checked together, as `checkStartupBodies` checks a file, so defs that call each other decide their `new` marks together, and a def that calls a broken one is broken too. Each runs in an overlay; the base keeps only the broken marks.
+- If one of them is broken, the script is checked again, so its calls are refused with the same messages as before. A def the script does not reach never runs, and a broken def only refuses its callers, so the verdict is the same as checking every body first. If the full check ever calls a def the probe did not find (it cannot: a broken callee only stops a body sooner), every remaining body is checked.
+- The shell and the language server still check every body when their base is built (their bases serve many checks, and the shell prints every startup error once).
+- `defErrs` are formatted when recorded (`formatStartupError`), since a lazy base's body errors have types in an overlay.
+
+Test: `TestCoreLazyBaseMatchesEager` checks every corpus file (`tests/success`, `tests/typecheck_fail`, `tests/msh-scripts`) with the standard library under both bases and compares the output, up to the order of record labels (a record prints its labels in the order their names were first interned, which depends on what was checked first: `{file, ..., new}` against `{new, file, ...}` in `gitchanges`); and does the same over startup files in two files with a broken body, a broken signature, a chain of calls into a broken def, mutually recursive `new` defs and completion defs; and asserts which bodies each check reached. Mutation checks: skipping the body checks gives 6 differences; skipping the probe's closure is caught by the "which bodies" assertions (the fallback hides it in the output).
+
+### Fewer allocations building the base
+
+- `Relations.AppendKinds` appends into a caller's buffer; `unionKindsError` uses a stack buffer and the join a scratch slice on `Relations` (they allocated a slice per union member).
+- Signatures' inputs and outputs are carved from shared chunks (`idChunks` in `TypeCoreResolve.go`, shared by copies of a resolver; reused by a pooled checker after `reset`), and the table's candidate lists from a `[]coreSig` chunk (`coreTableBuilder.sigs`). Each slice handed out has its capacity at its length.
+
+### Benchmarks (one CPU, interleaved with `327259b` in a worktree)
+
+| | `327259b` | now |
+|---|---|---|
+| `BenchmarkCoreCheckScript/oneLine` (new: base for a script, then `1 2 + wl`) | 2.79 ms, 565 KB, 3,443 allocs | 0.62 ms, 233 KB, 735 allocs |
+| `BenchmarkCoreCheckScript/usesStd` (calls `transpose`, `tjoin`, `chomp`, `any`, `chunk`) | 2.82 ms, 595 KB, 3,463 allocs | 1.01 ms, 316 KB, 1,112 allocs |
+| `BenchmarkCoreBase` (every body, for the shell and the language server) | 2.82 ms, 3,409 allocs | 2.80 ms, 2,027 allocs |
+| `BenchmarkCoreCheckGenerated` | 4.04 ms, 4,550 allocs | 3.96 ms, 4,246 allocs |
+| `BenchmarkCoreCheckCorpus` | 14.8-15.0 ms, 425 KB, 14,197 allocs | 14.9 ms, 422 KB, 13,759 allocs |
+| `BenchmarkCoreSessionLine/*` | unchanged | unchanged |
+| `BenchmarkCoreCheckEmpty` | 1.31-1.43 µs | 1.38-1.50 µs (within this machine's noise, no allocations either way) |
+
+What is left of a script's 0.6 ms is building the builtin table: about 400 signatures parsed from text and resolved, warm 0.4 ms, about 1.3 ms in a cold process. Generating the table as static Go data would remove it, at the cost of a generator and a check that the generated file is current; not done. Interning every string literal (a literal key) is 2.5% of checking the corpus; not worth lazy interning.
+
+### Suites
+
+`test.sh` 366 passed; `typecheck_test.sh` 468, 0 failed; `soundness_test.sh` 289 run, 0 mismatches; `go test ./...` ok; the language server, pool and lazy-base tests under `-race` ok; `typst compile` ok. `formal-ver/` unchanged (no typing rule changed). `gofmt` not run.
+
+### Outside the checker: the PATH scan (PR #354, on its own branch off `main`)
+
+`msh` read every PATH directory and stat'ed every file on each start, about 19 of a one-line script's 25 ms. Branch `lazy-path-lookup` (off `main`, worktree `.claude/worktrees/lazy-path-lookup`, PR #354): `Lookup` checks each PATH directory for the one name and caches the answer; the full list is read only for completion and `binPaths`. One-line script 25 ms to 7 ms. When `main` is merged into this branch, this branch's `binPaths` change (`MShellString` values, not pointers) moves from `Pathbin_linux.go`/`Pathbin_darwin.go` into the new `Pathbin_unix.go`.
+
+### Question 26 decided: every script is checked (2026-10-03)
+
+Mitchell: (a), checked by default with no opt-out, as for the REPL. `Main.go` checks every script it runs (a file, `-c`, standard input) and runs it only if it checks; `--check-types` is accepted and does nothing (gone from `--help` and the completions); `--type-check-only` is unchanged. `--lex`, `--parse` and `--html` do not check.
+
+What it changed:
+
+- `tests/fail`: 35 programs were refused before they ran. Decided with Mitchell: rewrite where a checked program still reaches the runtime error, re-pin the `.stderr` to the checker's message otherwise.
+  - Rewritten (11), each run to confirm it checks and stops with the same runtime message: `cyclic_str`, `cyclic_json`, `deep_copy_cycle`, `enum_deep_copy_cycle` (recursive aliases such as `type D = {str: D}` and `type E = int | Box[E]` type the self-containing values); `unpack_missing_key` (`as {str: int}`); `grid_concat_mismatch`, `grid_join_collide` (grids from CSV text, whose columns are known only at run time); `grid_pivot_collision`, `grid_map_rows_differ`, `grid_pivot_nonstring_col` (only their last word, which printed or read the result, failed the check); `bang_in_each`, `bang_in_filter` (the quote now drops its element).
+  - Re-pinned (24): the runtime type mismatches the checker now prevents (`5 dow`, `1 iff`, `date` on an empty stack, the redirect conflicts on literal lists, a non-exhaustive match, `mod` on a string, ...) and `grid_sort_cross_type`.
+  - The checker kept the runtime's hint for `wl`/`wle` given bytes ("write them with `w` or `we`, which add no newline"; `mismatch` in `TypeCore.go`).
+- Repository scripts: `mshell/build_for_release.msh` (run by the release workflow) took a list in a def declared `(--)`; now `([str] --)`. `benchmark/benchmark 1/mshell/filter.msh` compared a float with `50` (it already failed at run time); `join.msh` selects the CSV's four columns before the join so the result's columns are known (same output on sample data). `examples/jq/1.msh` (already failed at run time) and `2.msh` validate the JSON with `tryAs`. Left alone: `mshell/test.msh` and `prompt.msh`, scratch files that fail at run time too.
+- `HTTPCookieJar_test.go` ran an unchecked script that gave raw `parseJson` output as a cookie jar; it uses the documented `tryAs [Cookie] ?` now.
+- Docs: `type_system.inc.html` (Running the Checker), `mshell.md` (Type System, the completion example), `execution.inc.html` (one sentence); `lib/std.msh`'s `msh` completion drops `--check-types`; changelog (Changed). Design doc: Principle 6, "Checking by default". Docs rebuilt.
+
+Suites: `test.sh` 366 passed; `typecheck_test.sh` 468, 0 failed; `soundness_test.sh` 300 run (289 before: the rewritten tests now check), 0 mismatches; `go test ./...` ok; `typst compile` ok.
+
+### Open
+
+Nothing. The runtime's own type checks could now go (the original performance goal of the checker), once wanted.
+
+## Where things stand (end of 2026-10-03, thirteenth session)
+
+This section is the handoff.
+
+- Committed on `type-checker-enhancements` (not pushed): the thirteenth session's code, tests and docs (a script's check reaches only the startup defs it calls; every script is checked before it runs), then the design-notes commit.
+- Separate: PR #354 (`lazy-path-lookup`, off `main`), the PATH lookup at startup. Not merged. When `main` is next merged into this branch, move this branch's `binPaths` change (`MShellString` values, not pointers) into `Pathbin_unix.go`.
+- Stages done: 0 through 7, 9, three independent reviews. Left: stage 8's final pass at release. Open questions in the plan: none.
+- Possible next steps, none started: remove the runtime's own type checks now that no unchecked program runs (the checker's original performance goal; the soundness oracle and the failure-kind classification say which checks are type mismatches); the builtin table costs about 0.4 ms warm and 1.3 ms cold per checked script (a generated static table would remove it); parsing the standard library is about 4 ms per run; Windows still scans PATH at startup.
+- `gofmt` has never been run on the type-checker files (not permitted without asking).
+
+Working notes:
+
+- Build both binaries before testing: `cd mshell && ./build.sh`. Point `MSHINIT` at an empty file when running by hand.
+- Benchmarks: compare against an older commit in a `git worktree` in the scratchpad, `-cpu 1`, interleaved, minimum of several runs. `BenchmarkCoreCheckScript` (new) is what a checked script run spends in the checker. Process-level timings on this machine swing by 10 ms between runs.
+- `tests/msh-scripts` (gitignored, 150 files here, 136 check): type check only, never run.
+- `ntfy "<message>"` at the end of every turn (Mitchell, 2026-10-03).

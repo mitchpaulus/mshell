@@ -277,7 +277,8 @@ the original performance goal of the checker. A single accepted hole would keep 
   Every word has one runtime behavior, and it does not depend on any static fact such as freshness.
   The checker only accepts or rejects. There are no hidden copies and no copy-on-write:
   when a program needs a copy, it says `deepCopy`.
-  Type checking is optional (`--check-types`), and a program must behave the same with it or without it.
+  Every script is checked before it runs (decided 2026-10-03, below), and a program that checks behaves the same
+  as it did when checking was optional: the checker decides only whether it runs.
 ]
 
 #principle(7)[
@@ -2309,10 +2310,16 @@ is an unknown name (found 2026-10-02).
 
 == Checking by default
 
-Every rule here is judged as if `--check-types` is the default for all user code. The REPL starts
-checking each line only once the new checker is working and battle tested; the checker's state is
-built to persist across lines from the start. The REPL checks each line live and runs it only if it
-checks (decided 2026-09-30).
+Every rule here is judged as if `--check-types` is the default for all user code. The REPL checks
+each line live and runs it only if it checks (decided 2026-09-30).
+*Scripts are checked by default (decided 2026-10-03, plan question 26).* `msh script.msh`, `-c` code and
+code read from standard input are checked before they run, and run only if they check. There is no
+opt-out, as for the REPL (question 22): a script that is hard to write past the checker is a problem in
+the language or the checker, to be fixed there. `--check-types` is accepted and changes nothing;
+`--type-check-only` checks and exits. A script check costs about 0.6 ms of checker work for a short
+script (the startup defs it does not reach are not checked, below). Since no unchecked program runs, a
+runtime type mismatch can now only mean a checker or builtin bug, which is what lets the runtime's own
+type checks go later.
 
 *A line that checks can still stop with a runtime error* (index out of range, `?` on none, a failed
 command). The checker's stack after the line assumes the line finished, and types are erased, so the
@@ -2391,9 +2398,12 @@ checks with: the checker is run with the slots below out of reach, as a list lit
 *The startup files' defs are checked like a script's (decided 2026-10-03, question 21).* Their bodies
 used to be trusted by their signatures, like builtins, which let a checked script or REPL line reach a type
 mismatch through a startup def whose body did not match its signature (`def badBody (int -- int) "oops"
-end`, then `5 badBody 1 +`). Now every startup def's body is checked when the checker's base is built,
-from the files as loaded (about 2 ms for the standard library); nothing is cached, since nothing guarantees
-a file is unchanged. A def whose signature or body has an error stays defined, and any checked code that
+end`, then `5 badBody 1 +`). Now every startup def's body is checked, from the files as loaded; nothing is
+cached, since nothing guarantees a file is unchanged. The shell and the language server check every body when
+the checker's base is built (about 2 ms for the standard library). A script's check checks
+only the bodies of the startup defs the script reaches, through its calls and theirs (2026-10-03): a def it
+does not reach never runs, and a broken one refuses only its callers, so the verdict and the messages are
+the same, and a script that calls few of the standard library's defs pays for those only. A def whose signature or body has an error stays defined, and any checked code that
 calls it, including another startup def, is refused, with the error; the shell prints these errors once
 when it starts, and checking the startup file itself shows them. Errors in the startup files' `type` and
 `enum` declarations still stop every program, as the runtime refuses those declarations too.
