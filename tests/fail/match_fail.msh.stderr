@@ -1,1 +1,1 @@
-2:9: No matching arm found in match block and no wildcard '_' arm provided.
+type error at line 2, column 9: non-exhaustive match: the arms do not cover every str; add the missing cases or a `_` arm

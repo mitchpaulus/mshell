@@ -46,6 +46,8 @@ func builtinSigAST(src string) sigAST {
 type coreTableBuilder struct {
 	res *coreResolver
 	t   *coreTable
+	// chunk is where the table's candidate lists are carved from.
+	chunk []coreSig
 }
 
 func (b *coreTableBuilder) sig(src string) coreSig {
@@ -64,11 +66,14 @@ func (b *coreTableBuilder) sig(src string) coreSig {
 }
 
 func (b *coreTableBuilder) sigs(srcs []string) []coreSig {
-	out := make([]coreSig, len(srcs))
-	for i, src := range srcs {
-		out[i] = b.sig(src)
+	if cap(b.chunk)-len(b.chunk) < len(srcs) {
+		b.chunk = make([]coreSig, 0, max(256, len(srcs)))
 	}
-	return out
+	i := len(b.chunk)
+	for _, src := range srcs {
+		b.chunk = append(b.chunk, b.sig(src))
+	}
+	return b.chunk[i:len(b.chunk):len(b.chunk)]
 }
 
 // alias declares a built-in type alias, written in type syntax: the

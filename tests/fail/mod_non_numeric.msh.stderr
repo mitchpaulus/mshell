@@ -1,1 +1,1 @@
-1:7: Cannot do a 'mod' operation between a Integer and a String.
+type error at line 1, column 7: no matching overload for 'mod': the stack has (int str); it takes (int int) or (float float)

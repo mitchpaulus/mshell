@@ -1,4 +1,5 @@
 # Column collision should error before doing any work.
-[| id, x; 1, "a" |] xg!
-[| id, y; 1, "b" |] yg!
-@xg @yg (:id?) (:id?) join wl
+# Grids read from CSV text, whose columns are known only at run time.
+"id,x\n1,a" parseCsv toGrid xg!
+"id,y\n1,b" parseCsv toGrid yg!
+@xg @yg (:id?) (:id?) join gridRows str wl

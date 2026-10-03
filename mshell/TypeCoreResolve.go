@@ -55,6 +55,30 @@ type coreResolver struct {
 	// wait in unions.
 	deferUnions bool
 	unions      []coreUnionCheck
+	// ids holds the inputs and outputs of the signatures resolved, which
+	// live as long as the table or the check that holds them. Copies of a
+	// resolver share it.
+	ids *idChunks
+}
+
+// idChunks hands out slices of TypeIds carved from large chunks, so that
+// signatures share a few allocations instead of making two each. A slice
+// handed out is never handed out again, and its capacity is its length.
+type idChunks struct {
+	chunk []TypeId
+}
+
+// take returns an empty slice with room for n ids.
+func (p *idChunks) take(n int) []TypeId {
+	if n == 0 {
+		return nil
+	}
+	if cap(p.chunk)-len(p.chunk) < n {
+		p.chunk = make([]TypeId, 0, max(512, n))
+	}
+	i := len(p.chunk)
+	p.chunk = p.chunk[:i+n]
+	return p.chunk[i:i:i+n]
 }
 
 // coreUnionCheck is a union whose kinds are checked later, and where it
@@ -117,14 +141,17 @@ func (r *coreResolver) resolveSig(ins, outs []MShellParseItem) coreSigParts {
 			r.errorf(side[64].GetStartToken(), "a signature takes at most 64 inputs and gives at most 64 outputs")
 		}
 	}
-	p.ins = make([]TypeId, 0, len(ins))
+	if r.ids == nil {
+		r.ids = &idChunks{}
+	}
+	p.ins = r.ids.take(len(ins))
 	for _, it := range ins {
 		p.ins = append(p.ins, r.resolve(it))
 	}
 	if isNeverOutput(outs) {
 		p.diverges = true
 	} else {
-		p.outs = make([]TypeId, 0, len(outs))
+		p.outs = r.ids.take(len(outs))
 		for i, it := range outs {
 			if nw, ok := it.(*TypeNewExpr); ok {
 				if i < 64 {
@@ -446,24 +473,24 @@ func (r *coreResolver) unionKindsError(u TypeId) string {
 	if r.arena.Node(u).Kind != TKUnion {
 		return ""
 	}
-	var seen []valueKind
+	var buf [16]valueKind
+	seen := buf[:0]
 	for _, m := range r.arena.unionMembers[r.arena.Node(u).Extra] {
-		ks, ok := r.rel.Kinds(m)
-		if !ok {
+		n := len(seen)
+		var ok bool
+		if seen, ok = r.rel.AppendKinds(seen, m); !ok {
+			seen = seen[:n]
 			if name, generic := r.genericName(m); generic {
 				return "'" + name + "' is a generic, so it cannot be a member of a union: it has no kind," +
 					" and an instance could give the union two members of one kind; declare an enum instead"
 			}
 			continue
 		}
-		for _, k := range ks {
-			for _, s := range seen {
-				if s == k {
-					return "a union cannot have two members of the same kind (" +
-						FormatType(r.arena, r.names, u) + "); declare an enum instead"
-				}
+		for i := n; i < len(seen); i++ {
+			if slices.Contains(seen[:i], seen[i]) {
+				return "a union cannot have two members of the same kind (" +
+					FormatType(r.arena, r.names, u) + "); declare an enum instead"
 			}
-			seen = append(seen, k)
 		}
 	}
 	return ""

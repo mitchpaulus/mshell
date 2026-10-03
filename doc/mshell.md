@@ -429,7 +429,7 @@ The CLI can use definition metadata to provide argument completions for binaries
 ```mshell
 def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
-    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c' '-'] options!
+    ['-h' '--help' '--html' '--lex' '--parse' '--type-check-only' '--version' '-c' '-'] options!
     ['lsp' 'bin' 'edit' 'completions'] subcommands!
     @options @subcommands extend
 end
@@ -687,7 +687,8 @@ and parse a string in a given base with `fromBase` / `parseHex` / `parseOctal` /
 
 ## Type System
 
-Use `msh --check-types script.msh` to type-check a script before it runs, and `msh --type-check-only script.msh` to check and exit.
+Every script is type-checked before it runs; if the check fails, nothing runs.
+`msh --type-check-only script.msh` checks and exits.
 The checker checks every def body and the top-level code, and the standard library's and startup file's defs too: code that calls a startup def with a type error is refused.
 It only accepts or rejects: no word behaves differently because of it.
 

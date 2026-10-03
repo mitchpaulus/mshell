@@ -1,1 +1,1 @@
-1:10: Cannot apply 'and' to a Integer and Quotation.
+type error at line 1, column 10: 'and' expected bool at argument 0, got int

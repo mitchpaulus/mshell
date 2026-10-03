@@ -1,1 +1,1 @@
-[1 2 3] filter. "Hello" wle ['false']! end
+[1 2 3] filter. drop "Hello" wle ['false']! true end

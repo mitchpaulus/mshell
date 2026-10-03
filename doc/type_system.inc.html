@@ -24,12 +24,13 @@ A program behaves the same with the checker or without it; the checker only acce
 <h1 id="type-system-running">Running the Checker <a class="section-link" href="#type-system-running" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
-Use <code>--check-types</code> to type-check a file before it runs.
-When the check fails, nothing in the file runs.
-Use <code>--type-check-only</code> to check the file and exit.
+Every script is type-checked before it runs, whether it is a file, <code>-c</code> code, or code read from standard input.
+When the check fails, nothing in the script runs.
+There is no way to run a script without checking it.
+Use <code>--type-check-only</code> to check the script and exit without running it.
 </p>
 
-<pre><code>msh --check-types script.msh
+<pre><code>msh script.msh
 msh --type-check-only script.msh</code></pre>
 
 <p>

@@ -40,10 +40,17 @@ type CoreBase struct {
 	declared map[NameId]Token
 	// declErrs are errors in the startup files' declarations, which stop
 	// every program (the runtime refuses them too); defErrs are errors in
-	// their definitions' signatures and bodies, which only refuse the code
-	// that calls those definitions (checkStartupBodies).
+	// their definitions' signatures and bodies, formatted, which only
+	// refuse the code that calls those definitions (checkStartupBodies).
 	declErrs []TypeError
-	defErrs  []TypeError
+	defErrs  []string
+	// A lazy base checks a startup def's body only once a check calls it
+	// (checkLazy): std holds the startup defs, owned the index in std of
+	// each one whose body is checked, by name, and done those checked.
+	lazy  bool
+	std   []MShellDefinition
+	owned map[NameId]int
+	done  map[NameId]bool
 	// pool holds checkers that finished a check, to start the next one
 	// with their storage (diagnose).
 	pool sync.Pool
@@ -53,6 +60,13 @@ type CoreBase struct {
 // declarations, decls, and the signatures of their defs, stdlibDefs, whose
 // bodies are checked too (checkStartupBodies).
 func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBase {
+	return newCoreBase(stdlibDefs, decls, false)
+}
+
+// newCoreBase is NewCoreBase; with lazy set, the startup defs' bodies are
+// checked only as checks reach them (checkLazy), which suits a base used
+// for one check: a script uses few of the standard library's defs.
+func newCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem, lazy bool) *CoreBase {
 	arena, names := NewTypeArena(), NewNameTable()
 	res := &coreResolver{arena: arena, names: names, rel: NewRelations(arena), aliases: map[NameId]TypeId{}, self: -1}
 	res.declareJson()
@@ -95,35 +109,47 @@ func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBa
 		// type with nothing in it.
 		for _, e := range res.errs {
 			e.Pos = withFile(e.Pos, def.File)
-			b.brokenDef(def, id, "signature", e)
+			b.brokenDef(def, id, "signature", e, arena, names)
 		}
 		broken := len(res.errs) > 0
 		res.errs = res.errs[:0]
 		sig := newCoreSig(arena, parts)
 		sig.freeOut = outputOnlyGeneric(arena, parts)
 		sig.broken = broken
+		sig.unchecked = lazy && !broken
 		table.setName(id, []coreSig{sig})
 		if e := completionSigError(arena, names, res.rel, table, def, &sig); e != nil {
 			e.Pos = withFile(e.Pos, def.File)
-			b.defErrs = append(b.defErrs, *e)
+			b.defErrs = append(b.defErrs, formatStartupError(*e, arena, names))
+		}
+		if lazy {
+			if cmds, err := completionMetadataNames(*def); err == nil && len(cmds) > 0 {
+				table.completionIds = append(table.completionIds, id)
+			}
 		}
 	}
 	b.aliases = res.aliases
-	b.checkStartupBodies(stdlibDefs, owned, res)
-	return b
-}
-
-// checkStartupBodies checks the startup files' def bodies as a file's are
-// checked: a body is trusted no more than a script's (design doc, "Checking
-// by default"; plan question 21). A def whose body has an error stays
-// defined, and a call to it is refused with the reason.
-func (b *CoreBase) checkStartupBodies(defs []MShellDefinition, owned []int, res *coreResolver) {
-	if len(owned) == 0 {
-		return
+	if lazy {
+		b.lazy, b.std, b.owned, b.done = true, stdlibDefs, make(map[NameId]int, len(owned)), map[NameId]bool{}
+		for _, i := range owned {
+			b.owned[names.Intern(stdlibDefs[i].Name)] = i
+		}
+		table.completionDefsId, _ = names.Lookup("completionDefs")
+		return b
 	}
 	c := &coreChecker{arena: b.arena, names: b.names, rel: res.rel, table: b.table, res: *res,
 		defs: map[NameId]*coreSig{}, ctors: b.ctors, declared: b.declared}
 	c.uni = NewUnifier(c.arena, &c.subst, c.rel)
+	b.checkStartupBodies(c, stdlibDefs, owned)
+	return b
+}
+
+// checkStartupBodies checks the bodies of the startup defs std[i] for i in
+// owned, with checker c, as a file's are checked: a body is trusted no
+// more than a script's (design doc, "Checking by default"; plan question
+// 21). A def whose body has an error stays defined, and a call to it is
+// refused with the reason.
+func (b *CoreBase) checkStartupBodies(c *coreChecker, defs []MShellDefinition, owned []int) {
 	// One file at a time, so each error gets its file; a def's errors are
 	// at or after its name and before the next def's in the same file.
 	for start := 0; start < len(owned); {
@@ -158,11 +184,11 @@ func (b *CoreBase) checkStartupBodies(defs []MShellDefinition, owned []int, res 
 				}
 				e.Pos = withFile(e.Pos, file)
 				if owner == nil {
-					b.defErrs = append(b.defErrs, e)
+					b.defErrs = append(b.defErrs, formatStartupError(e, c.arena, c.names))
 					continue
 				}
 				id := c.names.Intern(owner.Name)
-				b.brokenDef(owner, id, "body", e)
+				b.brokenDef(owner, id, "body", e, c.arena, c.names)
 				if sig := &b.table.name(id)[0]; !sig.broken {
 					sig.broken, broke = true, true
 				}
@@ -171,6 +197,94 @@ func (b *CoreBase) checkStartupBodies(defs []MShellDefinition, owned []int, res 
 	}
 }
 
+// checkLazy checks file with a lazy base: first trusting the signatures of
+// the startup defs it calls, then their bodies and those of every startup
+// def they reach (checkReached). A body found broken refuses its callers,
+// so then file is checked again; a call to a broken def is an error, as
+// with a base that checked every body first. The defs the file does not
+// reach are never run, so the verdict is the same.
+func (b *CoreBase) checkLazy(file *MShellFile) ([]string, bool) {
+	c := b.newChecker()
+	c.checkFile(file)
+	if b.checkReached(c.needed) {
+		c = b.newChecker()
+		c.checkFile(file)
+	}
+	return b.formatCheck(c.errs, c.arena, c.names)
+}
+
+// checkReached checks the bodies of the startup defs needed names and of
+// every startup def they call, once each, and says whether one of them is
+// broken. The calls are found by checking: a first pass checks each new
+// def on its own, trusting every signature, and adds the defs it calls;
+// then the whole set is checked together, as checkStartupBodies checks a
+// file, so defs that call each other decide their `new` marks together.
+// Each check runs in an overlay; the base keeps only the broken marks.
+func (b *CoreBase) checkReached(needed []NameId) bool {
+	var reach []int
+	seen := map[NameId]bool{}
+	probe := b.newChecker()
+	for queue := needed; len(queue) > 0; {
+		var batch []MShellDefinition
+		for _, id := range queue {
+			if seen[id] || b.done[id] {
+				continue
+			}
+			seen[id] = true
+			i := b.owned[id]
+			reach = append(reach, i)
+			batch = append(batch, b.std[i])
+			probe.defs[id] = &b.table.name(id)[0]
+		}
+		probe.needed = probe.needed[:0]
+		probe.checkDefs(batch)
+		queue = slices.Clone(probe.needed)
+	}
+	if len(reach) == 0 {
+		return false
+	}
+	// The startup files in load order, each def in place, as
+	// checkStartupBodies groups them.
+	slices.Sort(reach)
+	c := b.newChecker()
+	b.checkStartupBodies(c, b.std, reach)
+	for _, id := range c.needed {
+		if !seen[id] && !b.done[id] {
+			// The probe missed a call the full check made (it cannot: a
+			// broken callee only stops a body sooner): check every body,
+			// as a base that is not lazy does. The marks set so far are a
+			// part of the marks that check sets.
+			return b.checkAll()
+		}
+	}
+	broke := false
+	for id := range seen {
+		b.done[id] = true
+		broke = broke || b.table.name(id)[0].broken
+	}
+	return broke
+}
+
+// checkAll checks every startup body a lazy base has not checked yet, and
+// says whether one of them is broken.
+func (b *CoreBase) checkAll() bool {
+	var all []int
+	for id, i := range b.owned {
+		if !b.done[id] {
+			all = append(all, i)
+		}
+	}
+	slices.Sort(all)
+	b.checkStartupBodies(b.newChecker(), b.std, all)
+	broke := false
+	for id := range b.owned {
+		if !b.done[id] {
+			b.done[id] = true
+			broke = broke || b.table.name(id)[0].broken
+		}
+	}
+	return broke
+}
 // tokenOrder compares two positions in one file.
 func tokenOrder(a, b Token) int {
 	if a.Line != b.Line {
@@ -179,17 +293,18 @@ func tokenOrder(a, b Token) int {
 	return a.Column - b.Column
 }
 
-// brokenDef records error e in a startup def's signature or body (part):
-// it is reported once, and the first one is why a call to it is refused.
-func (b *CoreBase) brokenDef(def *MShellDefinition, id NameId, part string, e TypeError) {
-	b.defErrs = append(b.defErrs, e)
+// brokenDef records error e in a startup def's signature or body (part),
+// whose types are in arena: it is reported once, and the first one is why
+// a call to it is refused.
+func (b *CoreBase) brokenDef(def *MShellDefinition, id NameId, part string, e TypeError, arena *TypeArena, names *NameTable) {
+	b.defErrs = append(b.defErrs, formatStartupError(e, arena, names))
 	if b.table.brokenWhy == nil {
 		b.table.brokenWhy = map[NameId]string{}
 	}
 	if _, ok := b.table.brokenWhy[id]; ok {
 		return
 	}
-	msg := strings.TrimPrefix(e.Format(b.arena, b.names), "type error ")
+	msg := strings.TrimPrefix(e.Format(arena, names), "type error ")
 	b.table.brokenWhy[id] = "'" + def.Name + "', defined at " + tokenPosStr(withFile(def.NameToken, def.File)) +
 		", cannot be checked, so neither can a call to it: its " + part + " has a type error " + msg
 }
@@ -216,13 +331,16 @@ func completionSigError(arena *TypeArena, names *NameTable, rel *Relations, tabl
 // and declarations. It returns the formatted errors and `dbg` snapshots,
 // and whether there were no errors.
 func CoreTypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition, decls []MShellParseItem) ([]string, bool) {
-	return NewCoreBase(stdlibDefs, decls).Check(file)
+	return newCoreBase(stdlibDefs, decls, true).Check(file)
 }
 
 // Check checks file in a new overlay of the base, and formats its errors
 // and its `dbg` snapshots; ok is whether there were no errors. Errors in
 // the startup files' declarations come first, with their file.
 func (b *CoreBase) Check(file *MShellFile) (out []string, ok bool) {
+	if b.lazy {
+		return b.checkLazy(file)
+	}
 	b.diagnose(file, func(diags []TypeError, arena *TypeArena, names *NameTable) {
 		out, ok = b.formatCheck(diags, arena, names)
 	})
@@ -232,7 +350,7 @@ func (b *CoreBase) Check(file *MShellFile) (out []string, ok bool) {
 // StartupErrors are every error in the startup files, each naming its
 // file: the interactive shell prints them once when it starts.
 func (b *CoreBase) StartupErrors() []string {
-	return b.formatStartup(append(slices.Clone(b.declErrs), b.defErrs...))
+	return append(b.formatStartup(b.declErrs), b.defErrs...)
 }
 
 // DeclarationErrors are the errors in the startup files' declarations,
@@ -245,13 +363,18 @@ func (b *CoreBase) DeclarationErrors() []string {
 func (b *CoreBase) formatStartup(errs []TypeError) []string {
 	var out []string
 	for _, e := range errs {
-		where := ""
-		if e.Pos.TokenFile != nil {
-			where = "in " + e.Pos.TokenFile.Path + ": "
-		}
-		out = append(out, where+e.Format(b.arena, b.names))
+		out = append(out, formatStartupError(e, b.arena, b.names))
 	}
 	return out
+}
+
+// formatStartupError formats an error in a startup file, naming the file.
+func formatStartupError(e TypeError, arena *TypeArena, names *NameTable) string {
+	where := ""
+	if e.Pos.TokenFile != nil {
+		where = "in " + e.Pos.TokenFile.Path + ": "
+	}
+	return where + e.Format(arena, names)
 }
 
 func (b *CoreBase) formatCheck(diags []TypeError, arena *TypeArena, names *NameTable) (out []string, ok bool) {
@@ -324,8 +447,12 @@ func (c *coreChecker) reset(b *CoreBase) {
 	r := c.res
 	refill(r.aliases, b.aliases)
 	refill(r.enums, b.enums)
+	if r.ids != nil {
+		// The signatures carved from it were the finished check's.
+		r.ids.chunk = r.ids.chunk[:0]
+	}
 	c.res = coreResolver{arena: r.arena, names: r.names, rel: r.rel, aliases: r.aliases, enums: r.enums,
-		self: -1, errs: r.errs[:0], unions: r.unions[:0]}
+		self: -1, errs: r.errs[:0], unions: r.unions[:0], ids: r.ids}
 	*c = coreChecker{
 		arena: c.arena, names: c.names, rel: c.rel, subst: c.subst, uni: c.uni, res: c.res, table: b.table,
 		defs: c.defs, ctors: c.ctors, declared: c.declared,
@@ -545,6 +672,10 @@ type coreChecker struct {
 	exitNew    uint64
 	exitShared []Token
 	exits      int
+
+	// needed are the startup defs of a lazy base this check called before
+	// their bodies were checked (CoreBase.checkLazy).
+	needed []NameId
 
 	// Definite assignment (TypeCoreAssign.go): the variables set on this
 	// path, in order; the loops being checked; how deep the walk is in
@@ -967,6 +1098,14 @@ func (c *coreChecker) token(tok Token) {
 	}
 }
 
+// needBody records that this check calls the startup def id, whose body a
+// lazy base has not checked yet.
+func (c *coreChecker) needBody(id NameId) {
+	if !slices.Contains(c.needed, id) {
+		c.needed = append(c.needed, id)
+	}
+}
+
 // word checks a LITERAL token: return, a stack shuffle, a def, a builtin,
 // or a bare word in a list literal.
 func (c *coreChecker) word(tok Token) {
@@ -993,6 +1132,9 @@ func (c *coreChecker) word(tok Token) {
 				}
 				c.abandoned = true
 				return
+			}
+			if sig.unchecked {
+				c.needBody(id)
 			}
 			if c.curDef != nil {
 				c.calls = append(c.calls, sig)
@@ -1025,6 +1167,13 @@ func (c *coreChecker) word(tok Token) {
 				c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok, Hint: c.table.brokenWhy[id]})
 				c.abandoned = true
 				return
+			}
+			if sigs[0].unchecked {
+				c.needBody(id)
+			} else if id == c.table.completionDefsId {
+				for _, d := range c.table.completionIds {
+					c.needBody(d)
+				}
 			}
 			c.call(sigs, tok)
 			return
@@ -2029,6 +2178,8 @@ func (c *coreChecker) mismatch(tok Token, i int, want, got TypeId) {
 	e := TypeError{Kind: TErrTypeMismatch, Pos: tok, Expected: want, Actual: got, ArgIndex: i}
 	if !c.hasVars(want) && !c.hasVars(got) && c.rel.Retype(got, want) {
 		e.Hint = storedHint
+	} else if got == TidBytes && (tok.Lexeme == "wl" || tok.Lexeme == "wle") {
+		e.Hint = "bytes are not text with lines: write them with `w` or `we`, which add no newline"
 	}
 	c.errs = append(c.errs, e)
 }

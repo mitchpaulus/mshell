@@ -1,1 +1,1 @@
-1:3: Cannot parse a Integer as CSV.
+type error at line 1, column 3: 'parseCsv' expected str | path at argument 0, got int

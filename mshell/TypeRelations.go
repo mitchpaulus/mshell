@@ -115,6 +115,8 @@ type Relations struct {
 	active      int
 	// pairBuf holds the assumption sets of the queries in progress.
 	pairBuf []typePair
+	// kindBuf is scratch space for the kinds of two types.
+	kindBuf []valueKind
 }
 
 func NewRelations(arena *TypeArena) *Relations {
@@ -565,39 +567,42 @@ func (r *Relations) kindOf(t TypeId) (valueKind, bool) {
 // aliases (akinds in Join.v). It fails when a member has no kind, or when an
 // alias is its own member, which only an unguarded alias can be.
 func (r *Relations) Kinds(t TypeId) ([]valueKind, bool) {
-	return r.kinds(t, nil)
+	return r.AppendKinds(nil, t)
 }
 
-func (r *Relations) kinds(t TypeId, visiting []TypeId) ([]valueKind, bool) {
+// AppendKinds is Kinds, appending the kinds to dst.
+func (r *Relations) AppendKinds(dst []valueKind, t TypeId) ([]valueKind, bool) {
+	return r.appendKinds(dst, t, nil)
+}
+
+func (r *Relations) appendKinds(dst []valueKind, t TypeId, visiting []TypeId) ([]valueKind, bool) {
 	if t == TidBottom {
-		return nil, true
+		return dst, true
 	}
 	if t == TidNothing {
-		return nil, false
+		return dst, false
 	}
 	n := r.arena.Node(t)
 	switch n.Kind {
 	case TKUnion:
-		var out []valueKind
 		for _, m := range r.arena.unionMembers[n.Extra] {
-			ks, ok := r.kinds(m, visiting)
-			if !ok {
-				return nil, false
+			var ok bool
+			if dst, ok = r.appendKinds(dst, m, visiting); !ok {
+				return dst, false
 			}
-			out = append(out, ks...)
 		}
-		return out, true
+		return dst, true
 	case TKAlias:
 		if slices.Contains(visiting, t) {
-			return nil, false
+			return dst, false
 		}
-		return r.kinds(r.arena.aliases[n.A].Body, append(visiting, t))
+		return r.appendKinds(dst, r.arena.aliases[n.A].Body, append(visiting, t))
 	}
 	k, ok := r.kindOf(t)
 	if !ok {
-		return nil, false
+		return dst, false
 	}
-	return []valueKind{k}, true
+	return append(dst, k), true
 }
 
 // hasKind reports whether some member of t has kind k: ukind in Join.v.
@@ -810,8 +815,9 @@ func (r *Relations) aliasJoin(fr bool, a, b TypeId) (TypeId, bool) {
 	if r.below(fr, b, a) {
 		return a, true
 	}
-	ka, okA := r.Kinds(a)
-	kb, okB := r.Kinds(b)
+	ka, okA := r.AppendKinds(r.kindBuf[:0], a)
+	kb, okB := r.AppendKinds(ka[len(ka):], b)
+	r.kindBuf = kb[:0]
 	if okA && okB && kindsDisjoint(ka, kb) {
 		return r.arena.MakeUnion([]TypeId{a, b}), true
 	}

@@ -1,10 +1,12 @@
 # mshell: read both CSVs, inner-join on id, write fingerprint.
 
 `test_dataset.csv` parseCsv toGrid
+["id" "value" "category" "timestamp"] select
 "value" (toFloat?) updateCol
 "id" (toInt?) updateCol left!
 
 `join_sample.csv` parseCsv toGrid
+["id" "value" "category" "timestamp"] select
 "id" (toInt?) updateCol
 "id" "id_r" gridRenameCol
 "value" "value_r" gridRenameCol

@@ -1,3 +1,1 @@
-2:1 loop
-2:4 format string
-2:7: 'break' cannot leave a format string interpolation.
+type error at line 2, column 8: 'break' is allowed only in a loop body, or in a literal quote given to each, map or a similar word inside one

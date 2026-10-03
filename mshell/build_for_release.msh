@@ -36,7 +36,7 @@ soe
 
 "0" $CGO_ENABLED!
 
-def build_os_arch (--)
+def build_os_arch ([str] --)
     list! @list :0: $GOOS! @list :1: $GOARCH! @list :2: $BIN_NAME!
     $"Working on {$GOOS} {$GOARCH}" wl
     [go build -o $"bin/{$GOOS}_{$GOARCH}/{$BIN_NAME}"];

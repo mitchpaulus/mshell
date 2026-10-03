@@ -1,1 +1,1 @@
-2:3: 'tryAs Nope': unknown type 'Nope'.
+type error at line 2, column 9: type parse error: unknown type 'Nope'

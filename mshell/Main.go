@@ -554,7 +554,8 @@ func main() {
 	var inputFile *TokenFile
 	inputFile = nil
 	inputFilePath := ""
-	checkTypes := false // --check-types: run the script only if it type checks
+	// A script is type checked, and runs only if it checks (plan question
+	// 26). --check-types is accepted and changes nothing.
 	typeCheckOnly := false
 	inputFromStdin := false
 
@@ -570,9 +571,8 @@ func main() {
 			command = CLILEX
 			// printLex = true
 		} else if arg == "--check-types" {
-			checkTypes = true
+			// Checking is the default; kept so existing command lines work.
 		} else if arg == "--type-check-only" {
-			checkTypes = true
 			typeCheckOnly = true
 		} else if arg == "--parse" {
 			command = CLIPARSE
@@ -594,7 +594,6 @@ func main() {
 			fmt.Println("  --html       Render the input as HTML")
 			fmt.Println("  --lex        Print the tokens lexed from the input")
 			fmt.Println("  --parse      Print the parsed Abstract Syntax Tree as JSON")
-			fmt.Println("  --check-types Type check the input, and run it only if it checks")
 			fmt.Println("  --type-check-only Type check the input and exit without running it")
 			// fmt.Println("  --typecheck  Type check the input and report any errors") Ignore this for now.
 			fmt.Println("  --version    Print version information and exit")
@@ -907,20 +906,19 @@ func main() {
 	allDefinitions = append(allDefinitions, file.Definitions...)
 	state.AddCompletionDefinitions(file.Definitions)
 
-	if checkTypes {
-		errs, ok := CoreTypeCheckProgram(file, startupDefinitions, state.StartupDecls)
-		for _, e := range errs {
-			fmt.Fprintln(os.Stderr, e)
+	// The program runs only if it type checks.
+	errs, ok := CoreTypeCheckProgram(file, startupDefinitions, state.StartupDecls)
+	for _, e := range errs {
+		fmt.Fprintln(os.Stderr, e)
+	}
+	if typeCheckOnly {
+		if ok {
+			os.Exit(0)
 		}
-		if typeCheckOnly {
-			if ok {
-				os.Exit(0)
-			}
-			os.Exit(1)
-		}
-		if !ok {
-			os.Exit(1)
-		}
+		os.Exit(1)
+	}
+	if !ok {
+		os.Exit(1)
 	}
 
 	if len(file.Items) == 0 {

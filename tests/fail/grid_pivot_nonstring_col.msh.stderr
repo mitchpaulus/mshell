@@ -1,1 +1,1 @@
-3:45: pivot column-key column 'month' must contain only strings, found Integer at row 0.
+type error at line 3, column 45: 'pivot' expected str at argument 0, got int

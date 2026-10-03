@@ -1,1 +1,1 @@
-1:26: Cannot sort column 'x': cannot compare Integer and String.
+type error at line 1, column 26: 'sortBy' needs a column it can sort: one of int, float, str, datetime or bool, or a Maybe of one, got int | str

@@ -1,1 +1,1 @@
-{"present": 1} => {'missing': value}
+{"present": 1} as {str: int} => {'missing': value}

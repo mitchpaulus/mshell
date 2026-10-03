@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Every script is type-checked before it runs, and runs only if it checks: a file, `-c` code, or code read from standard input.
+  There is no way to run a script unchecked; `--check-types` is still accepted and changes nothing.
+  `--type-check-only` checks and exits, as before.
+  A script that the checker refuses must be fixed before it runs again; `msh --type-check-only` on your scripts shows what needs changing.
 - The type checker checks the standard library's and the startup file's definitions as well as the script's.
   A definition there with a type error stays defined, but code that calls it is refused, with the error; code that does not call it is checked as before.
 - `return` at the top level of an interactive line exits the shell, as it ends a script. Previously it ended only the line.
@@ -51,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A printed list shows the word quoted.
 - A number too large to read, in a literal, an index such as `:99999999999999999999:`, or a positional argument, is an error when the script is read, not when that code runs.
   A slice like `1:99999999999999999999` used to crash.
-- The type checker (`--check-types`, `--type-check-only` and the language server) is new.
+- The type checker (run on every script, by `--type-check-only`, and by the language server) is new.
   It is built so that a script it accepts never stops with a type mismatch at run time,
   and it rejects code that the old checker accepted and that then failed. In particular:
   - A stored value keeps the type it was made with: a list, dictionary or grid passed on, stored or duplicated is never seen at a second, wider type.

@@ -1,8 +1,10 @@
 # A list that contains itself cannot be turned into a string.
 # Comparing two dicts that contain themselves finishes first.
-{} d!  @d "self" @d set drop
-{} e!  @e "self" @e set drop
+type D = {str: D}
+type L = [int | L]
+{} as D d!  @d "self" @d set drop
+{} as D e!  @e "self" @e set drop
 @d @e = str wl
-[1] xs!
+[1] as L xs!
 @xs @xs append drop
 @xs str wl

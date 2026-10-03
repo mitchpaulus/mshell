@@ -1,1 +1,1 @@
-1:3: Cannot parse a Integer as HTML.
+type error at line 1, column 3: 'parseHtml' expected str | path at argument 0, got int

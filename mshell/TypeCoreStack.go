@@ -63,6 +63,10 @@ type coreSig struct {
 	// there: its body is not checked against it, and a call to it stops
 	// checking the unit, so the one mistake gives one error.
 	broken bool
+	// unchecked is set on a startup def of a lazy base (CoreBase.checkLazy)
+	// whose body is checked only once a check reaches it: a call to it
+	// records it in the checker's needed list.
+	unchecked bool
 }
 
 // litListTag marks a slot's lit as a list of literal names.
@@ -119,6 +123,11 @@ type coreTable struct {
 	// brokenWhy says, for a startup def whose signature or body has an
 	// error, why a call to it is refused.
 	brokenWhy map[NameId]string
+	// completionIds are, in a lazy base, the startup defs with `complete`
+	// metadata, which completionDefs (completionDefsId) gives as quotes:
+	// a check that uses it needs their bodies checked.
+	completionIds   []NameId
+	completionDefsId NameId
 	byToken [][]coreSig
 	// index is the indexer `:n:`; slice is `n:`, `:n` and `a:b`.
 	index, slice []coreSig
