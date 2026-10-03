@@ -875,3 +875,68 @@ Working notes:
 - Never write `go test -cpuprofile` output into `mshell/`: it overwrites the tracked `mshell/mshell.test`.
 - Review method that found holes both times: independent read-only subagents per area, each writing small programs and running them through a script that type-checks with a frozen copy of the binary, then runs what checks with `MSH_ERROR_KIND=1` and flags "checks, then type mismatch". The ninth session's areas: defs/generics/std, inference machinery, scalars/strings/processes, aliases/shapes/partly new values. Areas neither review targeted on its own: grids beyond the first review's pass, enums with generic payloads in joins, the LSP's checker paths.
 - `ntfy "<message>"` notifies Mitchell (the script sends its argument as the message; do not pass flags).
+
+## Tenth session (2026-10-02): checker performance, a third review, the language server
+
+Started from `86db565`; all suites passed there.
+
+### Performance
+
+Profiled `BenchmarkCoreCheckGenerated` (GC was a quarter of the time) and cut allocations, then time:
+
+- **Substitution checkpoints are a trail** (`TypeUnify.go`): a checkpoint is a position in one reused log of old values, and a rollback undoes the writes after it. The rerooted versions allocated an object and an undo slice per checkpoint. Checkpoints are used last in, first out, which every call site already did; `TestSubstitutionVersionsMatchCopies` became `TestSubstitutionTrailMatchesCopies`, which models that discipline (a rollback discards the checkpoints taken after its target).
+- **Branch scratch stacks** (`armBegin`/`armEnd`, `TypeCoreAssign.go`): `if`, `match`, `iff`, `and`/`or` and `joinArms` keep their arms' saved runs, match arms, and each arm's set variables (spans of one name buffer) on checker-owned stacks, truncated by mark. A match arm's label is its pattern, made into text only for a message.
+- **Hash-consing without per-lookup allocation**: `MakeRecord` and `MakeUnion` build into arena scratch buffers and copy only into a new type; `Apply` copies a record's fields only once one changes.
+- **A pool of checkers per base** (`CoreBase.diagnose`, `coreChecker.reset`, `TypeArena.resetOverlay`): a finished check's overlays and buffers are reset by length and reused, maps cleared and refilled from the base. `Check` and the LSP's diagnostics use it; `Diagnostics`/`Errors`, whose callers keep the arena, still make a new checker. `TestCoreCheckPoolMatchesFresh` checks the corpus and the generated programs through the pool, shuffled, three times, against a new checker each.
+- **A has-variable flag on every type node** (`TypeNode.Flags`, set in `TypeArena.append` from the children; it fills padding, so a node stays 16 bytes): `Apply`, the occurs check and `mentionsVars` skip a ground type at once. This also fixed quadratic time on nested quotes the LSP review found (`(`×20,000: 57 s on the frozen binary, 0.19 s now).
+- **Dense-id caches** for `MakeVar` and `MakeList` (by variable id and element id, parent first) instead of two map lookups; `NameTable.Lookup` looks in the parent first (most words are builtins and std's); `word` looks a name up once.
+
+| One CPU, min of 8, interleaved with `86db565` | Before | After |
+|---|---|---|
+| `BenchmarkCoreCheckGenerated` (50 KB) | 8.98 ms, 1.86 MB, 12,934 allocs | 4.06 ms, 82 KB, 4,550 allocs |
+| `BenchmarkCoreCheckEmpty` | 2.6 µs, 2.5 KB, 15 allocs | 1.3 µs, 0 allocs |
+| `BenchmarkLSPDiagnostics/setdiff2way.msh` (parse + check) | 1.06 ms, 232 KB | 0.84 ms, 131 KB |
+| `BenchmarkLSPDiagnostics/nodes` | 195 µs | 113 µs |
+
+`BenchmarkCoreCheckCorpus` (this tree's larger corpus): 15.4 ms, 0.44 MB, 15,235 allocs; the baseline on its own smaller corpus took 25 ms, 8.0 MB, 42,104 allocs. Parsing now costs more than checking per LSP edit. What allocates now is mostly new types (cons-key strings, member slices) and `applySpan` results; a span pool and byte-pool keys would remove most of it, with little time left to gain.
+
+### Third independent review
+
+Four read-only subagents with a frozen binary, in the areas the handoff named: grids in depth, generic enums in joins, the LSP's checker paths, and surface syntax read differently by the checker and the runtime. Holes found, each fixed with a test:
+
+- **Prefix quote names**: the checker stripped every dot (`strings.Trim`), the runtime one trailing dot, so `.g.` called `g` in the checker and the def `.g` at run time. `return.` was a return to the checker and an unknown word to the runtime; it is now an error. Tests `prefix_quote_*`.
+- **Grid `map`**: on an empty grid the runtime kept the input's columns while the checker said the quote's exact schema, so a row a left join added read an "absent" column at ⊥. The runtime now gives a grid with no columns (changelog: Changed). A `GridRow` result keeps its schema only when every column is required (rows from grids without an optional column left Go nil cells); the runtime makes a row missing a column a checked error. Tests `grid_map_*`.
+- **`updateCol` whose quote extends the same grid** panicked (index out of range); now a checked error. `tests/fail/grid_updatecol_extend_self.msh`.
+- **More than 64 constructor payloads**: generic bit masks covered only 64 positions, so later payloads were never instantiated, and one stored list got two element types. Bit 63 now stands for every later position (`genBit`). Tests `enum_ctor_65_payloads`.
+- False rejection fixed: a non-ASCII generic enum name (`Bøx[int]`), a rune/byte mix in `parseTypeNamed`.
+
+The LSP review found no disagreement with the CLI on about 30,000 documents, and no panics. Fixed:
+
+- Diagnostics are checked one at a time per document, coalesced to the newest text, published only for the newest edit of an open document, with panics recovered (`scheduleDiagnostics`). Stale diagnostics after an edit or a close are gone; 40 rapid edits of a 1 MB document peak at 166 MB (2.9 GB before). `TestDiagnosticsNewestTextOnly` (also under `-race`).
+- Columns are UTF-16 in diagnostics, fixes, hover, completion and rename (`lspDocument.position`, `runeCol`, `tokenRange`).
+- Fix-all is linear: 5,000 fixes in 64 ms (7.4 s before), quick fixes built only when asked.
+- Rename reaches `if`/`else` arms, match arms, prefix quotes, grids, and match and `=>` bindings. `TestRenameReachesEveryBody`.
+- Startup-file errors (an init file that does not parse, startup declaration errors) show on every document. `TestDiagnosticsShowStartupErrors`.
+
+Messages: a type name or `--` used as a word (`(int -- int)` as code) says it is a type, instead of "no rule ... please report this"; a def whose signature has an error is not checked against its body, and calls to it add nothing (`coreSig.broken`), so `def f (-- new)` gives one error.
+
+Suites: `test.sh` 0 failed; `typecheck_test.sh` 465 passed, 0 failed; `soundness_test.sh` 0 mismatches; `go test` ok (the LSP and pool tests also under `-race`); generated programs, seeds 500000-502999, no mismatch (75 s, was about 100 s per 3,000); `lib/std.msh` bodies check; docs rebuilt. `formal-ver/` unchanged: no typing rule changed (the grid `map` rule is narrower).
+
+### Follow-ups not changed
+
+- LSP: `VER` in a document is ignored (the CLI loads that version's startup files); hover shows `| exact`, `| open`, `Maybe[<bottom>]` (question 19); no hover for operators, enum and type names; the checker's messages for init-file names say "standard library"; the parser is quadratic on a malformed nested quote signature, with one error per level.
+- Checker, conservative: a `Grid | GridView` union is refused by `updateCol`, `extend`, `gridSetCell`; shared `GridRow{a: int}` and `GridRow{a: str}` have no join; a stored `(GridRow -- int)` quote is refused by `derive`, `join`, `pivot`, `groupBy` (also in the ninth session's list); `["a" "a"] exclude` reports a missing column rather than the duplicate; `(sortBy) q!` skips the sort-column check (the runtime's error is checked).
+- Lexer surprises (checker and runtime agree): `[ls ..]` does not parse (`..` is a prefix quote); `1>`/`0>` redirect stderr; any `el??*` lexes as `else*`.
+
+## Where things stand (end of 2026-10-02, tenth session)
+
+- Committed on `type-checker-enhancements` (not pushed): `071b20c` (code, tests, user docs, changelog) and the design-notes commit after it. `gofmt` has never been run on the type-checker files.
+- Suites pass as listed above. Open questions: 17 (type-like names in signatures) and 19 (how printed types show remainders and `none`).
+- Benchmarks: compare against an older commit in a `git worktree`, with `-cpu 1` and the minimum of several runs (`go test -bench ... -cpu 1 -count 8`); other work on the machine (review subagents) moved times by 2x this session. `BenchmarkLSPDiagnostics` needs `tests/msh-scripts`, which a worktree lacks: symlink it.
+- Generator seeds used so far: 100000-109999, 200000-201999, 300000-302999, 400000-402999, 410000-412999, 420000-422999, 500000-502999.
+- Still not done from the plan: stage 8's final pass at release.
+
+### Question 19, records (2026-10-02, tenth session, continued)
+
+Mitchell: `exact` and `open` are shown in messages and hover only, never typed by users. `formatRecord` now prints an open record as written (`{a: int}`, `{}` for the unknown dict) and an exact one as `exact {a: int}`; grids keep `Grid{a: int}` for a known schema and print a partly known one as `Grid{a: int, ...}`. `TestFormatRecordRemainders` pins it. One sentence in `type_system.inc.html`. Question 19 stays open for `none`'s contents (`Maybe[<bottom>]`). Not changed: the rare forms `{a: int | str: T}` (a `{str: T}` with declared labels) and per-label `?del:`, `: absent`, `: open`.
+- The rest of question 19 (Mitchell): `none`'s type, `Maybe[⊥]`, is printed `none` (`[none]` in a list). Question 19 is closed; question 17 is the one open.

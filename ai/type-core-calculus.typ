@@ -1845,6 +1845,13 @@ its column sequences, so they are as invariant as the column types.
   A key or sort column named only at run time may be any column, so every column of the schema must
   pass, and with an unknown schema none can. The same holds for a `groupBy` whose spec list is not
   written at the call: its one aggregation type is checked as well.
+- Grid `map` gives a grid whose columns are those of the quote's value: the labels of an exact record
+  type whose every label is required, or of a row type whose schema is so; otherwise the schema is
+  unknown. A required label is one every row's value has; an optional one a later row may lack, and the
+  runtime takes the columns from the first row. On a grid with no rows no quote runs, and the result has
+  no columns (found 2026-10-02, third review: the runtime kept the input's columns, so a row a join added
+  read one of them at $bot$, where the exact schema said it was absent). A row that lacks one of the first
+  row's columns is a checked error.
 - A list of indexers (`:0:, 2:`) concatenates its parts, which only lists, strings, paths and bytes
   do; on a pipe, a list of `:n:` indexers alone gives a pipe of those commands.
 - A column named only at run time in `gridAddCol` or `derive` may be any column the grid may lack,
@@ -2265,6 +2272,12 @@ is an unknown name (found 2026-10-02).
   not below `{str: T}`, so a def that only reads a dict of any kind takes `{| open}`, or a named type.
 - There is no syntax for an exact shape type. Shape literals have exact types; a written shape type
   is `open` or has a `*: T` remainder.
+- *Printing (decided 2026-10-02, question 19).* Messages and hover print a type as it would be written
+  where it can be: an `open` record is `{a: int}`, the unknown dict `{| open}` is `{}`, and `*: T` and
+  `{str: T}` are as written. An exact record, which cannot be written, is `exact {a: int}`; `exact` is
+  only printed, never parsed. A grid's known (exact) schema is `Grid{a: int}`, one that may have other
+  columns `Grid{a: int, ...}`, and the unknown one `Grid`. The `| exact` and `| open` the checker used to
+  print read as unions, and could not be written. `Maybe[⊥]`, the type of `none`, is printed `none`.
 
 == Patterns and validation
 
