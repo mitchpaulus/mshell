@@ -2365,6 +2365,14 @@ remaining values have no known types. Decided 2026-09-30:
   are found statically (below, "Checking a session"), not by watching the run.
 - *Variables need nothing.* Each keeps its one type; one the line never stored reads as unset, a
   checked error. Definitions from a line that does not check are not added.
+- *A checker that loses track of the stack stops the session as it is (decided 2026-10-03).* After
+  each line the REPL compares how many values the checker and the runtime have on the stack. They
+  differ only through a bug in the checker or the runtime, and then the checker's types for the stack
+  cannot be trusted. So the REPL says so and asks: clear the stack and go on, or exit. Clearing is
+  dropping every value, which the checker follows soundly. Any other answer, or the end of input,
+  exits; the session never goes on unchecked. (Before, checking was turned off for the rest of the
+  session.) Only the count is compared: a checker wrong about a value's type, with the count right,
+  is not caught here.
 
 The alternative of treating every slot as shared at the end of each line would make the revert need no
 inspection, but would lose new values across lines (`readFile parseJson` on one line, `tryAs Config` on

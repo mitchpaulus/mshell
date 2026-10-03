@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // replChecker checks REPL lines before they run (ai/type-system-plan.md,
@@ -84,7 +86,43 @@ func droppedNote(n int) string {
 }
 
 // inSync reports whether the checker has as many values on the stack as
-// the runtime: anything else is a bug in the checker, and checking stops.
+// the runtime: anything else is a bug in the checker or the runtime, and
+// the session does not go on as it is (lostTrack).
 func (r *replChecker) inSync(stack MShellStack) bool {
 	return r.session.Len() == len(stack)
+}
+
+// clearStack empties the checker's stack, for a runtime stack the REPL has
+// just emptied.
+func (r *replChecker) clearStack() {
+	r.session.ClearStack()
+	r.pre = r.pre[:0]
+}
+
+// lostTrackMessage tells the user the checker and the runtime disagree on
+// how many values the stack holds.
+func lostTrackMessage(checker, runtime int) string {
+	return fmt.Sprintf("The type checker lost track of the stack: it has %d values, the stack %d.\n"+
+		"This is a bug in mshell; please report it.\n"+
+		"The values on the stack can no longer be checked, so the stack must be cleared, or the shell exits.\n",
+		checker, runtime)
+}
+
+// lostTrackClears asks, with read, whether to clear the stack and go on
+// (true) or exit (false), until the answer is one of them. Anything that
+// stops the asking, such as the end of input, exits: the session never goes
+// on with a stack the checker cannot follow.
+func lostTrackClears(read func(prompt string) (string, error)) bool {
+	for {
+		answer, err := read("Clear the stack and continue [c], or exit [e]? ")
+		if err != nil {
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(answer)) {
+		case "c", "clear":
+			return true
+		case "e", "exit":
+			return false
+		}
+	}
 }

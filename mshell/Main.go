@@ -3927,10 +3927,15 @@ ParseError:
 			}
 		}
 	}
+	// Getting here is a bug, and the checker's picture of the stack cannot
+	// be trusted: clear the stack, which the checker can follow, or exit.
 	if state.checker != nil && !state.checker.inSync(state.stack) {
-		fmt.Fprintf(os.Stderr, "The type checker lost track of the stack (it has %d values, the stack %d); checking is off for the rest of the session. Please report this.\n",
-			state.checker.session.Len(), len(state.stack))
-		state.checker = nil
+		fmt.Fprint(os.Stderr, lostTrackMessage(state.checker.session.Len(), len(state.stack)))
+		if !lostTrackClears(readPromptFromTTY) {
+			return true, 1
+		}
+		state.stack = state.stack[:0]
+		state.checker.clearStack()
 	}
 
 PromptPrint:

@@ -582,6 +582,16 @@ func (s *CoreSession) Diverges() bool { return s.c.diverged }
 // takes; the slots below them are untouched by it.
 func (s *CoreSession) Depth() int { return s.depth }
 
+// ClearStack drops every value on the stack, between lines: the REPL has
+// emptied its stack, and the checker follows, as if each value had been
+// dropped.
+func (s *CoreSession) ClearStack() {
+	if s.open {
+		panic("ClearStack with a line open")
+	}
+	s.c.stack = s.c.stack[:0]
+}
+
 // RuntimeError is called when the last committed line stopped with a
 // runtime error. The REPL restores the stack it had before the line,
 // except the new values the line took: keep[i] says whether to keep the
