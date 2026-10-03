@@ -1162,19 +1162,51 @@ Suites: `test.sh` 366 passed; `typecheck_test.sh` 468, 0 failed; `soundness_test
 
 Nothing. The runtime's own type checks could now go (the original performance goal of the checker), once wanted.
 
-## Where things stand (end of 2026-10-03, thirteenth session)
+## Fourteenth session (2026-10-03): the checker's cost in a real process
+
+Started from `c0ec74f`; every suite passed there (`typecheck_test.sh` 468, soundness 300 run, 0 mismatches, `go test` ok). Stages 0-9 were done and no question was open, so this session measured what checking every script costs a real run. Committed at the end (code, then design notes).
+
+### Where a one-line script's checker time goes (FX-8350, timers in a scratch build, not committed)
+
+In a new process the check took about 3 ms, not the 0.6 ms of `BenchmarkCoreCheckScript/oneLine`: building the builtin table was 1.3-1.7 ms with GC off and 1.7-2.8 ms with it on (a second build in the same process took 0.33 ms, so most of it is running the signature parser cold; page faults were about 17), the startup defs' signatures 0.13 ms, the script's check 0.03 ms. The GC that ran during the check was started by the heap the PATH scan and std loading left.
+
+### The builtin table is built while the startup files load
+
+The table depends only on the binary, and loading the startup files (lexing, parsing and running std, about 4 ms) does not depend on it. `PrebuildCoreBuiltins` (`TypeCore.go`) builds the arena, the built-in aliases and the table (`newCoreBuiltins`, split out of `newCoreBase`) on another goroutine; the next base takes them (`takeCoreBuiltins`, an `atomic.Pointer` to a one-slot channel) or builds them itself if none were started. `main` starts it before reading a script (`command == CLIEXECUTE`, so `--type-check-only` too) and before the interactive shell loads its startup files. The language server never starts one. Each prebuild is used by one base, since a base adds the startup declarations and signatures to the same arena.
+
+- Per phase, a one-line script with PATH emptied (standing in for PR #354): the check went from about 3 ms to 0.17 ms; std loading unchanged at about 3.9 ms; no GC runs at all now.
+- Whole process (40 runs, static builds, PATH emptied): min 10.6 ms to 9.1 ms, median about 11.7 to 10.3 ms. About 2 ms of each is the timing loop's own `date` calls. With the real PATH the scan's 20 ms hides the gain until PR #354 lands.
+- Safety: the table build touches no shared state except `sigASTCache`, a `sync.Map`. A `-race` build of `msh` ran every `tests/success` and `tests/typecheck_fail` program with no race, and the interactive shell through a pty (a line run, a line refused, `exit`) with none either.
+- Test: `TestPrebuiltCoreBuiltins` prebuilds, parses std meanwhile, and checks that every corpus program gets the same output as from a base built in place, and that the base took the prebuild (fails when `takeCoreBuiltins` ignores it). Run under `-race` too.
+
+### The runtime's own type checks (plan question 27)
+
+Profiled `BenchmarkEval` (`CounterLoop`, `DefCall`, `MapQuote`, `LateBuiltins`): no time in type-mismatch code. Each mismatch is the `default` arm of a type switch the evaluator needs to choose the operation. The time is in token dispatch (`processToken`, `run`), string-keyed map lookups for variables and builtins (`mapaccess2_faststr` 17% cumulative, `memHashAES` 9%) and allocation (about 10%). So removing the checks would not make programs faster; asked as question 27, recommending keeping them.
+
+Decided (Mitchell, 2026-10-03): keep the runtime's checks for now; the checker gets merged to `main` and battle tested first. Plan (question 27 removed), design doc "Checking by default".
+
+### Suites
+
+`test.sh` 366 passed; `typecheck_test.sh` 468, 0 failed; `soundness_test.sh` 300 run, 0 mismatches; `go test ./...` ok; the language server, pool, lazy-base and prebuild tests under `-race` ok; `typst compile` ok. `formal-ver/` unchanged (no typing rule changed). `gofmt` not run.
+
+### Not changed, for later
+
+- A checked one-line script still spends about 3.9 ms loading std (lex, parse, run) and about 2 ms starting the process; neither is the checker. Mitchell decided against caching startup files (question 21).
+- The interactive shell still checks every std body before its first prompt (about 2 ms); moving that off the start would mean printing the startup errors later, which is not worth 2 ms.
+
+## Where things stand (end of 2026-10-03, fourteenth session)
 
 This section is the handoff.
 
-- Committed on `type-checker-enhancements` (not pushed): the thirteenth session's code, tests and docs (a script's check reaches only the startup defs it calls; every script is checked before it runs), then the design-notes commit.
+- Committed on `type-checker-enhancements` (not pushed): the thirteenth session's code, tests and docs (a script's check reaches only the startup defs it calls; every script is checked before it runs), then the design-notes commit. Then the fourteenth session's prebuilt builtin table (code and test) and the design-notes commit after it.
 - Separate: PR #354 (`lazy-path-lookup`, off `main`), the PATH lookup at startup. Not merged. When `main` is next merged into this branch, move this branch's `binPaths` change (`MShellString` values, not pointers) into `Pathbin_unix.go`.
-- Stages done: 0 through 7, 9, three independent reviews. Left: stage 8's final pass at release. Open questions in the plan: none.
-- Possible next steps, none started: remove the runtime's own type checks now that no unchecked program runs (the checker's original performance goal; the soundness oracle and the failure-kind classification say which checks are type mismatches); the builtin table costs about 0.4 ms warm and 1.3 ms cold per checked script (a generated static table would remove it); parsing the standard library is about 4 ms per run; Windows still scans PATH at startup.
+- Stages done: 0 through 7, 9, three independent reviews. Left: stage 8's final pass at release. Open questions in the plan: none (27 decided: the runtime keeps its own type checks while the checker is merged to `main` and battle tested).
+- Possible next steps, none started: loading the standard library is about 4 ms per run (lex, parse, run), now the largest part of a short script after process start; Windows still scans PATH at startup.
 - `gofmt` has never been run on the type-checker files (not permitted without asking).
 
 Working notes:
 
 - Build both binaries before testing: `cd mshell && ./build.sh`. Point `MSHINIT` at an empty file when running by hand.
-- Benchmarks: compare against an older commit in a `git worktree` in the scratchpad, `-cpu 1`, interleaved, minimum of several runs. `BenchmarkCoreCheckScript` (new) is what a checked script run spends in the checker. Process-level timings on this machine swing by 10 ms between runs.
+- Benchmarks: compare against an older commit in a `git worktree` in the scratchpad, `-cpu 1`, interleaved, minimum of several runs. `BenchmarkCoreCheckScript` is the checker's warm cost for a script; in a real process the cold cost differs (fourteenth session), so time phases in a scratch build too. Process-level timings on this machine swing by 10 ms between runs; empty PATH (`env PATH=<empty dir> msh ...`) to take the PATH scan out until PR #354 lands, and build static (`CGO_ENABLED=0`, as `build.sh` does) when comparing binaries.
 - `tests/msh-scripts` (gitignored, 150 files here, 136 check): type check only, never run.
 - `ntfy "<message>"` at the end of every turn (Mitchell, 2026-10-03).

@@ -2316,10 +2316,14 @@ each line live and runs it only if it checks (decided 2026-09-30).
 code read from standard input are checked before they run, and run only if they check. There is no
 opt-out, as for the REPL (question 22): a script that is hard to write past the checker is a problem in
 the language or the checker, to be fixed there. `--check-types` is accepted and changes nothing;
-`--type-check-only` checks and exits. A script check costs about 0.6 ms of checker work for a short
-script (the startup defs it does not reach are not checked, below). Since no unchecked program runs, a
-runtime type mismatch can now only mean a checker or builtin bug, which is what lets the runtime's own
-type checks go later.
+`--type-check-only` checks and exits. A short script waits about 0.2 ms for the checker: the startup
+defs it does not reach are not checked (below), and the builtin table, which depends on nothing but the
+binary, is built on another core while the script is read and the startup files load (2026-10-03). Since
+no unchecked program runs, a runtime type mismatch can now only mean a checker or builtin bug, which is
+what lets the runtime's own type checks go later. Measured (2026-10-03): they cost nothing a profile
+shows, since each is the `default` arm of a type switch the evaluator needs anyway to choose the
+operation, so removing them would not make programs faster. *Decided (2026-10-03, plan question 27):*
+the runtime keeps them for now, while the checker is merged to `main` and used on real scripts.
 
 *A line that checks can still stop with a runtime error* (index out of range, `?` on none, a failed
 command). The checker's stack after the line assumes the line finished, and types are erased, so the

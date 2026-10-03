@@ -166,7 +166,7 @@ The same applies to runtime work: `deepCopy`, the cycle-safe walkers and `valida
 
 Each stage lists its work, its tests, and when it is done.
 
-Status (2026-10-03, thirteenth session): done: stages 0 through 7, three independent reviews whose holes are fixed (progress log), and stage 9 (the REPL checks each line). A script's check now checks only the startup defs it reaches, and every script is checked before it runs (question 26, thirteenth session). No questions are open. Left: stage 8's final pass at release.
+Status (2026-10-03, fourteenth session): done: stages 0 through 7, three independent reviews whose holes are fixed (progress log), and stage 9 (the REPL checks each line). A script's check now checks only the startup defs it reaches, and every script is checked before it runs (question 26, thirteenth session); the builtin table is built on another core while the startup files load (fourteenth session). No questions are open (27 decided: the runtime keeps its own type checks). Left: stage 8's final pass at release.
 Stages 2–5 depend on each other in order. Runtime groundwork is independent and can land any time. The soundness oracle can start after the core checker.
 
 ### Stage 0: Baseline and measurements
