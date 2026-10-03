@@ -1,0 +1,5 @@
+# A slot no arm of an `if` touches keeps what the checker knows of it: here
+# the list of literal column names, which `select` needs to type the column.
+["y"]
+true if 1 else 2 end drop
+[| x, y; 1, "a" |] swap select "y" gridCol ("b" +) map str wl

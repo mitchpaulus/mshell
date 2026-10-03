@@ -2398,6 +2398,13 @@ func (c *coreChecker) originHint(s coreSlot) string {
 // joinSlot joins two slots. A slot with an unsolved variable is unified,
 // never joined, so the answer does not depend on checking order.
 func (c *coreChecker) joinSlot(a, b coreSlot) (coreSlot, bool) {
+	// The same slot in both arms is the value from before the branch, which
+	// neither arm touched: anything that copies, stores or rewrites it
+	// changes the slot. So it keeps its literal text or names, partly new
+	// mark and origin.
+	if a == b {
+		return a, true
+	}
 	fresh := a.fresh && b.fresh
 	if a.t == b.t {
 		return coreSlot{t: a.t, pq: a.pq, fresh: fresh}, true
