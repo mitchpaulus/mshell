@@ -6,7 +6,7 @@ import "testing"
 
 // binPaths must push plain string values, like every other builtin.
 func TestDebugListPushesStringValues(t *testing.T) {
-	pbm := &PathBinManager{binaryPaths: map[string]string{"tool": "/usr/bin/tool"}}
+	pbm := &PathBinManager{binaryPaths: map[string]string{"tool": "/usr/bin/tool"}, scanned: true}
 	list := pbm.DebugList()
 	if len(list.Items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(list.Items))
