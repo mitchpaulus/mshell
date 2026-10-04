@@ -1,0 +1,44 @@
+# Enums: constructors, member patterns, the enum's name as a kind, printing,
+# JSON and equality.
+enum Shape = circle float | rect float float | dot end
+
+def area (Shape -- float)
+    match
+        circle r : @r @r * 3.0 *,
+        rect w h : @w @h *,
+        dot : 0.0,
+    end
+end
+
+[2.0 circle 1.5 2.0 rect dot] (area str wl) each
+
+2.0 circle s!
+@s str wl
+@s toJson wl
+1.5 2.0 rect str wl
+1.5 2.0 rect toJson wl
+dot str wl
+dot toJson wl
+
+# The enum's name is a kind: it picks the enum out of a union.
+def describe (Shape | int -- str)
+    match
+        Shape sh : $"shape {@sh str}",
+        int n : $"int {@n str}",
+    end
+end
+@s describe wl
+5 describe wl
+
+@s 2.0 circle = str wl
+@s 3.0 circle = str wl
+@s dot = str wl
+dot dot = str wl
+
+# Maybe prints as it always has.
+5 just str wl
+5 just toJson wl
+
+# A member is a word, so the prefix quote form calls it too.
+enum Op = op (int -- int) | noop end
+op. 1 + end match op f : 5 @f x str wl, noop : end

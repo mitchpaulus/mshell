@@ -1,0 +1,6 @@
+# 2tuple is (a a -- [a]); a generic that is several bare inputs is the join
+# of the arguments, so values of different kinds give a list of their union.
+5 "a" 2tuple t!
+@t str wl
+@t (match int n : @n 1 + str wl, str s : $"{@s}!" wl, end) each
+"x" "y" 2tuple (len) map str wl

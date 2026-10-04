@@ -14,7 +14,9 @@ tempFile pack-tar!
     }
     `zip/base/repeat.txt`
     "zip/base/nested"
-] pack-items!
+# The stored list is given the entry type where it is made: lists are
+# invariant. PackEntry is the built-in name for an entry.
+] as [PackEntry] pack-items!
 
 @pack-items @pack-tar tarPack
 

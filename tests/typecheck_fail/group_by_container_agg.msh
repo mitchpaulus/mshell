@@ -1,0 +1,3 @@
+# The runtime refuses an aggregation that returns a list, also when the
+# spec list is not written directly before groupBy.
+[| k, v; "a", 1; "b", 2 |] ["k"] [{agg: (len [1] swap append)}] [] drop groupBy drop

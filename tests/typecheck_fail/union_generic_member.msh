@@ -1,0 +1,6 @@
+# A generic cannot be a union member: at [int] and [str] the union would
+# have two list members, and `list l` would bind the wrong one. This
+# program checked before the rule was enforced in signatures, and then
+# added 1 to "x".
+def g (a b -- a | b) swap drop end
+[1] ["x"] g match list l : @l 0 nth 1 + wl, _ : end

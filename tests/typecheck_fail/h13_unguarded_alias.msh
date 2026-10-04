@@ -1,0 +1,5 @@
+# H13: two aliases that refer to each other through a union only. A checker
+# that assumes a pair at these steps proves `str <= A` and `A <= int`.
+type A = B
+type B = int | A
+1 wl

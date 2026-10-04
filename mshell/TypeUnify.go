@@ -1,9 +1,7 @@
 package main
 
-// Substitution and generic instantiation. Phase 6 turns the Phase-3
-// "structural acceptance check" into a real Hindley-Milner-style unifier:
-// type variables can stand in for concrete types and become bound during
-// unification.
+// The substitution of type variables, which equality unification
+// (TypeUnifier.go) extends.
 //
 // Substitution storage is a flat slice indexed by TypeVarId. Apply walks
 // composites and rebuilds them through the arena (preserving hashconsing)
@@ -16,38 +14,46 @@ package main
 // indexed directly without bounds-grow logic on Bind (FreshVar is the
 // only way to create a var, and it sizes the slice).
 //
-// The branching walker checkpoints the substitution at every step, so
-// checkpoints are versions of a persistent array (Baker's rerooting):
-// bound holds the current version, and every other version is a chain of
-// undo logs leading to it. Checkpoint is O(1), a write appends one undo
-// entry, and Rollback costs the writes between the two versions, which is
-// nothing when the walker returns to the state it just captured.
+// Checkpoints are positions in a trail: once a checkpoint has been
+// taken, every write logs the value it replaces, and Rollback undoes the
+// writes after its checkpoint, newest first. Checkpoint is O(1), a write
+// appends one entry to one reused slice, and Rollback costs the writes it
+// undoes. Checkpoints are used last in, first out: rolling back to a
+// checkpoint discards every checkpoint taken after it, while it stays
+// valid itself (a trial may be rolled back to the same point several
+// times). The checker only tries a candidate and rolls back to just before
+// it, so that is all it needs.
 //
 // Ids are never reused: Rollback leaves the slice at full length, and
 // slots allocated after the checkpoint just revert to unbound. So a type
 // that escapes one branch can't alias a variable another branch creates.
 type Substitution struct {
 	bound []TypeId
-	// root is the newest version, which the undo log in root.undo takes
-	// back from bound. Nil until the first Checkpoint: before that no
-	// version can be returned to, so writes need no log.
-	root *substVersion
-	// rw is Apply's rewriter, built on first use.
-	rw *typeRewriter
-}
-
-// substVersion is one version of a Substitution. For the root, applying
-// undo in reverse to bound gives this version; for any other, applying
-// it in reverse to the version at next does.
-type substVersion struct {
-	next *substVersion
-	undo []substWrite
+	// trail holds the old value of every write since the first
+	// checkpoint. Before one is taken no state can be returned to, so
+	// writes need no log (logging is false).
+	trail   []substWrite
+	logging bool
+	// unboundBottom makes Apply read an unbound variable as ⊥, the default
+	// a unit is solved with, without binding it: a REPL session solves each
+	// line so, and the variable stays open for the lines after it
+	// (TypeCoreSession.go). Path compression writes the trail, so rolling
+	// back to a checkpoint taken before takes the defaults back.
+	unboundBottom bool
 }
 
 // substWrite records that slot v held t before a write.
 type substWrite struct {
 	v TypeVarId
 	t TypeId
+}
+
+// Reset empties the substitution for a new unit, keeping its storage.
+func (s *Substitution) Reset() {
+	s.bound = s.bound[:0]
+	s.trail = s.trail[:0]
+	s.logging = false
+	s.unboundBottom = false
 }
 
 // FreshVar allocates a new generic variable, reserves its slot in the
@@ -59,280 +65,159 @@ func (s *Substitution) FreshVar(arena *TypeArena) TypeId {
 	return arena.MakeVar(id)
 }
 
-// set writes slot v, logging the old value so the root can be restored.
+// set writes slot v, logging the old value so a checkpoint can be restored.
 func (s *Substitution) set(v TypeVarId, t TypeId) {
-	if s.root != nil {
-		s.root.undo = append(s.root.undo, substWrite{v, s.bound[v]})
+	if s.logging {
+		s.trail = append(s.trail, substWrite{v, s.bound[v]})
 	}
 	s.bound[v] = t
 }
 
+// Commit forgets the trail: no checkpoint taken so far can be rolled back
+// to. It is for the outermost user only (a REPL session, at the end of a
+// line it keeps), and keeps the trail from growing over a session.
+func (s *Substitution) Commit() {
+	s.trail = s.trail[:0]
+	s.logging = false
+}
+
 // SubstCheckpoint records the substitution's state at a point in time
-// so it can be rolled back. Used by overload resolution (Phase 9) to
-// trial-unify each candidate without polluting state for the next.
+// so it can be rolled back: trying an overload candidate, or a match that
+// may fail, without leaving its bindings behind. It is the trail's length.
 type SubstCheckpoint struct {
-	v *substVersion
+	n int
 }
 
-// Checkpoint returns the current version. Writes after it don't change it.
+// Checkpoint returns the current state. Writes after it don't change it.
 func (s *Substitution) Checkpoint() SubstCheckpoint {
-	if s.root == nil || len(s.root.undo) > 0 {
-		// Nothing written since the root was taken reuses it; otherwise
-		// the current state becomes the new root, and the old root now
-		// differs from it by exactly its log.
-		v := &substVersion{}
-		if s.root != nil {
-			s.root.next = v
-		}
-		s.root = v
-	}
-	return SubstCheckpoint{v: s.root}
+	s.logging = true
+	return SubstCheckpoint{n: len(s.trail)}
 }
 
-// Rollback restores the version snap was taken at, discarding writes made
-// since the last Checkpoint, and makes it the root.
+// Rollback restores the state snap was taken at, undoing the writes made
+// since, newest first. Checkpoints taken after snap are no longer valid.
 func (s *Substitution) Rollback(snap SubstCheckpoint) {
-	// Undo writes since the root, which no version refers to.
-	s.undoInto(s.root, nil)
-	// Walk the path from the target to the root, then reroot along it
-	// from the root end: each step moves the current state one version
-	// toward the target, and logs the way back on the version it left.
-	var path []*substVersion
-	for v := snap.v; v != s.root; v = v.next {
-		path = append(path, v)
-	}
-	for i := len(path) - 1; i >= 0; i-- {
-		v, old := path[i], s.root
-		s.undoInto(v, old)
-		old.next = v
-		v.next = nil
-		s.root = v
-	}
-}
-
-// undoInto applies v's log to bound in reverse and empties it. If back is
-// not nil, it receives the log that redoes what was undone.
-func (s *Substitution) undoInto(v *substVersion, back *substVersion) {
-	for i := len(v.undo) - 1; i >= 0; i-- {
-		w := v.undo[i]
-		if back != nil {
-			back.undo = append(back.undo, substWrite{w.v, s.bound[w.v]})
-		}
+	for i := len(s.trail) - 1; i >= snap.n; i-- {
+		w := s.trail[i]
 		s.bound[w.v] = w.t
 	}
-	v.undo = v.undo[:0]
+	s.trail = s.trail[:snap.n]
 }
 
 // Apply resolves a TypeId against the current substitution, walking into
-// composites and rebuilding them if any inner type changed. Path
-// compression is applied to variable chains so repeated lookups are fast.
-func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
-	// The rewriter holds no per-call state, so one serves every Apply
-	// against the same arena instead of allocating it and its closures
-	// each time.
-	if s.rw == nil || s.rw.arena != arena {
-		s.rw = s.rewriter(arena)
+// composites and rebuilding them through the arena (so hash-consing holds)
+// when any inner type changed; an unchanged subtree returns the original
+// TypeId, so callers can compare ids cheaply. A variable's binding is
+// path-compressed, so repeated lookups are fast.
+func (s *Substitution) Apply(a *TypeArena, t TypeId) TypeId {
+	n := a.Node(t)
+	if n.Flags&NodeHasVar == 0 {
+		return t
 	}
-	return s.rw.mapType(t, nil)
-}
-
-// typeRewriter is the shared structural walker behind Substitution.Apply
-// and Checker.renameVars. mapType rebuilds composites through the arena
-// (preserving hashconsing) when any inner type resolves to something
-// different; an unchanged subtree returns the original TypeId so callers
-// can compare ids cheaply.
-//
-// The two variation points:
-//   - resolve maps a free type variable (one not in `skip`) to its
-//     replacement; ok=false leaves the variable in place.
-//   - mapSig reconstructs a quote signature, returning the rebuilt sig and
-//     whether anything inside it changed. Apply keeps Generics and blocks
-//     resolution of the sig's locally-scoped generics; rename rewrites
-//     Bindings and consumes Generics.
-//
-// `skip` holds TypeVarIds that must be left untouched: a quote signature's
-// locally-scoped generics are symbolic (renamed by Instantiate at each use
-// site) and don't address the live substitution, so resolving one could
-// bake an unrelated binding for the same TypeVarId into the stored sig —
-// e.g. the `T` in a `(len)` quote inferred as `([T] -- int)`.
-type typeRewriter struct {
-	arena   *TypeArena
-	resolve func(v TypeVarId, skip map[TypeVarId]struct{}) (TypeId, bool)
-	mapSig  func(sig QuoteSig, skip map[TypeVarId]struct{}) (QuoteSig, bool)
-}
-
-func (w *typeRewriter) mapType(t TypeId, skip map[TypeVarId]struct{}) TypeId {
-	n := w.arena.Node(t)
 	switch n.Kind {
 	case TKVar:
 		v := TypeVarId(n.A)
-		if _, blocked := skip[v]; blocked {
+		if int(v) >= len(s.bound) || s.bound[v] == TidNothing {
+			if s.unboundBottom {
+				return TidBottom
+			}
 			return t
 		}
-		if r, ok := w.resolve(v, skip); ok {
-			return r
+		r := s.Apply(a, s.bound[v])
+		if r != s.bound[v] {
+			s.set(v, r)
 		}
-		return t
-	case TKMaybe:
-		inner := w.mapType(TypeId(n.A), skip)
-		if inner == TypeId(n.A) {
-			return t
-		}
-		return w.arena.MakeMaybe(inner)
+		return r
 	case TKList:
-		inner := w.mapType(TypeId(n.A), skip)
+		inner := s.Apply(a, TypeId(n.A))
 		if inner == TypeId(n.A) {
 			return t
 		}
-		return w.arena.MakeList(inner)
-	case TKDict:
-		k := w.mapType(TypeId(n.A), skip)
-		v := w.mapType(TypeId(n.B), skip)
-		if k == TypeId(n.A) && v == TypeId(n.B) {
-			return t
-		}
-		return w.arena.MakeDict(k, v)
-	case TKShape:
-		fields := w.arena.shapeFields[n.Extra]
-		var rebuilt []ShapeField
-		changed := false
-		for i, f := range fields {
-			rt := w.mapType(f.Type, skip)
-			if rt != f.Type && !changed {
-				rebuilt = make([]ShapeField, len(fields))
-				copy(rebuilt, fields[:i])
-				changed = true
-			}
-			if changed {
-				rebuilt[i] = ShapeField{Name: f.Name, Type: rt}
-			}
-		}
-		if !changed {
-			return t
-		}
-		return w.arena.MakeShape(rebuilt)
+		return a.MakeList(inner)
 	case TKUnion:
-		arms := w.arena.unionMembers[n.Extra]
-		rebuilt, changed := w.mapSpan(arms, skip)
+		arms, changed := s.applySpan(a, a.unionMembers[n.Extra])
 		if !changed {
 			return t
 		}
-		return w.arena.MakeUnion(rebuilt, NameId(n.A))
-	case TKBrand:
-		under := w.mapType(TypeId(n.B), skip)
-		if under == TypeId(n.B) {
-			return t
-		}
-		return w.arena.MakeBrand(NameId(n.A), under)
+		return a.MakeUnion(arms)
 	case TKCommand:
-		argv := w.mapType(TypeId(n.A), skip)
+		argv := s.Apply(a, TypeId(n.A))
 		if argv == TypeId(n.A) {
 			return t
 		}
-		return w.arena.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
+		return a.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
 	case TKQuote:
-		sig, changed := w.mapSig(w.arena.quoteSigs[n.Extra], skip)
-		if !changed {
+		sig := a.quoteSigs[n.Extra]
+		ins, inChanged := s.applySpan(a, sig.Inputs)
+		outs, outChanged := s.applySpan(a, sig.Outputs)
+		if !inChanged && !outChanged {
 			return t
 		}
-		return w.arena.MakeQuote(sig)
-	case TKOverloadedQuote:
-		sigs := w.arena.overloadedQuoteSigs[n.Extra]
-		rebuilt := make([]QuoteSig, len(sigs))
-		changed := false
-		for i, sig := range sigs {
-			rs, c := w.mapSig(sig, skip)
-			rebuilt[i] = rs
-			if c {
-				changed = true
+		return a.MakeQuote(QuoteSig{Inputs: ins, Outputs: outs, Diverges: sig.Diverges})
+	case TKRecord:
+		// The fields are copied only once one changes. Apply may add
+		// records, so the record is read again by index each time.
+		var fields []RecordField
+		nf := len(a.records[n.Extra].Fields)
+		for i := range nf {
+			f := a.records[n.Extra].Fields[i]
+			if f.Type == TidNothing {
+				continue
+			}
+			ft := s.Apply(a, f.Type)
+			if ft != f.Type && fields == nil {
+				fields = make([]RecordField, nf)
+				copy(fields, a.records[n.Extra].Fields)
+			}
+			if fields != nil {
+				fields[i].Type = ft
 			}
 		}
+		rest := a.records[n.Extra].Rest
+		if rest.Type != TidNothing {
+			rest.Type = s.Apply(a, rest.Type)
+		}
+		if fields == nil {
+			if rest.Type == a.records[n.Extra].Rest.Type {
+				return t
+			}
+			fields = a.records[n.Extra].Fields
+		}
+		return a.MakeRecord(fields, rest)
+	case TKEnum:
+		args, changed := s.applySpan(a, a.enumArgs[n.Extra])
 		if !changed {
 			return t
 		}
-		return w.arena.MakeOverloadedQuote(rebuilt)
+		return a.MakeEnum(n.A, args)
+	case TKGrid, TKGridView, TKGridRow:
+		rec := s.Apply(a, TypeId(n.A))
+		if rec == TypeId(n.A) {
+			return t
+		}
+		return a.MakeGridOf(n.Kind, rec)
 	}
 	return t
 }
 
-// mapSpan walks a slice of TypeIds through mapType, returning a new slice
-// if any element resolved to something different and signaling whether the
-// rebuild happened. The original slice is returned untouched on no-change
-// so callers can compare slice headers cheaply.
-func (w *typeRewriter) mapSpan(span []TypeId, skip map[TypeVarId]struct{}) ([]TypeId, bool) {
+// applySpan applies the substitution to each type of span. It returns span
+// itself when nothing changed, and a new slice otherwise.
+func (s *Substitution) applySpan(a *TypeArena, span []TypeId) ([]TypeId, bool) {
 	var out []TypeId
-	changed := false
 	for i, x := range span {
-		rx := w.mapType(x, skip)
-		if rx != x && !changed {
+		rx := s.Apply(a, x)
+		if rx != x && out == nil {
 			out = make([]TypeId, len(span))
 			copy(out, span[:i])
-			changed = true
 		}
-		if changed {
+		if out != nil {
 			out[i] = rx
 		}
 	}
-	if !changed {
+	if out == nil {
 		return span, false
 	}
 	return out, true
-}
-
-// rewriter returns the typeRewriter implementing Apply semantics: variables
-// resolve through the substitution (recursively, with path compression on
-// full resolves), and a quote's locally-scoped generics replace the skip
-// set while its inputs/outputs are rebuilt. Rebuilt sigs keep their
-// Generics; Bindings are not rewritten (they are use-site state, not part
-// of the structural identity Apply maintains).
-func (s *Substitution) rewriter(arena *TypeArena) *typeRewriter {
-	w := &typeRewriter{arena: arena}
-	w.resolve = func(v TypeVarId, skip map[TypeVarId]struct{}) (TypeId, bool) {
-		if int(v) >= len(s.bound) {
-			return TidNothing, false
-		}
-		bv := s.bound[v]
-		if bv == TidNothing {
-			return TidNothing, false
-		}
-		resolved := w.mapType(bv, skip)
-		// Path compression (writing the resolved type back into the bound
-		// slice) only happens on full resolves (skip empty); a skipped
-		// resolve may leave some vars unresolved, so caching it would be
-		// wrong.
-		if len(skip) == 0 {
-			s.set(v, resolved)
-		}
-		return resolved, true
-	}
-	w.mapSig = func(sig QuoteSig, _ map[TypeVarId]struct{}) (QuoteSig, bool) {
-		inner := genericsSkip(sig)
-		newIn, inChanged := w.mapSpan(sig.Inputs, inner)
-		newOut, outChanged := w.mapSpan(sig.Outputs, inner)
-		if !inChanged && !outChanged {
-			return sig, false
-		}
-		return QuoteSig{
-			Inputs:   newIn,
-			Outputs:  newOut,
-			Diverges: sig.Diverges,
-			Generics: sig.Generics,
-		}, true
-	}
-	return w
-}
-
-// genericsSkip builds the skip-set for a quote signature's locally-scoped
-// generics, or nil when the sig is monomorphic.
-func genericsSkip(sig QuoteSig) map[TypeVarId]struct{} {
-	if len(sig.Generics) == 0 {
-		return nil
-	}
-	skip := make(map[TypeVarId]struct{}, len(sig.Generics))
-	for _, v := range sig.Generics {
-		skip[v] = struct{}{}
-	}
-	return skip
 }
 
 // Bind sets the variable v's resolution to t. Returns false on occurs-check
@@ -381,23 +266,14 @@ func (s *Substitution) occurs(arena *TypeArena, v TypeVarId, t TypeId) bool {
 // to decide whether a bound variable's binding should be chased.
 func (a *TypeArena) walkTypeVars(t TypeId, visit func(TypeVarId) bool) bool {
 	n := a.Node(t)
+	if n.Flags&NodeHasVar == 0 {
+		return false
+	}
 	switch n.Kind {
 	case TKVar:
 		return visit(TypeVarId(n.A))
-	case TKMaybe, TKList:
+	case TKList, TKCommand, TKGrid, TKGridView, TKGridRow:
 		return a.walkTypeVars(TypeId(n.A), visit)
-	case TKDict:
-		return a.walkTypeVars(TypeId(n.A), visit) || a.walkTypeVars(TypeId(n.B), visit)
-	case TKBrand:
-		return a.walkTypeVars(TypeId(n.B), visit)
-	case TKCommand:
-		return a.walkTypeVars(TypeId(n.A), visit)
-	case TKShape:
-		for _, f := range a.shapeFields[n.Extra] {
-			if a.walkTypeVars(f.Type, visit) {
-				return true
-			}
-		}
 	case TKUnion:
 		for _, m := range a.unionMembers[n.Extra] {
 			if a.walkTypeVars(m, visit) {
@@ -408,9 +284,19 @@ func (a *TypeArena) walkTypeVars(t TypeId, visit func(TypeVarId) bool) bool {
 		if a.walkSigVars(a.quoteSigs[n.Extra], visit) {
 			return true
 		}
-	case TKOverloadedQuote:
-		for _, sig := range a.overloadedQuoteSigs[n.Extra] {
-			if a.walkSigVars(sig, visit) {
+	case TKRecord:
+		rec := a.records[n.Extra]
+		for _, f := range rec.Fields {
+			if f.Type != TidNothing && a.walkTypeVars(f.Type, visit) {
+				return true
+			}
+		}
+		if rec.Rest.Type != TidNothing && a.walkTypeVars(rec.Rest.Type, visit) {
+			return true
+		}
+	case TKEnum:
+		for _, t := range a.enumArgs[n.Extra] {
+			if a.walkTypeVars(t, visit) {
 				return true
 			}
 		}
@@ -431,86 +317,4 @@ func (a *TypeArena) walkSigVars(sig QuoteSig, visit func(TypeVarId) bool) bool {
 		}
 	}
 	return false
-}
-
-// Instantiate prepares a polymorphic sig for use at a call site by
-// allocating fresh variables for every entry in sig.Generics and
-// rewriting the sig's inputs/outputs to reference those fresh variables.
-// A monomorphic sig (no generics) is returned unchanged.
-func (c *Checker) Instantiate(sig QuoteSig) QuoteSig {
-	if len(sig.Generics) == 0 {
-		return sig
-	}
-	rename := make(map[TypeVarId]TypeId, len(sig.Generics))
-	for _, oldVar := range sig.Generics {
-		rename[oldVar] = c.subst.FreshVar(c.arena)
-	}
-	w := c.renamer(rename)
-	freshIn := make([]TypeId, len(sig.Inputs))
-	for i, in := range sig.Inputs {
-		freshIn[i] = w.mapType(in, nil)
-	}
-	freshOut := make([]TypeId, len(sig.Outputs))
-	for i, out := range sig.Outputs {
-		freshOut[i] = w.mapType(out, nil)
-	}
-	var freshBindings map[NameId]TypeId
-	if len(sig.Bindings) > 0 {
-		freshBindings = make(map[NameId]TypeId, len(sig.Bindings))
-		for name, t := range sig.Bindings {
-			freshBindings[name] = w.mapType(t, nil)
-		}
-	}
-	return QuoteSig{
-		Inputs:   freshIn,
-		Outputs:  freshOut,
-		Diverges: sig.Diverges,
-		Bindings: freshBindings,
-		// Generics intentionally dropped: instantiation consumes them.
-	}
-}
-
-// renameVars walks a type and replaces any TKVar listed in rename with its
-// fresh substitute, rebuilding composites through the arena so hashconsing
-// is preserved. Rebuilt quote sigs have their Bindings renamed too and
-// their Generics consumed (set to nil) — instantiation uses them up.
-func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
-	return c.renamer(rename).mapType(t, nil)
-}
-
-// renamer returns the rewriter renameVars applies, for callers renaming
-// several types with one mapping.
-func (c *Checker) renamer(rename map[TypeVarId]TypeId) *typeRewriter {
-	w := &typeRewriter{arena: c.arena}
-	w.resolve = func(v TypeVarId, _ map[TypeVarId]struct{}) (TypeId, bool) {
-		fresh, ok := rename[v]
-		return fresh, ok
-	}
-	w.mapSig = func(sig QuoteSig, skip map[TypeVarId]struct{}) (QuoteSig, bool) {
-		newIn, inChanged := w.mapSpan(sig.Inputs, skip)
-		newOut, outChanged := w.mapSpan(sig.Outputs, skip)
-		changed := inChanged || outChanged
-		var bindings map[NameId]TypeId
-		if len(sig.Bindings) > 0 {
-			bindings = make(map[NameId]TypeId, len(sig.Bindings))
-			for name, bindingType := range sig.Bindings {
-				renamed := w.mapType(bindingType, skip)
-				bindings[name] = renamed
-				if renamed != bindingType {
-					changed = true
-				}
-			}
-		}
-		if !changed {
-			return sig, false
-		}
-		return QuoteSig{
-			Inputs:   newIn,
-			Outputs:  newOut,
-			Diverges: sig.Diverges,
-			Bindings: bindings,
-			// Generics intentionally dropped: instantiation consumes them.
-		}, true
-	}
-	return w
 }

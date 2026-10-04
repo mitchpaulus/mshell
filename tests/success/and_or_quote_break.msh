@@ -1,0 +1,3 @@
+# A break in the quote of 'and' / 'or' leaves the stack as the quote left it.
+5 ( true (true if break end false) and drop ) loop str wl
+6 ( false (true if break end false) or drop ) loop str wl

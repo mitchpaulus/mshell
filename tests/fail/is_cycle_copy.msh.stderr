@@ -1,0 +1,1 @@
+5:4: deepCopy cannot copy a value that contains itself: the list contains itself through index 0.

@@ -98,7 +98,7 @@
 # map
 "Map Test" wl
 "--------" wl
-[| x; 1; 2; 3 |] (toDict dup "x" get? 10 * "y" swap set) map mappedGrid!
+[| x; 1; 2; 3 |] (toDict d! {"x": @d :x?, "y": @d :x? 10 *}) map mappedGrid!
 @mappedGrid str wl
 @mappedGrid gridCols str wl
 @mappedGrid "x" gridCol str wl

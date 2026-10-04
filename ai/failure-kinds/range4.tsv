@@ -1,0 +1,157 @@
+9213	M	gridAddCol: Pop3 underflow
+9218	M	gridAddCol: receiver not a Grid; walker gridArg(views=false) requires a Grid
+9223	M	gridAddCol: column name not str/path; walker keyArg requires str | path
+9228	C	gridAddCol: column already exists; name may be data, or schema open/optional (toGrid {*: str}), walker only rejects a literal name that is required
+9236	C	gridAddCol: values list length != row count; list length is data
+9256	M	gridRemoveCol: Pop2 underflow
+9261	M	gridRemoveCol: column name not str/path; keyArg
+9266	M	gridRemoveCol: receiver not a Grid; gridArg(views=false)
+9271	C	gridRemoveCol: column not found; name is data or schema not exact
+9289	M	gridRenameCol: Pop3 underflow
+9294	M	gridRenameCol: new name not str/path; keyArg
+9299	M	gridRenameCol: old name not str/path; keyArg
+9304	M	gridRenameCol: receiver not a Grid; gridArg(views=false)
+9309	C	gridRenameCol: old column not found; name is data or schema not exact
+9314	C	gridRenameCol: new name already a column; name is data or schema not exact
+9326	M	updateCol: Pop3 underflow
+9331	M	updateCol: top not a quotation; walker sig requires (T -- u)
+9336	M	updateCol: column name not str/path; keyArg
+9341	M	updateCol: receiver not Grid/GridView; walker only handles Grid/GridView, else no table entry
+9347	C	updateCol: column not found; name is data or schema not exact (columnRead only rejects literal absent)
+9375	C	updateCol (view path): EvaluateQuote err, only from BuildExecutionContext: redirect file open errors and same-path/different-append-mode check on data paths; all checked
+9381	M	updateCol (view path): quote did not leave exactly one value; quote sig (T -- u)
+9386	M	updateCol (view path): quote returned a container; deferNotContainer(u)
+9408	C	updateCol (grid path): EvaluateQuote err, BuildExecutionContext redirect/OS errors (see 9375)
+9414	M	updateCol (grid path): quote did not leave exactly one value; quote sig
+9419	M	updateCol (grid path): quote returned a container; deferNotContainer(u)
+9431	M	select: Pop2 underflow
+9436	M	select: names not a list; walker checks [str]
+9441	M	select: receiver not Grid/GridView; gridProject only handles those
+9449	M	select: a name is not a string; [str]
+9452	C	select: name requested twice; walker rejects only literal duplicates, names may be data
+9455	C	select: column not found; name is data or schema not exact
+9465	M	exclude: Pop2 underflow
+9470	M	exclude: names not a list; [str]
+9475	M	exclude: receiver not Grid/GridView
+9482	M	exclude: a name is not a string; [str]
+9485	C	exclude: name requested twice; names may be data (a literal duplicate is caught by the walker as a missing column)
+9488	C	exclude: column not found; name is data or schema not exact
+9504	M	derive: Pop4 underflow
+9509	M	derive: top not a quotation; sig
+9514	M	derive: meta not a dict; sig takes the {| open} record
+9519	M	derive: column name not str/path; keyType
+9524	M	derive: receiver not Grid/GridView; gridDerive only handles those
+9528	C	derive: column already exists; name is data or schema not exact (walker rejects only a literal required one)
+9546	C	derive: EvaluateQuote err, BuildExecutionContext redirect/OS errors (see 9375)
+9552	M	derive: quote left empty stack; quote sig (GridRow -- a)
+9555	M	derive: quote did not leave exactly one value; quote sig
+9567	M	groupBy: fewer than two stack items
+9574	M	groupBy (list form): Pop2 underflow
+9579	M	groupBy (list form): below quote not a list; sig ([a] (a -- str | path) -- ...)
+9590	C	groupBy (list form): EvaluateQuote err, BuildExecutionContext redirect/OS errors (see 9375)
+9596	M	groupBy (list form): quote did not leave exactly one value; quote sig
+9602	M	groupBy (list form): key not castable to string; quote returns str | path
+9619	M	groupBy (grid form): Pop3 underflow
+9624	M	groupBy (grid form): specs not a list; sig [{agg..}]
+9629	M	groupBy (grid form): key names not a list; sig [str]
+9634	M	groupBy (grid form): receiver not Grid/GridView; gridForms gives only those
+9642	M	groupBy (grid form): key name not a string; [str]
+9645	C	groupBy (grid form): key column named twice; key names may be data (walker checks only literal names with known agg names)
+9648	C	groupBy (grid form): key column not found; name is data or schema not exact
+9656	M	groupBy (grid form): parseGridGroupByAggSpecs error: spec not dict, unknown key, missing required 'agg', wrong kind of agg/name/meta; spec type {agg: (GridView -- a), name?: str, meta?: {}} is exact, so all are type errors
+9665	C	groupBy (grid form): output column name duplicated or clashes with a key; names may be data
+9672	M	groupBy (grid form): groupGridRows error, only "key values cannot be container types" (appendGridKeyPart); unsure: reachable today when the walker skips deferKey (table form, non-literal key names, non-literal agg name), see helpers
+9705	C	groupBy (grid form): EvaluateQuote err, BuildExecutionContext redirect/OS errors (see 9375)
+9711	M	groupBy (grid form): agg quote did not leave exactly one value; quote sig (GridView -- a)
+9716	M	groupBy (grid form): agg quote returned a container; walker defers not-container for literal specs; possible checker hole: table form (non-literal spec list) leaves a unconstrained, see helpers
+9729	M	pivot: fewer than four stack items
+9734	M	pivot: Pop4 underflow
+9739	M	pivot: top not a quotation; walker sig
+9744	M	pivot: column-key name not str/path; keyType
+9749	M	pivot: row-key names not a list; [str]
+9754	M	pivot: receiver not Grid/GridView; gridPivot only handles those
+9762	M	pivot: row-key name not a string; [str]
+9765	C	pivot: row-key named twice; walker does not check duplicates, names may be data
+9768	C	pivot: row-key column not found; name is data or schema not exact
+9775	C	pivot: column-key is also a row-key; names are values, walker does not check
+9780	C	pivot: column-key column not found; name is data or schema not exact
+9790	M	pivot: gridGroupIds error, only container row-key cells (appendGridKeyPart); unsure: reachable when walker skips deferKey (non-literal row keys, or a not solved / no-join result), see helpers
+9805	M	pivot: column-key column holds a non-string; walker deferCheck str only for a literal column-key name; unsure, reachable with a run-time name, see helpers
+9823	C	pivot: column-key value collides with a row-key name; cell values are data
+9856	C	pivot: EvaluateQuote err, BuildExecutionContext redirect/OS errors (see 9375)
+9862	M	pivot: agg quote did not leave exactly one value; quote sig (GridView -- a)
+9867	M	pivot: agg quote returned a container; deferNotContainer(a)
+9893	M	reMatch: Pop2 underflow
+9898	M	reMatch: regex not castable to string; sig str | path
+9903	M	reMatch: subject not castable to string; sig str | path
+9908	C	reMatch: regexp.Compile on user text
+9921	M	reReplace: Pop3 underflow
+9926	M	reReplace: replacement not castable; str | path
+9931	M	reReplace: regex not castable; str | path
+9936	M	reReplace: subject not castable; str | path
+9941	C	reReplace: regexp.Compile on user text
+9949	M	reFindAll: Pop2 underflow
+9953	M	reFindAll: regex not castable; str | path
+9958	M	reFindAll: subject not castable; str | path
+9963	C	reFindAll: regexp.Compile on user text
+9980	M	reFindAllIndex: Pop2 underflow
+9984	M	reFindAllIndex: regex not castable; str | path
+9989	M	reFindAllIndex: subject not castable; str | path
+9994	C	reFindAllIndex: regexp.Compile on user text
+10011	M	reSplit: Pop2 underflow
+10015	M	reSplit: regex not castable; str | path
+10020	M	reSplit: subject not castable; str | path
+10025	C	reSplit: regexp.Compile on user text
+10038	M	parseCsv: empty stack
+10049	C	parseCsv: os.Open error
+10069	C	parseCsv: CSV read/parse error
+10084	M	toGrid: empty stack
+10089	M	toGrid: not a list; sig ([[str]] -- ...)
+10094	E	toGrid: buildGridFromStringRows mixes kinds (no rows, duplicate header, row length are C; non-list row / non-string cell are M), see helpers
+10101	M	parseJson: empty stack
+10111	C	parseJson: os.Open error
+10117	C	parseJson: io.ReadAll error
+10126	C	parseJson: bytes not valid UTF-8; data
+10130	M	parseJson: not str/path/bytes; sig str | path | bytes
+10135	C	parseJson: decodeJson on user text (bad JSON, number out of range)
+10144	M	parseExcel: empty stack
+10153	C	parseExcel: os.ReadFile error
+10158	M	parseExcel: not path/bytes; sig path | bytes
+10163	C	parseExcel: parseExcelBytes, all errors are zip/xml parse or read errors
+10170	M	toJson: empty stack
+10175	C	toJson: renderOrError, only error is a cyclic value
+10181	M	typeof: empty stack
+10191	M	utcToCst: empty stack
+10197	M	utcToCst: not a datetime; sig (datetime -- datetime)
+10203	C	utcToCst: time.LoadLocation error (missing tzdata), OS
+10211	M	cstToUtc: empty stack
+10217	M	cstToUtc: not a datetime; sig
+10222	C	cstToUtc: time.LoadLocation error, OS
+10240	M	floor: empty stack
+10254	M	floor: not numeric; sig (int | float -- int)
+10260	M	ceil: empty stack
+10274	M	ceil: not numeric; sig (int | float -- int)
+10280	M	round: empty stack
+10288	M	round: not numeric; sig (int | float -- int)
+10293	M	sin: empty stack
+10298	M	sin: not a float; sig (float -- float)
+10305	M	arctan: empty stack
+10310	M	arctan: not a float; sig (float -- float)
+10317	M	pow: Pop2 underflow
+10322	M	pow: exponent not a float; sig (float float -- float)
+10327	M	pow: base not a float; sig
+10334	M	ln: empty stack
+10339	M	ln: not a float; sig (float -- float)
+10350	M	sqrt: empty stack
+10355	M	sqrt: not a float; sig (float -- float)
+10362	M	abs: empty stack
+10378	M	abs: not int/float; sig (int -- int) (float -- float)
+10383	M	max2/min2: Pop2 underflow
+10390	M	max2/min2: int and non-int; sigs (int int) / (float float) only
+10400	M	max2/min2: float and non-float; sigs
+10408	M	max2/min2: first operand not int/float; sigs
+10418	M	max/min/sum: empty stack
+10422	M	max/min/sum: not a list; sigs take [int] / [float] / [datetime]
+10425	C	max/min/sum: empty list; list length is data
+10433	M	max/min/sum: non-int in an int list; lists are invariant [int]
+10454	M	max/min/sum: non-float in a float list; [float]

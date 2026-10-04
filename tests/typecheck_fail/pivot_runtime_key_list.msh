@@ -1,0 +1,5 @@
+# pivot's row keys named only at run time may be any column; the runtime
+# refuses a column of lists as a key.
+[| r, c, v; [1], "x", 1 |] g!
+["r"] rows!
+@g @rows "c" (len) pivot drop

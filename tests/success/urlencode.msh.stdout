@@ -7,3 +7,5 @@ n=2&q=go+lang
 tag=a&tag=b&tag=c
 n=1&n=2&n=3
 q=a%26b%3Dc
+data=a&data=b&report_type=3&report_type=4
+data=x&data=y&report_type=3&report_type=4&year=2026

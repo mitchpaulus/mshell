@@ -1,0 +1,10 @@
+# A JSON number without a fraction or an exponent is an int; any other is a
+# float, and so is an integer too large for an int.
+'[1, -3, 2.5, 1e3, 1.0, 9223372036854775807, 9223372036854775808]' parseJson match
+    list xs : @xs (typeof) map str wl,
+    _ : "not a list" wl,
+end
+'7' parseJson match
+    int n : @n 1 + str wl,
+    _ : "not an int" wl,
+end

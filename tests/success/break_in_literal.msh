@@ -1,0 +1,4 @@
+# A break in a list literal leaves the loop with the stack under the
+# literal; what the literal had pushed is thrown away.
+5 (["x" break]) loop str wl
+0 i! ( @i 1 + i! [@i @i 3 >= if break end] drop ) loop @i str wl

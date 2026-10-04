@@ -1,1 +1,1 @@
-stdin parseJson :2: 0 toFixed wl
+stdin parseJson tryAs [int] ? :2: str wl

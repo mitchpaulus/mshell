@@ -1,0 +1,3 @@
+["a"] ys!
+[1] as [int | str] xs!
+@ys xs!

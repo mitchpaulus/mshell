@@ -5,11 +5,12 @@ import (
 	"testing"
 )
 
-// TestSubstitutionVersionsMatchCopies drives the versioned substitution
-// with random allocations, writes, checkpoints, and rollbacks to any
-// earlier checkpoint, in any order, and compares it after every step with
-// a model that checkpoints by copying the whole slice.
-func TestSubstitutionVersionsMatchCopies(t *testing.T) {
+// TestSubstitutionTrailMatchesCopies drives the substitution with random
+// allocations, writes, checkpoints, and rollbacks to any checkpoint still
+// valid (rolling back discards the checkpoints taken after the target, and
+// keeps the target), and compares it after every step with a model that
+// checkpoints by copying the whole slice.
+func TestSubstitutionTrailMatchesCopies(t *testing.T) {
 	arena := NewTypeArena()
 	values := []TypeId{TidNothing, TidInt, TidStr, TidBool}
 	for seed := int64(0); seed < 300; seed++ {
@@ -38,7 +39,9 @@ func TestSubstitutionVersionsMatchCopies(t *testing.T) {
 				if len(checkpoints) == 0 {
 					continue
 				}
-				c := checkpoints[rng.Intn(len(checkpoints))]
+				k := rng.Intn(len(checkpoints))
+				c := checkpoints[k]
+				checkpoints = checkpoints[:k+1]
 				s.Rollback(c.cp)
 				// Slots allocated after the checkpoint stay, unbound.
 				for i := range model {

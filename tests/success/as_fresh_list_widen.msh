@@ -1,0 +1,4 @@
+[1 2] as [int | str] "a" append str wl
+[1 2] l!
+@l deepCopy as [int | str] "a" append str wl
+@l str wl

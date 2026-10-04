@@ -1,0 +1,157 @@
+8041	M	writeFile/appendFile path not str|path; signature (str | path | bytes str | path -- )
+8050	M	writeFile content not bytes/str/path; signature content str | path | bytes
+8063	C	os.Create/OpenFile error (I/O)
+8068	C	file.Write error (I/O)
+8072	C	file.Close error (I/O)
+8077	M	rm/rmf stack underflow
+8082	M	rm path not str|path; signature (str | path -- )
+8087	C	rm refuses the path "/": a value, not a kind
+8092	C	os.Remove error (I/O)
+8097	M	mv/cp Pop2 underflow
+8102	M	mv/cp destination not str|path
+8107	M	mv/cp source not str|path
+8112	C	null byte in source path: a value
+8115	C	null byte in destination path: a value
+8138	C	os.Rename error after retries (I/O)
+8143	C	CopyFile error (OS errors only)
+8149	M	zipDirInc/Exc Pop2 underflow
+8154	M	zip destination not str|path
+8159	M	zip source not str|path
+8164	C	zipDirectory: stat/not a directory/destination inside source/I/O
+8169	M	zipPack Pop2 underflow
+8174	M	zipPack destination not str|path
+8179	M	zipPack entries not a list; signature [str]/[path]/[str | path]/[PackEntry]
+8194	M	zipPack entry not str/path/dict; REACHABLE: a bare word in a list literal is typed str but is an MShellLiteral at runtime ([a.txt] "x.zip" zipPack) - runtime bug, see helpers
+8199	M	zipPack entry dict missing 'path'; PackEntry requires path (a {str: str} dict is rejected)
+8204	M	zipPack entry 'path' not str|path
+8211	M	zipPack entry 'archivePath' not str|path
+8219	M	zipPack entry 'mode' not int
+8228	C	buildZipFromEntries: empty entry list, stat/resolve, destination inside source, empty archive path, I/O
+8233	M	zipList underflow
+8238	M	zipList path not str|path
+8243	C	collectZipMetadata: open/read zip (I/O, bad archive)
+8262	M	zipExtract Pop3 underflow
+8267	M	zipExtract options not a dict; ExtractOptions shape
+8272	M	zipExtract destination not str|path
+8277	M	zipExtract source not str|path
+8282	E	parseZipExtractOptions: option kind errors M; overwrite+skipExisting, stripComponents<0, maxBytes<0 are C
+8286	C	extractZipArchive: I/O, bad archive, symlink refusal, bad pattern, path escape, maxBytes budget
+8291	M	zipExtractEntry underflow
+8295	M	zipExtractEntry underflow
+8299	M	zipExtractEntry underflow
+8303	M	zipExtractEntry underflow
+8308	M	zipExtractEntry options not a dict; ExtractEntryOptions shape
+8313	M	zipExtractEntry destination not str|path
+8318	M	zipExtractEntry entry name not str|path
+8323	M	zipExtractEntry source not str|path
+8328	E	parseZipExtractEntryOptions: option kind errors M; overwrite+skipExisting and maxBytes<0 are C
+8332	C	extractZipEntry: I/O, entry not found, empty name, destination missing, symlink refusal
+8337	M	zipRead Pop2 underflow
+8342	M	zipRead entry name not str|path
+8347	M	zipRead archive path not str|path
+8352	C	readZipEntry: open error, empty name, directory entry (data)
+8362	M	tarDirInc/Exc Pop2 underflow
+8367	M	parseTarDestination: every error is a kind error (TarDest requires path: str|path, compress?: bool)
+8372	M	tar source not str|path
+8377	C	tarDirectory: stat/not a directory/destination inside source/I/O
+8382	M	tarPack Pop2 underflow
+8387	M	parseTarDestination: every error is a kind error
+8392	M	tarPack entries not a list
+8407	M	tarPack entry not str/path/dict; REACHABLE via a bare word in a list literal (MShellLiteral), same as 8194 - runtime bug
+8412	M	tarPack entry dict missing 'path'; PackEntry requires path
+8417	M	tarPack entry 'path' not str|path
+8424	M	tarPack entry 'archivePath' not str|path
+8432	M	tarPack entry 'mode' not int
+8441	C	buildTarFromEntries: empty entry list, stat/resolve, unsupported file type, destination inside source, I/O
+8446	M	tarList underflow
+8451	M	tarList path not str|path
+8456	C	collectTarMetadata: open/read tar (I/O, bad archive)
+8477	M	tarExtract Pop3 underflow
+8482	M	tarExtract options not a dict
+8487	M	tarExtract destination not str|path
+8492	M	tarExtract source not str|path
+8497	E	parseZipExtractOptions (same helper as 8282)
+8501	C	extractTarArchive: I/O, bad archive, bad pattern, unsupported entry type, path escape, budget
+8506	M	tarExtractEntry underflow
+8510	M	tarExtractEntry underflow
+8514	M	tarExtractEntry underflow
+8518	M	tarExtractEntry underflow
+8523	M	tarExtractEntry options not a dict
+8528	M	tarExtractEntry destination not str|path
+8533	M	tarExtractEntry entry name not str|path
+8538	M	tarExtractEntry source not str|path
+8543	E	parseZipExtractEntryOptions (same helper as 8328)
+8547	C	extractTarEntry: I/O, entry not found, empty name, destination missing
+8552	M	tarRead Pop2 underflow
+8557	M	tarRead entry name not str|path
+8562	M	tarRead archive path not str|path
+8567	C	readTarEntry: I/O, empty name, directory entry (data)
+8578	M	e/ec/es underflow
+8592	M	unreachable: lexeme is always e/es/ec in this case
+8605	M	unreachable: lexeme is always e/es/ec in this case
+8609	M	e/ec/es on a non-list non-pipe; checker capture needs a command (quote rejected, other kinds have no rule)
+8614	M	fileSize underflow
+8619	M	fileSize path not str|path
+8632	M	modTime underflow
+8637	M	modTime path not str|path
+8651	M	lsDir underflow
+8655	M	lsDir path not str|path
+8661	C	os.ReadDir error (I/O)
+8677	M	sort underflow
+8683	M	sort on a non-list
+8695	M	SortList/SortListFunc fail only when an element does not CastString; sort takes [str]/[int]/[path]/[str|int|path], all castable (str literals too)
+8702	M	sortBy Pop2 underflow
+8707	M	sortBy target not Grid/GridView; gridForms signature
+8719	M	sortBy list element not a string; signature [str]
+8724	M	sortBy spec not str/[str]; REACHABLE: a str that is an MShellLiteral (`[foo] 0 nth x! ... @x sortBy`) - runtime bug, should use CastString
+8728	C	sortBy with an empty list of column names: a value
+8735	C	sortBy column name not in grid: names are data
+8761	C	compareGridCellsForSort: a generic column whose cells have different kinds (int | str, lists, paths) cannot be compared; sortBy accepts any schema, so checked programs reach it (possible checker gap, see helpers)
+8768	M	seq underflow
+8772	M	seq on a non-int; signature (int -- ...)
+8786	M	reverse underflow
+8801	M	unreachable: getGridSourceAndIndices on a value already matched as Grid/GridView
+8809	M	reverse on a non-list non-grid
+8815	M	sha256sum underflow
+8820	M	sha256sum path not str|path
+8826	C	os.Open error (I/O)
+8835	C	io.Copy error (I/O)
+8850	M	get Pop2 underflow
+8855	M	get key not str|path (keyArg)
+8870	M	get on a non-dict/GridRow/Grid/GridView; REACHABLE through checker hole: dictArg accepts an unknown value as any dict ({"a": 1} as {} "a" get ? "b" get) - see helpers
+8883	M	getDef Pop3 underflow
+8888	M	getDef key not str|path
+8893	M	getDef on a non-dict; REACHABLE through the same dictArg-unknown hole as 8870
+8907	M	set/setd Pop3 underflow
+8912	M	set key not str|path
+8917	M	set target not a dict (table {str: a}, setLiteral on shapes; unknown is rejected for writes)
+8928	M	keys/values underflow
+8933	M	keys/values on a non-dict; keys is checked by the table, but values is REACHABLE through the dictArg-unknown hole (see 8870)
+8958	M	unreachable: lexeme is always keys/values
+8966	M	gridRows underflow
+8975	M	gridRows on a non-Grid/GridView
+8981	M	gridCols underflow
+8991	M	gridCols on a non-Grid/GridView
+9003	M	gridMeta underflow
+9013	M	gridMeta on a non-Grid/GridView
+9026	M	gridColMeta Pop2 underflow
+9031	M	gridColMeta column name not str|path
+9041	M	gridColMeta on a non-Grid/GridView
+9046	C	gridColMeta column not found: name is data
+9059	M	gridCol Pop2 underflow
+9064	M	gridCol column name not a string
+9071	C	gridCol column not found (Grid): the checker rejects literal names missing from a known schema, but a runtime name or unknown schema reaches it
+9081	C	gridCol column not found (GridView): same as 9071
+9089	M	gridCol on a non-Grid/GridView
+9095	M	gridValues underflow
+9120	M	gridValues on a non-Grid/GridView
+9126	M	toDict underflow
+9131	M	toDict on a non-GridRow
+9139	M	gridSetCell Pop4 underflow
+9144	M	gridSetCell column name not a string
+9149	M	gridSetCell row index not int
+9154	M	gridSetCell on a non-Grid (GridView rejected by the walker)
+9159	C	gridSetCell column not found: name is data
+9167	C	gridSetCell row index out of range
+9176	M	gridCompact underflow
+9205	M	gridCompact on a non-Grid/GridView

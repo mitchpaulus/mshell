@@ -1,0 +1,9 @@
+# A redirect or capture changes the list's own type, so a new list literal
+# may hold stored values, such as a stored list of arguments.
+["a" "b"] fs!
+[echo @fs] * ! wl
+[echo] g!
+[@g "hi"] * ! wl
+# | makes a new pipe over the stored commands, which may be captured.
+[[echo piped]] l!
+@l | * ! wl

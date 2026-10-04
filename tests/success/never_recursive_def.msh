@@ -1,0 +1,2 @@
+def spin ( -- never) spin end
+"ok" wl

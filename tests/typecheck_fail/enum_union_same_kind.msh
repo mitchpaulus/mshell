@@ -1,0 +1,3 @@
+# Every instance of one enum is one runtime kind.
+enum Box[a] = box [a] | empty end
+def f (Box[int] | Box[str] -- ) drop end

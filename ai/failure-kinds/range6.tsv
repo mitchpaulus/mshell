@@ -1,0 +1,154 @@
+11941	M	dateTimeCmp first arg not a DateTime; signature (datetime datetime -- int)
+11958	M	and/or underflow (empty stack)
+11963	M	and/or underflow (one item)
+11976	M	and/or: top is bool but second is not bool; sigs (bool bool) / (bool (--bool))
+11983	C	and: EvaluateQuote err comes only from BuildExecutionContext: opening the quote's redirect files (OS errors) or same file for stdout/stderr with different append modes (paths are data)
+11989	M	and: quote left nothing; quote type ( -- bool) rules it out. RUNTIME BUG: Pop runs before the ShouldPassResultUpStack check, so exit/break/continue or a failure inside the quote reaches this site (see helpers file)
+11998	M	and: quote left a non-bool; quote type ( -- bool)
+12012	C	or: EvaluateQuote err, same as 11983 (redirect file OS errors, same-file append-mode mismatch)
+12018	M	or: quote left nothing; same runtime bug as 11989 (pop before result check)
+12027	M	or: quote left a non-bool; quote type ( -- bool)
+12034	M	and/or: top is neither bool nor quote
+12045	M	bare word outside a list literal; checker reports unknown identifier (listDepth reset inside quotes)
+12053	M	'*' underflow
+12058	M	'*' on a list whose stdout is already claimed; checker tracks list stream state (claimed) and requires a fresh list
+12064	M	'*' on a pipe whose stdout is already claimed; checker tracks pipe capture state
+12069	M	'*' on a quotation; checker capture() rejects quotes
+12073	M	'*' arithmetic underflow (one item)
+12077	M	'*' on non-numeric operands; table (int int)/(float float)
+12086	M	'*' int with non-int; no numeric coercion in table
+12093	M	'*' float with non-float; no numeric coercion in table
+12100	M	'*b' underflow
+12106	M	'*b' list stdout already claimed; checker claimed()
+12111	M	'*b' pipe stdout already claimed; checker claimed()
+12115	M	'*b' on a quotation; checker capture() rejects quotes
+12117	M	'*b' on a non-command; capture() returns false and there is no table entry, so unsupported
+12125	M	'^' underflow
+12131	M	'^' list stderr already claimed; checker claimed()
+12136	M	'^' pipe stderr already claimed; checker claimed()
+12140	M	'^' on a quotation; checker capture() rejects quotes
+12142	M	'^' on a non-command; no table entry
+12148	M	'^b' underflow
+12154	M	'^b' list stderr already claimed; checker claimed()
+12159	M	'^b' pipe stderr already claimed; checker claimed()
+12163	M	'^b' on a quotation; checker capture() rejects quotes
+12165	M	'^b' on a non-command; no table entry
+12171	M	'>>' Pop2 underflow
+12176	M	'>>' target not castable to string; checker redirect() needs str or path (bytes only for '<')
+12180	C	'>>' target string contains a NUL byte (value)
+12186	M	'>>' list stdout already claimed; checker claimed()
+12193	M	'>>' quote stdout already has a destination; CHECKER HOLE: redirect() does not track quote stream state, so `(...) `a` > `b` >>` passes the checker (see helpers)
+12199	M	'>>' operand not list/quote (pipe or other); checker rejects pipes and non-commands
+12202	M	stray '[' token; parser never leaves one
+12204	M	stray '(' token; parser never leaves one
+12208	M	';'/'?'/'!' underflow
+12214	C	'?' on a none Maybe; table (Maybe[a] -- a)
+12239	M	';'/'!'/'?' on a non-command; run() and table reject it
+12267	M	unhandled stdout behavior enum value; internal unreachable
+12286	M	unhandled stderr behavior enum value; internal unreachable
+12336	M	'2>' underflow (empty)
+12340	M	'2>' underflow (one item)
+12345	M	'2>' target not castable to string; checker needs str or path
+12349	C	'2>' target contains a NUL byte (value)
+12355	M	'2>' list stderr already claimed; checker claimed()
+12362	M	'2>' quote stderr already has a destination; CHECKER HOLE: quote stream state untracked (see helpers)
+12368	M	'2>' operand not list/quote (pipe or other); checker rejects pipes
+12373	M	'&>' underflow (empty)
+12377	M	'&>' underflow (one item)
+12382	M	'&>' target not castable to string; checker needs str or path
+12386	C	'&>' target contains a NUL byte (value)
+12392	M	'&>' stdout already claimed; M for lists (claimed()), CHECKER HOLE for quotes (stream state untracked)
+12395	M	'&>' stderr already claimed; M for lists, CHECKER HOLE for quotes
+12412	M	'&>' operand not list/quote; checker rejects pipes and non-commands
+12417	M	'<>' Pop2 underflow
+12423	M	'<>' target not a Path; checker requires a Path target
+12430	M	'<>' operand not a list; checker rejects quotes and pipes
+12435	M	'<>' list stdout already claimed; checker claimed()
+12440	M	'<>' on a list with 2>&1; checker errs == CommandDestMerged
+12446	C	'<>' os.ReadFile error
+12458	M	'2>&1'/'1>&2' underflow
+12463	M	'2>&1' stderr already claimed: M for lists/pipes (claimed()); CHECKER HOLE for quotes (merge() accepts any quote)
+12467	M	'1>&2' stdout already claimed: M for lists/pipes; CHECKER HOLE for quotes
+12479	M	'2>&1' on a list already '1>&2' (circular); checker merge() checks
+12482	M	'2>&1' on a list with in-place redirect; checker merge() checks
+12487	M	'1>&2' on a list already '2>&1' (circular); checker merge() checks
+12495	M	'2>&1' on a quote already '1>&2'; CHECKER HOLE: merge() returns early for quotes (see helpers)
+12500	M	'1>&2' on a quote already '2>&1'; CHECKER HOLE: merge() returns early for quotes
+12506	M	merge on a non-list/non-quote; CHECKER HOLE for pipes: merge() accepts a pipe (commandParts ok) but runtime rejects it (see helpers)
+12511	M	'$VAR!' underflow
+12519	M	'$VAR!' value not castable to string (bool, float, list...); CHECKER HOLE: ENVSTORE in TypeCore.go token() pops any type (see helpers)
+12524	C	os.Setenv failed (OS error, e.g. NUL in value)
+12541	C	environment variable not set (data)
+12562	C	Atoi of the '$N' lexeme fails: overflow or non-ASCII digit (lexer uses unicode.IsDigit); `$٣` passes the checker
+12566	C	'$0' used; table ( -- str) accepts any positional
+12570	M	negative positional; unreachable (lexeme is '$' plus digits)
+12574	C	positional index beyond the arguments given (data)
+12581	M	'|' underflow
+12587	M	'|' on a non-list; checker pipe() requires a list of commands
+12618	C	read: stdin I/O error
+12636	C	read: Seek error on stdin (I/O)
+12666	C	read: stdin I/O error (byte-by-byte path)
+12689	M	str underflow
+12694	C	str of a cyclic value (renderOrError only fails on cycles)
+12700	M	':n:' token underflow (likely dead: parser wraps indexers in MShellIndexerList)
+12707	C	Atoi of ':n:' lexeme overflows (likely dead code, see 12700)
+12712	E	obj.Index: out-of-range is checked, wrong kind is mismatch (likely dead code, see 12700)
+12718	M	':n'/'n:' underflow (likely dead code)
+12731	C	Atoi of the slice lexeme overflows (likely dead code)
+12742	E	SliceEnd/SliceStart: out-of-range checked, wrong kind mismatch (likely dead code)
+12748	M	'a:b' underflow (likely dead code)
+12757	C	Atoi of 'a:b' lexeme overflows (likely dead code). RUNTIME BUG: if only err2 is set, err.Error() is a nil dereference
+12762	E	obj.Slice: invalid range is checked, wrong kind mismatch; the message drops err and always says "Cannot slice index a X" (likely dead code)
+12781	M	'&' underflow
+12786	M	'&' on a non-list; CHECKER HOLE for pipes: background() accepts a pipe, runtime only takes a list (see helpers)
+12796	M	unimplemented token type; internal
+12861	C	integer literal does not parse (overflow, e.g. 99999999999999999999); lexer defers decode errors, checker pushes int
+12872	M	string literal does not parse; unreachable: lexer validates escapes with the same escapedRune set
+12888	M	'+' underflow
+12893	M	'+' underflow (one item)
+12902	M	'+' int with non-int; table has no mixed forms
+12909	M	'+' float with non-float
+12918	M	'+' string with non-string; table (str str)
+12927	M	'+' literal with non-string (literal is typed str)
+12937	M	'+' list with non-list
+12945	M	'+' path with non-path
+12952	C	'+' on two grids: concatGrids fails only on a column-name mismatch (both operands are grids here), reachable when a schema is unknown
+12956	M	'+' grid with non-grid; gridConcat requires two grids
+12959	M	'+' on unsupported kinds
+12968	M	'-' underflow
+12973	M	'-' underflow (one item)
+12982	M	'-' int with non-int
+12989	M	'-' float with non-float
+12998	M	'-' datetime with non-datetime
+13001	M	'-' on unsupported kinds
+13010	M	'not' underflow
+13023	M	'not' on non-bool/non-int; table (bool | int -- bool)
+13032	M	'>='/'<=' underflow
+13037	M	'>='/'<=' underflow (one item)
+13060	M	'>='/'<=' int with float; no mixed forms in table
+13074	M	'>='/'<=' on non-numeric non-datetime
+13085	M	'>'/'<' underflow
+13090	M	'>'/'<' underflow (one item)
+13113	M	'>'/'<' int with float
+13118	M	'>' stdout already claimed: M for lists (claimed()); CHECKER HOLE for quotes (`(...) `a` > `b` >` passes the checker)
+13125	C	'>'/'<' str target contains a NUL byte (value)
+13145	M	str redirect on a pipe; checker: "Cannot redirect a Pipe"
+13147	M	str redirect on a non-command
+13165	M	bytes '<' on a pipe; checker rejects pipe redirects
+13167	M	bytes '<' on a non-command
+13170	M	bytes with '>'; checker: only '<' takes bytes
+13175	C	literal target contains a NUL byte (value)
+13194	M	literal redirect on a non-list/non-quote
+13200	C	path target contains a NUL byte (value)
+13220	M	path redirect on a non-list/non-quote (pipe rejected by checker)
+13231	M	'>'/'<' datetime with non-datetime
+13234	M	'>'/'<' on unsupported kinds
+13246	M	'x!' underflow
+13266	C	variable not set (a stored quote can read one later)
+13275	M	'=' underflow
+13279	M	'=' underflow (one item)
+13284	M	'=' Equals error: every Equals error is a kind mismatch (lists, quotes, pipes, cross-kind); table only has same-kind pairs
+13295	C	float literal does not parse (out of range, e.g. 1 followed by 400 zeros .0); lexer defers decode errors
+13311	M	'!=' underflow
+13316	M	'!=' underflow (one item)
+13321	M	'!=' Equals error; all kind mismatches, table only has same-kind pairs

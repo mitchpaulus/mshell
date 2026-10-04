@@ -1,0 +1,5 @@
+# A quote typed on its own whose loop body reads below the loop's stack:
+# each run takes one more value.
+0 i!
+( ( drop @i 1 + i! @i 2 = if break end ) loop ) q!
+5 "a" 7 @q x "b" + wl

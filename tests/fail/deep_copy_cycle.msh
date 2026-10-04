@@ -1,0 +1,6 @@
+# A value that contains itself has no copy.
+type X = int | {a: [X]}
+[1] as [X] xs!
+{a: @xs} d!
+@xs @d append drop
+@xs deepCopy

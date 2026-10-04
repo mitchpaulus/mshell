@@ -1,0 +1,1 @@
+stdin:3:6: 'A' refers to itself with nothing in between that holds a value (A -> A); a recursive type must pass a list, dict, shape, quote or enum, as in `type T = int | [T]`.

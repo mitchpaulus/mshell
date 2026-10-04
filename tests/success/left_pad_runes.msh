@@ -1,0 +1,5 @@
+# leftPad counts runes, not bytes.
+"7" "·" 3 leftPad wl
+"é" "ab" 4 leftPad wl
+"日本" "x" 3 leftPad wl
+"ab" "→←" 5 leftPad wl

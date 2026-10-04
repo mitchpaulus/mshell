@@ -1,0 +1,3 @@
+# Recursion must pass a list, dict, shape, quote or enum.
+type A = int | A
+1 wl

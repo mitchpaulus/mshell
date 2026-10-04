@@ -1,16 +1,21 @@
 <div id="type-system-top"></div>
 
 <p>
-The mshell type system checks stack effects before a script runs.
-It does not change the runtime data model described in <a href="data-types.html">Data Types</a>; instead it gives the checker enough information to prove that values, variables, quotations, branches, and definitions agree about what is on the stack.
+The mshell type checker reads a script before it runs and rejects programs that would fail with a type error: adding a string to a number, reading a field a dictionary does not have, writing a string into a list of integers.
+It does not change what any word does at run time.
+A program behaves the same with the checker or without it; the checker only accepts or rejects.
 </p>
 
 <ul>
     <li><a href="#type-system-running">Running the Checker</a></li>
     <li><a href="#type-system-stack-effects">Stack Effects</a></li>
     <li><a href="#type-system-type-expressions">Type Expressions</a></li>
+    <li><a href="#type-system-unions">Unions</a></li>
+    <li><a href="#type-system-new-values">New Values and Stored Values</a></li>
+    <li><a href="#type-system-validation">Validating Data</a></li>
     <li><a href="#type-system-dictionaries">Dictionaries</a></li>
     <li><a href="#type-system-lists">Lists</a></li>
+    <li><a href="#type-system-grids">Grids</a></li>
     <li><a href="#type-system-quotes">Quotations</a></li>
     <li><a href="#type-system-control-flow">Control Flow</a></li>
     <li><a href="#type-system-current-boundaries">Current Boundaries</a></li>
@@ -19,73 +24,146 @@ It does not change the runtime data model described in <a href="data-types.html"
 <h1 id="type-system-running">Running the Checker <a class="section-link" href="#type-system-running" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
-Use <code>--check-types</code> to type-check a file.
-When type checking succeeds, the script continues to normal execution.
-When type checking fails, execution is stopped before user code runs.
-Use <code>--type-check-only</code> to run the same checker and exit without evaluating the script.
+Every script is type-checked before it runs, whether it is a file, <code>-c</code> code, or code read from standard input.
+When the check fails, nothing in the script runs.
+There is no way to run a script without checking it.
+Use <code>--type-check-only</code> to check the script and exit without running it.
 </p>
 
-<pre><code>msh --check-types script.msh</code></pre>
-<pre><code>msh --type-check-only script.msh</code></pre>
+<pre><code>msh script.msh
+msh --type-check-only script.msh</code></pre>
 
 <p>
-The checker reads definitions from the standard library and the current file.
-Definition signatures are the main source of static information.
-Literal expressions, variable stores and retrieves, built-ins, quotations, and control-flow constructs are then checked against those signatures.
+The checker checks every definition body in the file, and the code outside definitions.
+It also checks the definitions of the standard library and the startup file.
+A definition there whose signature or body has a type error is still defined, but code that calls it is refused, with the error; code that does not call it is unaffected.
+When the file being checked is the startup file itself, it is checked as the program, with only the standard library before it.
+The language server runs the same checker on every edit.
+</p>
+
+<p>
+In error messages, <code><span class="mshellLITERAL">_</span></code> stands for a type the checker has not worked out yet: after <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">l!</span></code>, the list's type is <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">_</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> until something fixes its elements.
+</p>
+
+<h2 id="type-system-interactive">In the Interactive Shell <a class="section-link" href="#type-system-interactive" aria-label="Permalink">§</a></h2>
+
+<p>
+The interactive shell checks each line before it runs it.
+A line that does not check is not run, and changes nothing: its errors are printed, and the next line starts where the line before it left off.
+What a line leaves behind carries over to the next: the types of the values on the stack, variables, definitions, and <code><span class="mshellTYPE">type</span></code> and <code><span class="mshellENUM">enum</span></code> declarations.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">l!</span>
+<span class="mshellVARRETRIEVE">@l</span> <span class="mshellINTEGER">1</span> <span class="mshellLITERAL">append</span> <span class="mshellLITERAL">drop</span>       <span class="mshellLINECOMMENT"># l is a list of ints from here on</span>
+<span class="mshellVARRETRIEVE">@l</span> <span class="mshellSTRING">&#34;a&#34;</span> <span class="mshellLITERAL">append</span> <span class="mshellLITERAL">drop</span>     <span class="mshellLINECOMMENT"># refused: &#39;append&#39; expected int</span><span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+The same goes for a quotation whose input a later line decides, as a later word would in a file:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">len</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellVARSTORE">q!</span>
+<span class="mshellSTRING">&#34;abc&#34;</span> <span class="mshellVARRETRIEVE">@q</span> <span class="mshellINTERPRET">x</span> <span class="mshellLITERAL">wl</span>          <span class="mshellLINECOMMENT"># q takes a str from here on</span><span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+A line that checks can still stop with an error, such as an index out of range or <code><span class="mshellQUESTION">?</span></code> on <code><span class="mshellLITERAL">none</span></code>.
+The stack then goes back to what it was before the line, except new lists, dictionaries and grids the line took from the stack, which are dropped, since the line may have changed them.
+What the line did to stored values and variables stays.
+</p>
+
+<p>
+<code><span class="mshellLITERAL">return</span></code> at the top level of a line ends the session, as it ends a script.
+Type errors in the startup files' definitions are printed once when the shell starts, and a line that calls such a definition is refused.
+The startup files' top-level code is not checked, so a value it leaves on the stack, or a variable it sets, has unknown type, which a <code><span class="mshellMATCH">match</span></code> on its kind can narrow.
 </p>
 
 <h1 id="type-system-stack-effects">Stack Effects <a class="section-link" href="#type-system-stack-effects" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
-Function signatures use a stack-effect form:
+A definition's signature says what it takes from the stack and what it leaves.
+Inputs come before <code><span class="mshellDOUBLEDASH">--</span></code>, outputs after it.
+The rightmost input is the top of the stack.
 </p>
 
-<pre><code>def name (inputs -- outputs)
-    ...
-end</code></pre>
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">addOne</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEINT">int</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span>
+<span class="mshellEND">end</span>
+
+<span class="mshellDEF">def</span> <span class="mshellLITERAL">fullName</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellSTR">str</span> <span class="mshellSTR">str</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellVARSTORE">last!</span> <span class="mshellVARSTORE">first!</span>
+    <span class="mshellFORMATSTRINGSTART">$&#34;{</span><span class="mshellVARRETRIEVE">@first</span><span class="mshellFORMATSTRINGMID">} {</span><span class="mshellVARRETRIEVE">@last</span><span class="mshellFORMATSTRINGEND">}&#34;</span>
+<span class="mshellEND">end</span><span class="mshellEOF"></span></code>
+</pre>
 
 <p>
-Inputs appear in the order they must already be on the stack.
-The rightmost input is the top item consumed first by the definition body.
-Outputs appear in the order left on the stack after the definition finishes.
+A single letter in a signature, optionally followed by digits (<code><span class="mshellLITERAL">a</span></code>, <code><span class="mshellLITERAL">T</span></code>, <code><span class="mshellLITERAL">T1</span></code>), is a <em>generic</em>: the same name means the same type everywhere in that signature, and the body cannot assume anything about it.
+Any other name must be a type, so a misspelled type, or one mshell spells differently (<code><span class="mshellLITERAL">string</span></code> for <code><span class="mshellSTR">str</span></code>, <code><span class="mshellLITERAL">numeric</span></code> for <code><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEFLOAT">float</span></code>), is an error.
 </p>
 
-<pre><code>def addOne (int -- int)
-    1 +
-end
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">first</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">a</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">a</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellINDEXER">:0:</span>
+<span class="mshellEND">end</span>
 
-def fullName (str str -- str)
-    last!, first!
-    $"{@first} {@last}"
-end</code></pre>
+<span class="mshellDEF">def</span> <span class="mshellLITERAL">applyTwice</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">a</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">a</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">a</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">a</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellVARSTORE">f!</span>
+    <span class="mshellVARRETRIEVE">@f</span> <span class="mshellINTERPRET">x</span>
+    <span class="mshellVARRETRIEVE">@f</span> <span class="mshellINTERPRET">x</span>
+<span class="mshellEND">end</span><span class="mshellEOF"></span></code>
+</pre>
 
 <p>
-Generic type names are written as ordinary lowercase or uppercase names in signatures.
-The same name means the same type within one signature.
-This is how list and higher-order functions preserve relationships without naming a concrete type.
+In a signature, <code><span class="mshellLITERAL">dict</span></code> is short for <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">T</span><span class="mshellRIGHT_CURLY">}</span></code> and <code><span class="mshellLITERAL">list</span></code> for <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">T</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>, each with a generic <code><span class="mshellLITERAL">T</span></code> of its own.
+Outside a signature, write the full form.
 </p>
 
-<pre><code>def first ([a] -- a)
-    :0:
-end
+<h2 id="type-system-never">Definitions That Never Return <a class="section-link" href="#type-system-never" aria-label="Permalink">§</a></h2>
 
-def applyTwice (a (a -- a) -- a)
-    f!
-    @f x
-    @f x
-end</code></pre>
+<p>
+A definition that always stops the script, or loops forever, says so with <code><span class="mshellLITERAL">never</span></code> as its whole output side.
+Then a branch that calls it does not need to leave anything.
+</p>
+
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">die</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellSTR">str</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">never</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellLITERAL">wle</span> <span class="mshellINTEGER">1</span> <span class="mshellLITERAL">exit</span>
+<span class="mshellEND">end</span>
+
+<span class="mshellTRUE">true</span> <span class="mshellIF">if</span> <span class="mshellINTEGER">5</span> <span class="mshellELSE">else</span> <span class="mshellSTRING">&#34;bad&#34;</span> <span class="mshellLITERAL">die</span> <span class="mshellEND">end</span> <span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span> <span class="mshellLITERAL">wl</span><span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+<code><span class="mshellLITERAL">never</span></code> is only allowed as the whole output side of a signature or quotation type.
+A definition that stops on some paths and returns on others declares what it returns when it returns: <code><span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEBOOL">bool</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">never</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_PAREN">)</span></code> is an error.
+</p>
+
+<h2 id="type-system-new-outputs">New Outputs <a class="section-link" href="#type-system-new-outputs" aria-label="Permalink">§</a></h2>
+
+<p>
+An output marked <code><span class="mshellLITERAL">new</span></code> is a list, dictionary or grid that nothing else refers to (see <a href="#type-system-new-values">New Values</a>), so the caller may give it another type.
+The mark must match the body exactly: <code><span class="mshellLITERAL">new</span></code> on an output the body may share is an error, and so is a missing <code><span class="mshellLITERAL">new</span></code> on an output that is new on every path.
+The language server offers both fixes.
+</p>
+
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">loadConfig</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">new</span> <span class="mshellLITERAL">Json</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellSTRING">&#34;config.json&#34;</span> <span class="mshellLITERAL">readFile</span> <span class="mshellLITERAL">parseJson</span>
+<span class="mshellEND">end</span>
+
+<span class="mshellLITERAL">loadConfig</span> <span class="mshellTRYAS">tryAs</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellQUESTION">?</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">name</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">wl</span><span class="mshellEOF"></span></code>
+</pre>
 
 <h1 id="type-system-type-expressions">Type Expressions <a class="section-link" href="#type-system-type-expressions" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
-The primitive static type names are <code>int</code>, <code>float</code>, <code>bool</code>, <code>str</code>, <code>path</code>, <code>datetime</code>, <code>bytes</code>, <code>none</code>, and <code>null</code>.
-Named runtime types such as <code>Grid</code>, <code>GridView</code>, and <code>GridRow</code> are also available.
-</p>
-
-<p>
-<code>null</code> is the JSON null type.
-It is distinct from <code>none</code>, which is only a value constructor (the empty case of <code>Maybe</code>) and is <em>not</em> a type &mdash; using <code>none</code> in a type expression is an error.
-Use <code>int | null</code> for a value that is an integer or a literal JSON null; that is different in meaning from <code>Maybe[int]</code>, a value that may be missing.
+The base types are <code><span class="mshellTYPEINT">int</span></code>, <code><span class="mshellTYPEFLOAT">float</span></code>, <code><span class="mshellTYPEBOOL">bool</span></code>, <code><span class="mshellSTR">str</span></code>, <code><span class="mshellBASETYPE">path</span></code>, <code><span class="mshellBASETYPE">datetime</span></code>, <code><span class="mshellBASETYPE">binary</span></code> and <code><span class="mshellBASETYPE">null</span></code>.
+<code><span class="mshellBASETYPE">null</span></code> is the JSON null.
+It is different from <code><span class="mshellLITERAL">none</span></code>, the empty <code><span class="mshellLITERAL">Maybe</span></code>, which is a value and not a type.
+Use <code><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellBASETYPE">null</span></code> for an integer or a JSON null, and <code><span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> for an integer that may be missing.
 </p>
 
 <table>
@@ -98,339 +176,511 @@ Use <code>int | null</code> for a value that is an integer or a literal JSON nul
   </thead>
   <tbody>
     <tr>
-      <td><code>T</code></td>
-      <td>Primitive, named type, alias, or generic</td>
-      <td><code>int</code>, <code>str</code>, <code>Person</code>, <code>a</code></td>
+      <td><code><span class="mshellLITERAL">T</span></code></td>
+      <td>A base type, an alias, an enum, or a generic</td>
+      <td><code><span class="mshellTYPEINT">int</span></code>, <code><span class="mshellLITERAL">Person</span></code>, <code><span class="mshellLITERAL">a</span></code></td>
     </tr>
     <tr>
-      <td><code>[T]</code></td>
-      <td>List whose elements all fit type <code>T</code></td>
-      <td><code>[str]</code>, <code>[int | str]</code></td>
+      <td><code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">T</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code></td>
+      <td>A list whose elements are all <code><span class="mshellLITERAL">T</span></code></td>
+      <td><code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>, <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code></td>
     </tr>
     <tr>
-      <td><code>{K: V}</code></td>
-      <td>Dictionary from key type <code>K</code> to value type <code>V</code></td>
-      <td><code>{str: int}</code></td>
+      <td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">T</span><span class="mshellRIGHT_CURLY">}</span></code></td>
+      <td>A dictionary whose values are all <code><span class="mshellLITERAL">T</span></code>, with any keys</td>
+      <td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span></code></td>
     </tr>
     <tr>
-      <td><code>{name: T, age: U}</code></td>
-      <td>Dictionary shape with known fields</td>
-      <td><code>{name: str, age: int}</code></td>
+      <td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">T</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">b</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">U</span><span class="mshellRIGHT_CURLY">}</span></code></td>
+      <td>A dictionary shape: <code><span class="mshellLITERAL">a</span></code> is present, <code><span class="mshellLITERAL">b</span></code> may be missing, other keys may hold anything</td>
+      <td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span></code></td>
     </tr>
     <tr>
-      <td><code>Maybe[T]</code></td>
-      <td>Optional value, usually returned by lookups and parsing</td>
-      <td><code>Maybe[int]</code></td>
+      <td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">T</span><span class="mshellCOMMA">,</span> <span class="mshellASTERISK">*</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">U</span><span class="mshellRIGHT_CURLY">}</span></code></td>
+      <td>A shape whose other keys hold <code><span class="mshellLITERAL">U</span></code></td>
+      <td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">url</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellASTERISK">*</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span></code></td>
     </tr>
     <tr>
-      <td><code>T | U</code></td>
-      <td>Union: a value may be any listed type</td>
-      <td><code>int | float</code></td>
+      <td><code><span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">T</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code></td>
+      <td><code><span class="mshellLITERAL">just</span></code> a <code><span class="mshellLITERAL">T</span></code>, or <code><span class="mshellLITERAL">none</span></code></td>
+      <td><code><span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code></td>
     </tr>
     <tr>
-      <td><code>(A B -- C)</code></td>
-      <td>Quotation type with its own stack effect</td>
-      <td><code>(int int -- bool)</code></td>
+      <td><code><span class="mshellLITERAL">T</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">U</span></code></td>
+      <td>A union: a <code><span class="mshellLITERAL">T</span></code> or a <code><span class="mshellLITERAL">U</span></code>, which must be of different kinds</td>
+      <td><code><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellPIPE">|</span> <span class="mshellBASETYPE">null</span></code></td>
+    </tr>
+    <tr>
+      <td><code><span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">A</span> <span class="mshellLITERAL">B</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">C</span><span class="mshellRIGHT_PAREN">)</span></code></td>
+      <td>A quotation that takes an <code><span class="mshellLITERAL">A</span></code> and a <code><span class="mshellLITERAL">B</span></code> and leaves a <code><span class="mshellLITERAL">C</span></code></td>
+      <td><code><span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEINT">int</span> <span class="mshellTYPEINT">int</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellTYPEBOOL">bool</span><span class="mshellRIGHT_PAREN">)</span></code></td>
+    </tr>
+    <tr>
+      <td><code><span class="mshellLITERAL">E</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">T</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code></td>
+      <td>An instance of a generic enum</td>
+      <td><code><span class="mshellLITERAL">Box</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code></td>
+    </tr>
+    <tr>
+      <td><code><span class="mshellLITERAL">Grid</span></code>, <code><span class="mshellLITERAL">GridView</span></code>, <code><span class="mshellLITERAL">GridRow</span></code></td>
+      <td>A grid whose columns are not known (see <a href="#type-system-grids">Grids</a>)</td>
+      <td><code><span class="mshellLITERAL">Grid</span></code></td>
     </tr>
   </tbody>
 </table>
 
-<p>
-Top-level type declarations give names to type expressions.
-They are useful for casts and for naming larger shapes and unions that are reused by other type declarations.
-Current definition signatures still use the historical signature parser, so dictionary shapes in <code>def</code> signatures are written with quoted field names as shown below.
-</p>
-
-<pre><code>type Person = {name: str, age: int}
-type JsonScalar = str | int | float | bool | null
-type JsonDict = {str: JsonScalar}
-
-{ "name": "Ada", "age": 36 } as Person :age? 1 +</code></pre>
+<h2 id="type-system-aliases">Type Aliases <a class="section-link" href="#type-system-aliases" aria-label="Permalink">§</a></h2>
 
 <p>
-Use <code>as</code> to make an explicit assertion when the checker needs help with a value that cannot be inferred precisely enough from local syntax.
+<code><span class="mshellTYPE">type</span> <span class="mshellLITERAL">Name</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">T</span></code> gives a type a name.
+The name and the type are interchangeable everywhere; the name makes signatures and error messages shorter.
+An alias may refer to itself, as long as every path back to it passes through a list, dictionary, field, quotation or enum.
 </p>
 
-<pre><code>{ "name": "Ada", "age": 36 } as Person</code></pre>
+<pre>
+<code><span class="mshellTYPE">type</span> <span class="mshellLITERAL">Person</span> <span class="mshellEQUALS">=</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">friends</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">Person</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_CURLY">}</span>
+<span class="mshellTYPE">type</span> <span class="mshellLITERAL">Cell</span> <span class="mshellEQUALS">=</span> <span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEBOOL">bool</span> <span class="mshellPIPE">|</span> <span class="mshellBASETYPE">null</span><span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+<code><span class="mshellTYPE">type</span> <span class="mshellLITERAL">A</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">A</span></code> and <code><span class="mshellTYPE">type</span> <span class="mshellLITERAL">A</span> <span class="mshellEQUALS">=</span> <span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">A</span></code> are errors: they do not say what a value looks like.
+Enums, the other kind of declaration, are described in <a href="data-types.html">Data Types</a>.
+</p>
+
+<p>
+Some aliases are built in.
+<code><span class="mshellLITERAL">Json</span></code> is every value <code><span class="mshellLITERAL">parseJson</span></code> can give:
+<code><span class="mshellBASETYPE">null</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEBOOL">bool</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span> <span class="mshellPIPE">|</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">Json</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">Json</span><span class="mshellRIGHT_CURLY">}</span></code>.
+<code><span class="mshellLITERAL">HtmlNode</span></code> is what <code><span class="mshellLITERAL">parseHtml</span></code> gives.
+The dictionaries other built-in functions take and give have names too, so a stored one can be given its type where it is made:
+<code><span class="mshellLITERAL">HttpRequest</span></code>, <code><span class="mshellLITERAL">HttpResponse</span></code>, <code><span class="mshellLITERAL">Cookie</span></code>, <code><span class="mshellLITERAL">PackEntry</span></code>, <code><span class="mshellLITERAL">TarDest</span></code>, <code><span class="mshellLITERAL">ExtractOptions</span></code>, <code><span class="mshellLITERAL">ExtractEntryOptions</span></code>, <code><span class="mshellLITERAL">ZipEntryInfo</span></code>, <code><span class="mshellLITERAL">TarEntryInfo</span></code>, <code><span class="mshellLITERAL">NumFmtOptions</span></code>, <code><span class="mshellLITERAL">Link</span></code>, <code><span class="mshellLITERAL">EnvEvent</span></code> and <code><span class="mshellLITERAL">CompletionResult</span></code>.
+<code><span class="mshellLITERAL">UrlEncodable</span></code>, <code><span class="mshellSTR">str</span> <span class="mshellPIPE">|</span> <span class="mshellBASETYPE">path</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTR">str</span> <span class="mshellPIPE">|</span> <span class="mshellBASETYPE">path</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>, is what <code><span class="mshellLITERAL">urlEncode</span></code> writes from each value of a dictionary.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellPATH">`a.txt`</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">path</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;b.txt&#34;</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">archivePath</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;docs/b.txt&#34;</span><span class="mshellRIGHT_CURLY">}</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellAS">as</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">PackEntry</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">entries!</span>
+<span class="mshellVARRETRIEVE">@entries</span> <span class="mshellSTRING">&#34;out.zip&#34;</span> <span class="mshellLITERAL">zipPack</span><span class="mshellEOF"></span></code>
+</pre>
+
+<h2 id="type-system-as">Ascription with as <a class="section-link" href="#type-system-as" aria-label="Permalink">§</a></h2>
+
+<p>
+<code><span class="mshellLITERAL">value</span> <span class="mshellAS">as</span> <span class="mshellLITERAL">T</span></code> tells the checker to treat the value as a <code><span class="mshellLITERAL">T</span></code>.
+It does nothing at run time, so it needs evidence: the value's type must already fit <code><span class="mshellLITERAL">T</span></code>, as an <code><span class="mshellTYPEINT">int</span></code> fits <code><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span></code>.
+A <a href="#type-system-new-values">new value</a> may also be given a wider type, such as a list literal given a wider element type.
+For data from outside the script, which no static type describes, use <a href="#type-system-validation"><code><span class="mshellTRYAS">tryAs</span></code></a>.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">5</span> <span class="mshellAS">as</span> <span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span>          <span class="mshellLINECOMMENT"># ok: an int is an int | str</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellAS">as</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>    <span class="mshellLINECOMMENT"># ok: a new list may be given a wider type</span>
+<span class="mshellSTRING">&#34;a&#34;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellAS">as</span> <span class="mshellLITERAL">Json</span>   <span class="mshellLINECOMMENT"># ok: parseJson gives Json</span>
+<span class="mshellSTRING">&#34;5&#34;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellAS">as</span> <span class="mshellTYPEINT">int</span>    <span class="mshellLINECOMMENT"># error: a Json may be any kind of value; use tryAs</span><span class="mshellEOF"></span></code>
+</pre>
+
+<h1 id="type-system-unions">Unions <a class="section-link" href="#type-system-unions" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+The members of a union must be of different kinds.
+The kinds are: each base type, list, dictionary, quotation, <code><span class="mshellLITERAL">Maybe</span></code>, each enum, and <code><span class="mshellLITERAL">Grid</span></code>, <code><span class="mshellLITERAL">GridView</span></code> and <code><span class="mshellLITERAL">GridRow</span></code>.
+So <code><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> and <code><span class="mshellSTR">str</span> <span class="mshellPIPE">|</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellPIPE">|</span> <span class="mshellBASETYPE">null</span></code> are unions, while <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>, <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellPIPE">|</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">b</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_CURLY">}</span></code> and <code><span class="mshellLITERAL">Box</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">Box</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> are errors.
+A generic cannot be a member, since it could be any kind.
+For two lists or two shapes, declare an enum:
+</p>
+
+<pre>
+<code><span class="mshellENUM">enum</span> <span class="mshellLITERAL">Ids</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">ints</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">strs</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellEND">end</span><span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+A union is taken apart with <code><span class="mshellMATCH">match</span></code> by kind.
+Each kind identifies one member, so the name it binds has that member's type exactly, and it can be written through.
+</p>
+
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">total</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellMATCH">match</span>
+        <span class="mshellTYPEINT">int</span> <span class="mshellLITERAL">n</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@n</span><span class="mshellCOMMA">,</span>
+        <span class="mshellLITERAL">list</span> <span class="mshellLITERAL">xs</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@xs</span> <span class="mshellLITERAL">sum</span><span class="mshellCOMMA">,</span>
+    <span class="mshellEND">end</span>
+<span class="mshellEND">end</span><span class="mshellEOF"></span></code>
+</pre>
+
+<h1 id="type-system-new-values">New Values and Stored Values <a class="section-link" href="#type-system-new-values" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+Lists, dictionaries and grids are shared, not copied: storing a list in two variables gives two names for one list, and writing through either one changes it.
+That is why a list that is already stored cannot be given a different type.
+If <code><span class="mshellLITERAL">xs</span></code> holds a <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> and the checker let <code><span class="mshellVARRETRIEVE">@xs</span> <span class="mshellAS">as</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> through, a string could be appended through the new name, and code reading <code><span class="mshellLITERAL">xs</span></code> as integers would get a string.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">xs!</span>
+<span class="mshellVARRETRIEVE">@xs</span> <span class="mshellAS">as</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">ys!</span>   <span class="mshellLINECOMMENT"># error: xs is stored, so its list keeps its type</span><span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+A value nothing else refers to yet is <em>new</em>.
+A new value may be given any type it fits, because nobody else can see the change.
+New values come from literals of new values, and from words that make them: <code><span class="mshellLITERAL">parseJson</span></code>, <code><span class="mshellLITERAL">lines</span></code>, <code><span class="mshellLITERAL">split</span></code>, <code><span class="mshellLITERAL">parseCsv</span></code>, <code><span class="mshellLITERAL">deepCopy</span></code>, and the others marked <code><span class="mshellLITERAL">new</span></code> in their signatures.
+A value stops being new when it is stored, passed to a definition, put in another list or dictionary, or duplicated with <code><span class="mshellLITERAL">dup</span></code>.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellAS">as</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">xs!</span>       <span class="mshellLINECOMMENT"># ok: the literal is new</span>
+<span class="mshellVARRETRIEVE">@xs</span> <span class="mshellSTRING">&#34;three&#34;</span> <span class="mshellLITERAL">append</span> <span class="mshellLITERAL">drop</span><span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+Words that make a new list from the elements of another, such as <code><span class="mshellLITERAL">map</span></code>, <code><span class="mshellLITERAL">filter</span></code>, <code><span class="mshellLITERAL">take</span></code>, <code><span class="mshellLITERAL">skip</span></code>, <code><span class="mshellLITERAL">reverse</span></code>, <code><span class="mshellLITERAL">sort</span></code> and slices, give a new list when its elements hold no list or dictionary.
+Otherwise the elements are still stored somewhere else, and the result is stored too.
+</p>
+
+<p>
+A literal around a stored value is new on the outside only: <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@xs</span><span class="mshellRIGHT_CURLY">}</span></code> is a new dictionary holding the stored list <code><span class="mshellLITERAL">xs</span></code>.
+The dictionary may gain optional keys, but <code><span class="mshellLITERAL">xs</span></code> keeps its type.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">xs!</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@xs</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellAS">as</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">b</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span>         <span class="mshellLINECOMMENT"># ok: only the dictionary changes type</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@xs</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellAS">as</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_CURLY">}</span>            <span class="mshellLINECOMMENT"># error: xs keeps its type</span><span class="mshellEOF"></span></code>
+</pre>
+
+<h2 id="type-system-deep-copy">Copies <a class="section-link" href="#type-system-deep-copy" aria-label="Permalink">§</a></h2>
+
+<p>
+<code><span class="mshellLITERAL">deepCopy</span></code> makes a new value from a stored one: every list, dictionary and grid inside it is copied, once for each path that reaches it.
+Strings, numbers and other values that cannot change are shared, so copying a list of strings is cheap.
+A value that contains itself cannot be copied: <code><span class="mshellLITERAL">deepCopy</span></code> stops with an error naming the cycle.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">xs!</span>
+<span class="mshellVARRETRIEVE">@xs</span> <span class="mshellLITERAL">deepCopy</span> <span class="mshellAS">as</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">ys!</span>   <span class="mshellLINECOMMENT"># ok: ys is a different list</span>
+<span class="mshellVARRETRIEVE">@ys</span> <span class="mshellSTRING">&#34;three&#34;</span> <span class="mshellLITERAL">append</span> <span class="mshellLITERAL">drop</span><span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+The checker never copies anything itself.
+Where a program needs a copy, the error says so, and the program writes <code><span class="mshellLITERAL">deepCopy</span></code>.
+</p>
+
+<h2 id="type-system-in-place">Changing a Type in Place <a class="section-link" href="#type-system-in-place" aria-label="Permalink">§</a></h2>
+
+<p>
+Some words change a value's type where it is: a redirect changes where a command's output goes, and <code><span class="mshellLITERAL">updateCol</span></code> can change a grid column's type.
+These need a new value.
+Writing the redirect straight after the list literal, or updating a grid straight from <code><span class="mshellLITERAL">parseCsv</span></code> and <code><span class="mshellLITERAL">toGrid</span></code>, is new; on a stored value they are errors that suggest <code><span class="mshellLITERAL">deepCopy</span></code>.
+The literal may hold stored values, such as a stored list of arguments (<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">grep</span> <span class="mshellVARRETRIEVE">@flags</span> <span class="mshellSTRING">&#34;x&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISK">*</span></code>): the redirect changes only the new list.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSTRING">&#34;hi&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISK">*</span> <span class="mshellEXECUTE">;</span> <span class="mshellVARSTORE">out!</span>            <span class="mshellLINECOMMENT"># ok: the literal is new</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSTRING">&#34;hi&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">c!</span>
+<span class="mshellVARRETRIEVE">@c</span> <span class="mshellASTERISK">*</span> <span class="mshellEXECUTE">;</span>                          <span class="mshellLINECOMMENT"># error: c is stored</span>
+<span class="mshellVARRETRIEVE">@c</span> <span class="mshellLITERAL">deepCopy</span> <span class="mshellASTERISK">*</span> <span class="mshellEXECUTE">;</span>                 <span class="mshellLINECOMMENT"># ok</span><span class="mshellEOF"></span></code>
+</pre>
+
+<h1 id="type-system-validation">Validating Data <a class="section-link" href="#type-system-validation" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+<code><span class="mshellAS">as</span></code> does nothing at run time, so it cannot say what data from outside the script holds.
+<code><span class="mshellTRYAS">tryAs</span> <span class="mshellLITERAL">T</span></code> checks at run time that the value on top of the stack conforms to <code><span class="mshellLITERAL">T</span></code>.
+It replaces the value with <code><span class="mshellLITERAL">just</span></code> the same value when it does, and with <code><span class="mshellLITERAL">none</span></code> when it does not.
+The value is checked in place, not copied, and nothing about it changes.
+</p>
+
+<pre>
+<code><span class="mshellTYPE">type</span> <span class="mshellLITERAL">Person</span> <span class="mshellEQUALS">=</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span>
+
+<span class="mshellSINGLEQUOTESTRING">&#39;[{&#34;name&#34;: &#34;Ada&#34;, &#34;age&#34;: 36}]&#39;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellTRYAS">tryAs</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">Person</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">people</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@people</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">age</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLITERAL">sum</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">none</span> <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;not a list of people&#34;</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span><span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+Every part of the value is checked: each element of a list, each value of a dictionary, each payload of an enum value.
+A written shape type allows keys it does not name, and an optional field may be missing.
+A recursive type such as <code><span class="mshellLITERAL">Json</span></code> checks the whole value, and a value that contains itself conforms to a type it has.
+A match arm can check a type too, with <a href="control-flow.html#control-flow-is-patterns"><code><span class="mshellLITERAL">is</span> <span class="mshellLITERAL">T</span> <span class="mshellLITERAL">name</span></code></a>.
+</p>
+
+<p>
+A quotation cannot be looked inside, so <code><span class="mshellLITERAL">T</span></code> cannot be a quotation type or an enum that holds one, and a def's generic is not known at run time.
+Checking a very large value stops with an error, not <code><span class="mshellLITERAL">none</span></code>, after 67,108,864 (1 &lt;&lt; 26) steps.
+</p>
+
+<p>
+<code><span class="mshellTRYAS">tryAs</span></code> on a <a href="#type-system-new-values">new value</a>, such as the result of <code><span class="mshellLITERAL">parseJson</span></code>, may check it against any type.
+A stored value, or a def's input, can only be checked against a type it already has, or one with no list or dictionary in it,
+because after the check the same list or dictionary would have two types.
+Check the value where it is made (<code><span class="mshellLITERAL">parseJson</span> <span class="mshellTRYAS">tryAs</span> <span class="mshellLITERAL">T</span> <span class="mshellQUESTION">?</span></code>), or check a copy (<code><span class="mshellLITERAL">deepCopy</span> <span class="mshellTRYAS">tryAs</span> <span class="mshellLITERAL">T</span></code>).
+</p>
 
 <h1 id="type-system-dictionaries">Dictionaries <a class="section-link" href="#type-system-dictionaries" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
-Runtime dictionaries have string keys.
-The type system can describe dictionaries in two complementary ways:
-as homogeneous maps, where every key has the same value type, or as shapes, where specific keys have specific value types.
+A dictionary has string keys.
+Its type is either a homogeneous dictionary, where every value has one type and keys come and go, or a shape, where specific keys have specific types.
 </p>
 
 <h2 id="type-system-dictionary-homogeneous">Homogeneous Dictionaries <a class="section-link" href="#type-system-dictionary-homogeneous" aria-label="Permalink">§</a></h2>
 
 <p>
-A homogeneous dictionary is best when the keys are dynamic and every value has the same meaning.
-For example, a count table is a string-keyed dictionary of integers.
+<code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">T</span><span class="mshellRIGHT_CURLY">}</span></code> is for dynamic keys: a count table, an index by name.
+Any key may be read, written or deleted.
 </p>
 
-<pre><code>{ "passed": 10, "failed": 2 } as {str: int} values len</code></pre>
+<pre>
+<code><span class="mshellLEFT_CURLY">{</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellAS">as</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellVARSTORE">counts!</span>
+<span class="mshellVARRETRIEVE">@counts</span> <span class="mshellSTRING">&#34;passed&#34;</span> <span class="mshellINTEGER">10</span> <span class="mshellLITERAL">setd</span>
+<span class="mshellVARRETRIEVE">@counts</span> <span class="mshellSTRING">&#34;passed&#34;</span> <span class="mshellLITERAL">get</span> <span class="mshellINTEGER">0</span> <span class="mshellLITERAL">maybe</span> <span class="mshellLITERAL">wl</span><span class="mshellEOF"></span></code>
+</pre>
 
 <p>
-Older definition signatures also support a compact dictionary form:
-</p>
-
-<pre><code>def countValues ({ int } -- int)
-    values len
-end</code></pre>
-
-<p>
-In a definition signature, <code>{ int }</code> means a dictionary whose string keys all have <code>int</code> values.
-The equivalent type-expression spelling is <code>{str: int}</code>.
-The wildcard spelling <code>{ *: int }</code> is also accepted in definition signatures and has the same practical meaning.
+The long form <code><span class="mshellLEFT_CURLY">{</span><span class="mshellSTR">str</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">T</span><span class="mshellRIGHT_CURLY">}</span></code> is the same type, as is <code><span class="mshellLEFT_CURLY">{</span><span class="mshellASTERISK">*</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">T</span><span class="mshellRIGHT_CURLY">}</span></code>. Error messages show the long form.
 </p>
 
 <h2 id="type-system-dictionary-shapes">Dictionary Shapes <a class="section-link" href="#type-system-dictionary-shapes" aria-label="Permalink">§</a></h2>
 
 <p>
-A shape is best when a dictionary is being used as a record.
-Each named field has its own static type, so the checker can validate field access and prevent accidental field/value mixups.
+A shape is for a dictionary used as a record.
+Each field has its own type, and <code><span class="mshellCOLON">:</span><span class="mshellLITERAL">field</span><span class="mshellQUESTION">?</span></code> reads it at that type.
+Without <code><span class="mshellQUESTION">?</span></code>, a read gives <code><span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">T</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>.
 </p>
 
-<pre><code>def labelPerson ({ "name": str, "age": int, "active": bool } -- str)
-    person!
-    @person :name? name!
-    @person :age? age!
-    $"{@name} ({@age})"
-end</code></pre>
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">label</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellVARSTORE">person!</span>
+    <span class="mshellFORMATSTRINGSTART">$&#34;{</span><span class="mshellVARRETRIEVE">@person</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">name</span><span class="mshellQUESTION">?</span><span class="mshellFORMATSTRINGMID">} ({</span><span class="mshellVARRETRIEVE">@person</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">age</span><span class="mshellQUESTION">?</span> <span class="mshellSTR">str</span><span class="mshellFORMATSTRINGEND">})&#34;</span>
+<span class="mshellEND">end</span><span class="mshellEOF"></span></code>
+</pre>
 
 <p>
-The <code>:field?</code> style is the usual way to read a required field from a checked shape.
-Without <code>?</code>, dictionary lookup returns <code>Maybe[T]</code>.
-The question mark unwraps the <code>Maybe</code> and preserves the plain field type for the rest of the expression.
-</p>
-
-<pre><code>type Person = {name: str, age: int}
-
-{ "name": "Ada", "age": 36 } as Person :age? 1 +</code></pre>
-
-<h2 id="type-system-dictionary-optional">Optional Fields <a class="section-link" href="#type-system-dictionary-optional" aria-label="Permalink">§</a></h2>
-
-<p>
-A shape field may be marked <em>optional</em> by writing <code>?</code> after its name: <code>name?: T</code>.
-An optional field may be absent from a value; when it is present, its value still has type <code>T</code> and is type-checked.
-This is what lets option-style dictionaries — request options, formatting options, and similar — be typed precisely instead of as a loose <code>{v}</code> dictionary.
-</p>
-
-<pre><code>type Request = {url: str, timeout?: int}
-
-{ "url": "x" } as Request                 # ok: timeout omitted
-{ "url": "x", "timeout": 30 } as Request  # ok: timeout present, an int
-{ "url": "x", "timeout": "soon" }         # error: timeout must be int when present
-{ "timeout": 30 }                         # error: required url missing</code></pre>
-
-<p>
-The <code>?</code> marks the <em>key</em> as possibly-absent.
-This is different from <code>Maybe</code>, which marks the <em>value</em>: <code>timeout?: int</code> means the key may be missing, whereas <code>timeout: Maybe[int]</code> means the key is always present but its value may be <code>none</code>.
+A written shape type says nothing about the keys it does not name: a <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_CURLY">}</span></code> may have other keys, of any type.
+A shape literal's own type is exact: <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;Ada&#34;</span><span class="mshellRIGHT_CURLY">}</span></code> has the key <code><span class="mshellLITERAL">name</span></code> and no other.
+Error messages and hover show it as <code><span class="mshellLITERAL">exact</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_CURLY">}</span></code>; no type you write is exact.
+<code><span class="mshellASTERISK">*</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">T</span></code> says the other keys hold <code><span class="mshellLITERAL">T</span></code>: <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">url</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellASTERISK">*</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span></code>.
 </p>
 
 <p>
-In <code>def</code> signatures the marker follows the quoted field name:
+A field written <code><span class="mshellLITERAL">name</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">T</span></code> is optional: the key may be missing, and when present it holds a <code><span class="mshellLITERAL">T</span></code>.
+This is different from <code><span class="mshellLITERAL">Maybe</span></code>: <code><span class="mshellLITERAL">timeout</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span></code> says the key may be missing, <code><span class="mshellLITERAL">timeout</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> says the key is there and its value may be <code><span class="mshellLITERAL">none</span></code>.
 </p>
 
-<pre><code>def doGet ({ "url": str, "timeout"?: int } -- str)
-    :url?
-end</code></pre>
+<pre>
+<code><span class="mshellTYPE">type</span> <span class="mshellLITERAL">Request</span> <span class="mshellEQUALS">=</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">url</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">timeout</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span>
+
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">url</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;x&#34;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellAS">as</span> <span class="mshellLITERAL">Request</span>                  <span class="mshellLINECOMMENT"># ok: timeout missing</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">url</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;x&#34;</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">timeout</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">30</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellAS">as</span> <span class="mshellLITERAL">Request</span>     <span class="mshellLINECOMMENT"># ok</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">url</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;x&#34;</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">timeout</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;soon&#34;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellAS">as</span> <span class="mshellLITERAL">Request</span> <span class="mshellLINECOMMENT"># error: timeout must be an int</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">timeout</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">30</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellAS">as</span> <span class="mshellLITERAL">Request</span>               <span class="mshellLINECOMMENT"># error: url is missing</span><span class="mshellEOF"></span></code>
+</pre>
 
 <p>
-Optional fields follow the same width-subtyping rules as required fields, with one addition: a value whose field is <em>required</em> can be used where an <em>optional</em> field is expected (a present value always satisfies an optional one), but an <em>optional</em> value cannot be used where a <em>required</em> field is expected (it might be absent).
+A shape fits another shape that names fewer of its fields, with the same field types.
+A value whose type does not mention an optional key fits <code><span class="mshellLITERAL">timeout</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span></code> only when the value is new: a stored one could be seen through another name that says the key is absent.
+Option dictionaries written as literals where they are used are always new.
 </p>
 
 <p>
-Reading fields is unchanged: <code>:field</code> returns <code>Maybe[T]</code> and <code>:field?</code> unwraps it (failing at runtime on a missing key), for required and optional fields alike.
-Because of that, the language server emits an informational diagnostic when <code>:field?</code> is used on a field a concrete shape does not declare — that unwrap is guaranteed to fail.
-Homogeneous dictionaries (<code>{str: T}</code>) return a genuine <code>Maybe[T]</code> for any key and are never flagged.
-A string literal carries its value as a <code>str</code> refinement, so a <code>get</code> with a known key resolves the same way as the getter — <code>resp "body" get</code> reads the declared <code>body</code> field's type rather than the union of every field type, so it is interchangeable with <code>resp :body</code>.
-The key resolves even when it reaches <code>get</code> through a variable (<code>"body" k! resp @k get</code>); a key computed at runtime returns the generic <code>Maybe[value]</code>.
+A shape never fits <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">T</span><span class="mshellRIGHT_CURLY">}</span></code>: through a homogeneous dictionary any key could be deleted or set to a <code><span class="mshellLITERAL">T</span></code>, which the shape's other names would not expect.
+A <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">T</span><span class="mshellRIGHT_CURLY">}</span></code> fits a shape only when all its fields are optional and of type <code><span class="mshellLITERAL">T</span></code>.
+To turn one into the other, write the value as a literal, copy it with <code><span class="mshellLITERAL">deepCopy</span></code>, or check it with <code><span class="mshellTRYAS">tryAs</span></code>.
 </p>
 
-<h2 id="type-system-dictionary-nesting">Nested Dictionaries <a class="section-link" href="#type-system-dictionary-nesting" aria-label="Permalink">§</a></h2>
+<h2 id="type-system-dictionary-keys">Reading and Writing by Key <a class="section-link" href="#type-system-dictionary-keys" aria-label="Permalink">§</a></h2>
 
 <p>
-Dictionary shapes compose with lists, unions, and homogeneous dictionaries.
-This makes JSON-like data much more precise than a single broad <code>dict</code> type.
+With a string literal written right before it, <code><span class="mshellLITERAL">get</span></code> reads that field, like <code><span class="mshellCOLON">:</span><span class="mshellLITERAL">field</span></code>.
+With a key known only at run time, the key could name any field, so <code><span class="mshellLITERAL">get</span></code> gives a <code><span class="mshellLITERAL">Maybe</span></code> of a type that covers every field: <code><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span></code> for a <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">b</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_CURLY">}</span></code>, and an unknown type for a written shape, whose other keys may hold anything.
+Words that only read a dictionary, such as <code><span class="mshellLITERAL">keys</span></code>, <code><span class="mshellLITERAL">values</span></code>, <code><span class="mshellLITERAL">in</span></code> and <code><span class="mshellLITERAL">len</span></code>, take shapes as well as <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">T</span><span class="mshellRIGHT_CURLY">}</span></code>.
 </p>
-
-<pre><code>type Address = {city: str, state: str}
-type Person = {
-    name: str,
-    age: int,
-    address: Address,
-    tags: [str]
-}
-
-{
-    "name": "Ada",
-    "age": 36,
-    "address": {"city": "London", "state": "UK"},
-    "tags": ["math" "computing"]
-} as Person :address? :city?</code></pre>
 
 <p>
-Use homogeneous dictionaries inside shapes when one field is itself a dynamic map.
+<code><span class="mshellLITERAL">set</span></code> with a literal key writes a field at its declared type.
+Words that write a key known only at run time (<code><span class="mshellLITERAL">setd</span></code>, and <code><span class="mshellLITERAL">set</span></code> with such a key) or delete one (<code><span class="mshellLITERAL">del</span></code>) need a <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">T</span><span class="mshellRIGHT_CURLY">}</span></code>.
+A new dictionary may gain keys: <code><span class="mshellLEFT_CURLY">{</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellSTRING">&#34;name&#34;</span> <span class="mshellSTRING">&#34;Ada&#34;</span> <span class="mshellLITERAL">set</span> <span class="mshellSTRING">&#34;age&#34;</span> <span class="mshellINTEGER">36</span> <span class="mshellLITERAL">set</span></code> builds a <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span></code>.
 </p>
-
-<pre><code>type Report = {
-    title: str,
-    totals: {str: float},
-    notes: [str]
-}</code></pre>
 
 <h1 id="type-system-lists">Lists <a class="section-link" href="#type-system-lists" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
-Runtime lists can hold any mix of values.
-The static type system describes that in one of two useful ways: as a homogeneous list with a single element type, or as a list whose element type is a union.
+A list type has one element type.
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> is a list of integers, and <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> a list whose elements are each an integer or a string.
+Generic words keep the element type: <code><span class="mshellLITERAL">map</span></code>, <code><span class="mshellLITERAL">filter</span></code>, <code><span class="mshellLITERAL">sortByCmp</span></code> and indexing.
 </p>
 
-<h2 id="type-system-list-homogeneous">Homogeneous Lists <a class="section-link" href="#type-system-list-homogeneous" aria-label="Permalink">§</a></h2>
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">doubleAll</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">new</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellLEFT_PAREN">(</span><span class="mshellINTEGER">2</span> <span class="mshellASTERISK">*</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span>
+<span class="mshellEND">end</span>
+
+<span class="mshellDEF">def</span> <span class="mshellLITERAL">adults</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">age</span><span class="mshellQUESTION">?</span> <span class="mshellINTEGER">18</span> <span class="mshellGREATERTHANOREQUAL">&gt;=</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span>
+<span class="mshellEND">end</span><span class="mshellEOF"></span></code>
+</pre>
 
 <p>
-A homogeneous list has one element type.
-This is the strongest and most useful list type because functions such as <code>map</code>, <code>filter</code>, <code>sortByCmp</code>, <code>zip</code>, <code>foldl</code>, and indexing can preserve the element type exactly.
+<code><span class="mshellLITERAL">doubleAll</span></code>'s output is marked <code><span class="mshellLITERAL">new</span></code> because <code><span class="mshellLITERAL">map</span></code> makes a new list of integers; see <a href="#type-system-new-outputs">New Outputs</a>.
+A list literal's type is the join of its elements: <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellSTRING">&#34;Ada&#34;</span> <span class="mshellTRUE">true</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> is a <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEBOOL">bool</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>.
+The checker does not track the type at each position, so <code><span class="mshellINDEXER">:0:</span></code> on that list gives an <code><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEBOOL">bool</span></code>.
 </p>
-
-<pre><code>def doubleAll ([int] -- [int])
-    (2 *) map
-end
-
-def names ([{ "name": str, "age": int }] -- [str])
-    (:name?) map
-end</code></pre>
 
 <p>
-The signature <code>[a]</code> means "a list of some single element type".
-It does not mean "any list with unrelated element types".
-This lets generic functions keep their input and output relationships precise.
+A stored <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> does not fit a parameter of type <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>: the definition could append a string.
+Give the list its wide type where it is made, or pass a copy.
+A word that only reads a list is typed with a generic (<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">a</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>), so it takes any list.
 </p>
 
-<pre><code>def keepPassing ([a] (a -- bool) -- [a])
-    filter
-end</code></pre>
-
-<h2 id="type-system-list-heterogeneous">Heterogeneous Lists <a class="section-link" href="#type-system-list-heterogeneous" aria-label="Permalink">§</a></h2>
+<h1 id="type-system-grids">Grids <a class="section-link" href="#type-system-grids" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
-When a list intentionally contains a fixed set of possible element kinds, use a union element type.
-For example, <code>[int | str]</code> is a list where every element is either an integer or a string.
+A grid's type includes the type of each column, like a shape of columns.
+The checker works it out from grid literals and from words such as <code><span class="mshellLITERAL">select</span></code>, <code><span class="mshellLITERAL">derive</span></code> and <code><span class="mshellLITERAL">groupBy</span></code>; there is no syntax to write it.
+Reading a column by a literal name gives that column's type, and reading a column the grid does not have is an error.
 </p>
 
-<pre><code>type Cell = int | float | str | bool
-type Row = [Cell]
-type Table = [Row]
-
-[1 "Ada" true] as [int | str | bool]</code></pre>
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">name</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">score</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">&#34;Ada&#34;</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">90</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">&#34;Bob&#34;</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">70</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">g!</span>
+<span class="mshellVARRETRIEVE">@g</span> <span class="mshellSTRING">&#34;score&#34;</span> <span class="mshellLITERAL">gridCol</span> <span class="mshellLITERAL">sum</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellVARRETRIEVE">@g</span> <span class="mshellSTRING">&#34;upper&#34;</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">name</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">upper</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">derive</span> <span class="mshellSTRING">&#34;upper&#34;</span> <span class="mshellLITERAL">gridCol</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span><span class="mshellEOF"></span></code>
+</pre>
 
 <p>
-This is powerful for shell data because many real inputs are table-like or JSON-like rather than class-like.
-A CSV row, a spreadsheet row, a parsed JSON array, or command output that has been split into fields can be represented without discarding the known set of legal element types.
+A grid whose columns are not known, written <code><span class="mshellLITERAL">Grid</span></code> in a signature, or made by <code><span class="mshellLITERAL">toGrid</span></code>, can be read but not written, and its cells are of unknown type.
+Use <code><span class="mshellLITERAL">select</span></code> to take the columns you need.
 </p>
-
-<pre><code>type CsvCell = int | str
-type CsvRow = [CsvCell]
-type CsvRows = [CsvRow]
-
-[["Ada" 36] ["Grace" 42]] as [[int | str]] (len 0 &gt;) filter</code></pre>
 
 <p>
-The checker currently treats heterogeneous lists as lists of unions, not as fixed-length tuples with per-index types.
-That means <code>[1 "Ada"]</code> can be understood as <code>[int | str]</code>, but the checker does not use index <code>:0:</code> to prove "this position is always int" unless the value is converted or asserted in another way.
+Writing a cell or a column keeps its type on any grid.
+Changing a column's type (<code><span class="mshellLITERAL">updateCol</span></code> with a quotation that gives another type, <code><span class="mshellLITERAL">extend</span></code> with wider cells), or adding, removing or renaming a column, needs a new grid: on a stored one it is an error that suggests <code><span class="mshellLITERAL">deepCopy</span></code>.
+A grid straight from a literal, <code><span class="mshellLITERAL">parseCsv</span></code> or <code><span class="mshellLITERAL">toGrid</span></code> is new.
 </p>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellINTERPRET">x</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">2</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellSTRING">&#34;x&#34;</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellSTR">str</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">updateCol</span> <span class="mshellVARSTORE">g!</span>   <span class="mshellLINECOMMENT"># ok: the literal is new</span>
+<span class="mshellVARRETRIEVE">@g</span> <span class="mshellSTRING">&#34;x&#34;</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">len</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">updateCol</span> <span class="mshellLITERAL">drop</span>             <span class="mshellLINECOMMENT"># error: g is stored</span><span class="mshellEOF"></span></code>
+</pre>
 
 <h1 id="type-system-quotes">Quotations <a class="section-link" href="#type-system-quotes" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
-Quotation types describe the stack effect of code values.
-This is what makes higher-order definitions such as <code>map</code>, <code>filter</code>, and <code>sortByCmp</code> checkable.
-</p>
-
-<pre><code>def adults ([{ "name": str, "age": int }] -- [{ "name": str, "age": int }])
-    (:age? 18 &gt;=) filter
-end</code></pre>
-
-<p>
-The quotation <code>(:age? 18 &gt;=)</code> is inferred as a function from a person-shaped dictionary to <code>bool</code> because <code>filter</code> expects a predicate quotation.
-Context is important: many quotations start generic and become concrete only when passed to a function or checked against a definition signature.
+A quotation type is the stack effect of the code inside it.
+A quotation literal given to a word that takes one, such as <code><span class="mshellLITERAL">map</span></code>, <code><span class="mshellLITERAL">filter</span></code>, <code><span class="mshellLITERAL">each</span></code> or a definition with a quotation parameter, is checked against what the word gives it, after the word's other arguments are known.
+In <code><span class="mshellVARRETRIEVE">@xs</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span></code>, <code><span class="mshellLITERAL">map</span></code> knows the element type from <code><span class="mshellVARRETRIEVE">@xs</span></code>.
 </p>
 
 <p>
-Operators with multiple valid signatures keep an overload set until context resolves them.
-For example, the quotation <code>(&gt;)</code> is not immediately "integer greater-than".
-It can become <code>(int int -- bool)</code>, <code>(float float -- bool)</code>, <code>(str str -- bool)</code>, or <code>(datetime datetime -- bool)</code> depending on the expected quotation type.
+A stored quotation is typed on its own.
+An overloaded word inside it, such as <code><span class="mshellPLUS">+</span></code>, is decided by how the quotation is used later; if nothing decides it, the checker asks for an annotation.
 </p>
 
-<pre><code>def after (datetime datetime (datetime datetime -- bool) -- bool)
-    cmp!
-    @cmp x
-end
+<pre>
+<code><span class="mshellLEFT_PAREN">(</span><span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellVARSTORE">inc!</span>
+<span class="mshellINTEGER">5</span> <span class="mshellVARRETRIEVE">@inc</span> <span class="mshellINTERPRET">x</span> <span class="mshellLITERAL">wl</span>       <span class="mshellLINECOMMENT"># ok: the use decides that + is (int int -- int)</span><span class="mshellEOF"></span></code>
+</pre>
 
-2024-01-02 2024-01-01 (&gt;) after</code></pre>
+<p>
+<code><span class="mshellINTERPRET">x</span></code> needs to know how many values a quotation takes and leaves.
+Quotation parameters of definitions have written types, so this is only a question for a quotation whose type cannot be worked out.
+</p>
+
+<p>
+<code><span class="mshellBREAK">break</span></code> and <code><span class="mshellCONTINUE">continue</span></code> are allowed only where they are checked: in a <code><span class="mshellLOOP">loop</span></code> body, and in a quotation literal given to <code><span class="mshellLITERAL">each</span></code>, <code><span class="mshellLITERAL">map</span></code> or a similar word inside one.
+A stored quotation cannot break: it could be run where no loop is running.
+<code><span class="mshellLITERAL">each</span></code>, <code><span class="mshellLITERAL">map</span></code> on a list, and the other words that run a quotation once per element give it a stack of its own, which a <code><span class="mshellBREAK">break</span></code> throws away.
+<code><span class="mshellLITERAL">map</span></code> on a Maybe, <code><span class="mshellLITERAL">bind</span></code> and <code><span class="mshellLITERAL">map2</span></code> run it on the current stack, so the loop is left with what the quotation pushed so far, and that must match the loop's stack.
+</p>
 
 <h1 id="type-system-control-flow">Control Flow <a class="section-link" href="#type-system-control-flow" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
-<p>
-Branching constructs must reconcile stack and variable state across reachable branches.
-For <code>if</code>, <code>else</code>, <code>iff</code>, and <code>match</code>, each non-diverging branch must leave the same number of stack items.
-Corresponding stack positions are unified so compatible branch outputs become a shared type or union.
-</p>
-
-<pre><code>true if
-    1
-else
-    2
-end
-# leaves int
-
-true if
-    1
-else
-    "one"
-end
-# leaves int | str</code></pre>
+<h2 id="type-system-joins">Joining Branches <a class="section-link" href="#type-system-joins" aria-label="Permalink">§</a></h2>
 
 <p>
-Variables bound inside branches also have to agree.
-If one reachable branch binds <code>name!</code>, the other reachable branches must bind <code>name!</code> too, and the bound types must be compatible.
+The arms of an <code><span class="mshellIF">if</span></code>, <code><span class="mshellIFF">iff</span></code> or <code><span class="mshellMATCH">match</span></code> must leave the same number of values.
+Where they leave different types, the result is their join:
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Arms leave</th>
+      <th>Result</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code><span class="mshellINTEGER">1</span></code> / <code><span class="mshellFLOAT">2.5</span></code></td><td><code><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEFLOAT">float</span></code></td></tr>
+    <tr><td><code><span class="mshellLITERAL">none</span></code> / <code><span class="mshellINTEGER">5</span> <span class="mshellLITERAL">just</span></code></td><td><code><span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code></td></tr>
+    <tr><td><code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> / <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">&#34;a&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> (new)</td><td><code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code></td></tr>
+    <tr><td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_CURLY">}</span></code> / <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">2</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">b</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_CURLY">}</span></code> (new)</td><td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">b</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span></code></td></tr>
+    <tr><td>a stored <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> / a stored <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code></td><td>error: neither list may change type</td></tr>
+    <tr><td><code><span class="mshellINTEGER">1</span></code> / <code><span class="mshellINTEGER">1</span> <span class="mshellLITERAL">exit</span></code></td><td><code><span class="mshellTYPEINT">int</span></code>: an arm that never returns is left out</td></tr>
+    <tr><td><code><span class="mshellINTEGER">5</span></code> / <code><span class="mshellSTRING">&#34;x&#34;</span> <span class="mshellLITERAL">parseJson</span></code></td><td><code><span class="mshellLITERAL">Json</span></code></td></tr>
+    <tr><td><code><span class="mshellLEFT_PAREN">(</span><span class="mshellINTEGER">2</span> <span class="mshellASTERISK">*</span><span class="mshellRIGHT_PAREN">)</span></code> / <code><span class="mshellLEFT_PAREN">(</span><span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_PAREN">)</span></code></td><td>error: write the quotation type both fit with <code><span class="mshellAS">as</span></code> in each arm</td></tr>
+  </tbody>
+</table>
+
+<p>
+When a later word does not take a union that a join made, the error says which arm left which member.
+</p>
+
+<h2 id="type-system-variables">Variables <a class="section-link" href="#type-system-variables" aria-label="Permalink">§</a></h2>
+
+<p>
+A variable has one type in its scope (a definition body, or the code outside definitions): the type of its first store.
+A later store of a value that does not fit is an error; use a new name, or give the first store the wider type with <code><span class="mshellAS">as</span></code>.
+<code><span class="mshellLITERAL">none</span></code> fixes nothing: after <code><span class="mshellLITERAL">none</span> <span class="mshellVARSTORE">r!</span></code>, <code><span class="mshellINTEGER">5</span> <span class="mshellLITERAL">just</span> <span class="mshellVARSTORE">r!</span></code> makes <code><span class="mshellLITERAL">r</span></code> a <code><span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">1</span> <span class="mshellAS">as</span> <span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span> <span class="mshellVARSTORE">x!</span>
+<span class="mshellSTRING">&#34;a&#34;</span> <span class="mshellVARSTORE">x!</span>                 <span class="mshellLINECOMMENT"># ok: x is an int | str</span><span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+A variable must be set on every path before it is read.
+A store in an <code><span class="mshellIF">if</span></code> arm counts after the <code><span class="mshellIF">if</span></code> only when every arm that goes on stores it.
+A store in a quotation counts only where the quotation runs right away: an <code><span class="mshellIFF">iff</span></code>, <code><span class="mshellLOOP">loop</span></code> or <code><span class="mshellINTERPRET">x</span></code> on a literal.
 </p>
 
 <p>
-Branches that diverge with <code>return</code>, <code>break</code>, or <code>continue</code> are excluded from reconciliation.
-That lets guard-style code type-check naturally.
+The names a <code><span class="mshellMATCH">match</span></code> arm binds are variables of the enclosing scope, so two arms that bind one name must bind it at one type: write <code><span class="mshellTYPEINT">int</span> <span class="mshellLITERAL">n</span></code> and <code><span class="mshellSTR">str</span> <span class="mshellLITERAL">s</span></code>, not <code><span class="mshellTYPEINT">int</span> <span class="mshellLITERAL">n</span></code> and <code><span class="mshellSTR">str</span> <span class="mshellLITERAL">n</span></code>.
 </p>
 
-<pre><code>def positiveName (int -- str)
-    n!
-    @n 0 &lt; if
-        "negative" return
-    end
-    "positive"
-end</code></pre>
+<h2 id="type-system-unknown">Values of Unknown Type <a class="section-link" href="#type-system-unknown" aria-label="Permalink">§</a></h2>
 
 <p>
-An overloaded built-in applied to a union operand is resolved once for each member of the union.
-The call type-checks when every member is handled by some overload, and its result is the union of the per-member results.
-A combination that no overload handles is an error, so an unsafe call is still rejected.
+Some values have a type the checker does not know: a field a written shape does not name, a cell of a grid whose columns are unknown.
+A <code><span class="mshellMATCH">match</span></code> by kind tells what kind of value it is, but not what is inside it.
+A list of unknown elements can be measured, iterated and reordered, but nothing can be assumed about its elements, and it cannot be bound to a name that outlives the arm.
+Keep it on the stack with <code><span class="mshellMATCHARMDUP">:&gt;</span></code>, or check it with <code><span class="mshellTRYAS">tryAs</span></code> or <code><span class="mshellLITERAL">is</span></code> first.
 </p>
 
-<pre><code>true if 1.0 else 1 end  # int | float
+<p>
+An error about a value of unknown type names the read that made it, and why.
+A <code><span class="mshellLITERAL">get</span></code> with a key known only at run time is a common one: on a <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_CURLY">}</span></code>, the key may name a field the shape does not declare.
+Say what those fields hold with <code><span class="mshellASTERISK">*</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">T</span></code>, as in <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellASTERISK">*</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_CURLY">}</span></code>, or use <code><span class="mshellLEFT_CURLY">{</span><span class="mshellSTR">str</span><span class="mshellRIGHT_CURLY">}</span></code>.
+</p>
 
-int | float toFloat     # ok: (int -- float) and (float -- float) both apply, result float
+<h2 id="type-system-overloads">Overloaded Words on Unions <a class="section-link" href="#type-system-overloads" aria-label="Permalink">§</a></h2>
 
-int | float 2.0 /       # error: the int member has no (int float -- ...) overload</code></pre>
+<p>
+An overloaded built-in given a union is checked once for each member.
+It checks when every member is handled, and its result is the join of the results.
+</p>
+
+<pre>
+<code><span class="mshellTRUE">true</span> <span class="mshellIF">if</span> <span class="mshellFLOAT">1.0</span> <span class="mshellELSE">else</span> <span class="mshellINTEGER">1</span> <span class="mshellEND">end</span> <span class="mshellLITERAL">toFloat</span>   <span class="mshellLINECOMMENT"># float: (int -- float) and (float -- float)</span>
+<span class="mshellTRUE">true</span> <span class="mshellIF">if</span> <span class="mshellFLOAT">1.0</span> <span class="mshellELSE">else</span> <span class="mshellINTEGER">1</span> <span class="mshellEND">end</span> <span class="mshellFLOAT">2.0</span> <span class="mshellLITERAL">/</span>     <span class="mshellLINECOMMENT"># error: the int member has no (int float) form</span><span class="mshellEOF"></span></code>
+</pre>
 
 <h1 id="type-system-current-boundaries">Current Boundaries <a class="section-link" href="#type-system-current-boundaries" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
-The checker is intentionally static and conservative.
-It catches stack underflows, unknown definitions, incompatible built-in usage, incompatible branch results, and definition bodies that do not match their declared signatures.
-Runtime checks still exist for data-dependent conditions such as missing dictionary keys, failed <code>?</code> unwraps, file-system failures, process exit codes, and values that come from external programs.
+A program that checks can still stop with an error that depends on the data: an index out of range, <code><span class="mshellQUESTION">?</span></code> on <code><span class="mshellLITERAL">none</span></code>, a missing file, a command that fails, <code><span class="mshellLITERAL">exit</span></code>, a division by zero.
+These are visible in the types (a <code><span class="mshellLITERAL">Maybe</span></code>, a command) or come from outside the script.
+For data from outside, declare a type and check the data against it with <a href="#type-system-validation"><code><span class="mshellTRYAS">tryAs</span></code></a> where it enters the script; the rest of the script is then checked against that type.
 </p>
 
-<p>
-When the checker cannot infer a precise shape for dynamic data, prefer adding a named type and an <code>as</code> assertion near the boundary where the data enters typed code.
-That keeps the rest of the script checked with useful dictionary, list, union, and quotation types.
-</p>

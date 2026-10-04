@@ -1,0 +1,8 @@
+# R6 (ai/type-core-calculus.typ): two refinements of one stored value. Both
+# would return the same dict, at two types, and writing a string through d
+# would reach p's float.
+"{\"age\": 1.5}" parseJson j!
+@j tryAs {age: float} ? p!
+@j tryAs {str: float | str} ? d!
+@d "age" "x" set drop
+@p :age? 1.0 + str wl

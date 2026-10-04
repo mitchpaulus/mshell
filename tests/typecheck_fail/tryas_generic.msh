@@ -1,0 +1,3 @@
+# Types are not kept at run time, so a def's generic is not a tryAs target.
+def g (a -- Maybe[a]) tryAs a end
+5 g drop

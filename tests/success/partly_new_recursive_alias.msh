@@ -1,0 +1,14 @@
+# A new dict around stored values may become a recursive alias: it is retyped
+# to the alias's body, then committed. So a tree node is built from stored
+# children without deepCopy.
+type P = {name: str, nick?: str, kids: [P]}
+def mk (str [P] -- P) ks! n! {name: @n, kids: @ks} end
+"leaf" [] mk l!
+"root" [@l] as [P] mk r!
+@r :kids? len str wl
+[] as [P] ks!
+{name: "a", kids: @ks} as P p!
+@p :name? wl
+"1" parseJson j!
+{a: @j} as Json q!
+@q toJson wl

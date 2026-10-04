@@ -1,0 +1,2 @@
+def f ( -- never) 1 exit 1 + end
+"ok" wl

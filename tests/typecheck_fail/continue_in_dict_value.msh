@@ -1,0 +1,2 @@
+# A continue inside a dict value throws the value's stack away too.
+0 i! 5 ( @i 1 + i! @i 3 > if break end drop {a: 7 continue} ) loop 1 + wl

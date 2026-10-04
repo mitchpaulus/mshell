@@ -176,7 +176,7 @@ It is also useful when you have many commands that you want to run while appendi
 
 The captures (`*`, `*b`, `^`, `^b`) and the in-place redirect (`<>`) are *not* allowed on quotations,
 because they would change the quotation's stack effect.
-Capture the individual command lists inside the quotation instead, e.g. `[[cmd1] [cmd2]] (* !) map` to run each command and collect stdouts.
+Capture the individual command lists inside the quotation instead, e.g. `[[cmd1] [cmd2]] (deepCopy * !) map` to run each command and collect stdouts.
 
 Destination conflicts on quotations (e.g. two `>` redirects, or `2>&1` plus `2>`) are caught at runtime.
 Since redirects never change a quotation's stack effect, they are invisible to the static type checker.
@@ -205,7 +205,7 @@ The exception is `loop`: the file is opened once when the loop starts, so all it
 
 Use `<` to feed data into stdin. The type of the value on top of the stack determines how the input is provided.
 
-`String` values are encoded as UTF-8 and streamed as text.
+`String` values are encoded as UTF-8 and streamed as text, including a bare word from a list literal; use a path to read a file.
 
 ```mshell
 [wc -l] "line 1\nline 2\n" < ; # Counts the lines from the provided string
@@ -343,7 +343,7 @@ Unsetting a variable that does not exist is not an error.
 
 When the variable name is not known statically,
 an environment variable can be set with the `setenv` built-in,
-which takes the value then the name as strings.
+which takes the name, then the value, as strings.
 
 Use `envInspect` to get the change history for an environment variable.
 It returns events from oldest to newest with `dt`, `kind`, `source`, and `changed` fields.
@@ -360,13 +360,13 @@ $HOME cd
 "Hello, World!" $MSHELL_VAR!
 
 # Checking for variable existence
-[($MY_ENV_VAR?) ("MY_ENV_VAR exists") ("MY_ENV_VAR does not exist")] if wl
+$MY_ENV_VAR? if "MY_ENV_VAR exists" else "MY_ENV_VAR does not exist" end wl
 
 # Removing an environment variable
 "MSHELL_VAR" unsetenv
 
-# Setting with a dynamic name, value then name
-"Hello, World!" "MSHELL_VAR" setenv
+# Setting with a dynamic name: the name, then the value
+"MSHELL_VAR" "Hello, World!" setenv
 
 # Inspecting recent changes
 "MSHELL_VAR" envInspect
@@ -429,7 +429,7 @@ The CLI can use definition metadata to provide argument completions for binaries
 ```mshell
 def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
-    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c' '-'] options!
+    ['-h' '--help' '--html' '--lex' '--parse' '--type-check-only' '--version' '-c' '-'] options!
     ['lsp' 'bin' 'edit' 'completions'] subcommands!
     @options @subcommands extend
 end
@@ -455,7 +455,7 @@ A list is the same as `{ 'values': list, 'files': '*' }`.
 Values starting with `-` are only offered once the typed text starts with `-`.
 
 ```mshell
-def typstCompletion { 'complete': ['typst'] } ([str] -- { "values"?: [str], "files"?: str | [str] })
+def typstCompletion { 'complete': ['typst'] } ([str] -- new CompletionResult)
     len 0 = if
         { 'values': ['compile' 'watch' 'query' 'fonts'] }
     else
@@ -593,6 +593,9 @@ No commas are required between elements.
 [1 2 3]
 ```
 
+Inside a list literal, a bare word that is not a definition or built-in is a string, exactly as if it were quoted: `[ls -l]` is `["ls" "-l"]`.
+Bare words are an error outside a list literal.
+
 Lists can be added together with the `+` operator. The result is a new list object.
 
 ```mshell
@@ -614,6 +617,33 @@ Be careful with some of the lexing around the colon, as it's used with indexing.
 ```
 { "key":1 } # Bad because ':1' is treated as index
 ```
+
+### Enums
+
+An `enum` declares a type whose values are one of a fixed set of members.
+Each member has a name and may carry payload values of declared types.
+Members are separated by `|` (a leading `|` is allowed), and `end` closes the declaration.
+A member's name is a word that makes a value, taking its payload from the stack.
+
+```mshell
+enum Shape = circle float | rect float float | dot end
+
+2.0 circle str wl     # circle(2)
+1.5 2.0 rect toJson wl  # {"rect": [1.5, 2]}
+dot toJson wl         # "dot"
+```
+
+An enum may have parameters, written in brackets after its name, and may refer to itself.
+A type that uses a generic enum gives its arguments the same way, as in `Box[int]`.
+
+```mshell
+enum Box[a] = box [a] | empty end
+enum Tree = leaf int | node Tree Tree end
+```
+
+Two enum values are equal when they are the same member of the same enum with equal payloads.
+Member names are global.
+A member, an enum, a `type`, a definition and a builtin each need a name of their own.
 
 ### Date/Times
 
@@ -657,145 +687,121 @@ and parse a string in a given base with `fromBase` / `parseHex` / `parseOctal` /
 
 ## Type System
 
-Use `msh --check-types script.msh` to run static type checking before script execution.
-Use `msh --type-check-only script.msh` to run the same static checks and exit without evaluating the script.
-The checker validates stack effects, definition bodies, quotation arguments, built-ins, variable bindings, and branch reconciliation.
+Every script is type-checked before it runs; if the check fails, nothing runs.
+`msh --type-check-only script.msh` checks and exits.
+The checker checks every def body and the top-level code, and the standard library's and startup file's defs too: code that calls a startup def with a type error is refused.
+It only accepts or rejects: no word behaves differently because of it.
 
-Definitions use stack-effect signatures.
-Inputs are listed before `--`, outputs after it, and the rightmost input is the top stack item consumed first.
+Signatures list inputs before `--` and outputs after it; the rightmost input is the top of the stack.
+A single letter, optionally followed by digits, that is not a type is a generic (`def first ([a] -- a)`, `T1`); any other unknown name is an error.
+In a signature, `dict` is short for `{T}` and `list` for `[T]`, each with its own generic.
 
 ```mshell
 def addOne (int -- int)
     1 +
 end
-
-def fullName (str str -- str)
-    last!, first!
-    $"{@first} {@last}"
-end
 ```
 
-Primitive static type names include `int`, `float`, `bool`, `str`, `path`, `datetime`, `bytes`, `none`, and `null`.
-Named runtime types such as `Grid`, `GridView`, and `GridRow` are also available.
-
-`null` is the JSON null type. It is distinct from `none`, which is only a value constructor (the empty case of `Maybe`, like `Nothing` in Haskell) and is **not** a type — writing `none` in a type expression is an error.
-`parseJson` produces a `null` for each JSON `null`, and the `null` literal pushes one.
-Use `int | null` for "an integer or a literal JSON null"; that differs in meaning from `Maybe[int]`, "an int that may be missing".
-
-Type expressions compose with lists, dictionaries, unions, `Maybe`, and quotation types.
+Type expressions:
 
 ```mshell
-[str]                 # list of strings
-{str: int}            # string-keyed dictionary of ints
-{name: str, age: int} # dictionary shape
-Maybe[int]            # optional int
-int | null            # int or JSON null
-int | str             # union
+int float bool str path datetime binary null  # base types; null is JSON null
+[str]                 # list of str
+{int}                 # dictionary: any keys, int values
+{str: int}            # long form of {int}; error messages use it
+{name: str, age?: int} # shape: name present, age may be missing, other keys unknown
+{url: str, *: int}    # shape whose other keys hold int
+Maybe[int]            # just an int, or none (none is a value, not a type)
+int | str | null      # union; members must be of different kinds
 (int int -- bool)     # quotation type
+Box[int]              # generic enum instance
+Grid GridView GridRow # grids whose columns are not known
 ```
 
-Top-level type declarations name larger type expressions.
-Use them for casts and for naming record-like dictionaries and unions that are reused by other type declarations.
-Current definition signatures still use the historical signature parser, so dictionary shapes in `def` signatures are written with quoted field names.
+Union members must be of different kinds (each base type, list, dict, quotation, Maybe, each enum, each grid kind): `[int] | [str]` and `{a: int} | {b: str}` are errors; declare an enum instead.
+A generic cannot be a union member.
+`match` takes a union apart by kind (`int n :`, `list xs :`), binding the member's own type.
+
+`type Name = T` is an alias, interchangeable with `T`; it may be recursive through a list, dict, field, quotation or enum (`type Person = {name: str, friends: [Person]}`).
+Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {Json}`, what `parseJson` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`; and `UrlEncodable` (`str | path | int | [str | path | int]`), the values `urlEncode` takes in a dict.
+
+### New and stored values
+
+Lists, dicts and grids are shared by reference, so a stored one keeps its type: lists, dict values and shape fields are invariant.
+A value nothing else refers to yet is new and may be given any type it fits: literals of new values, results of `parseJson`, `lines`, `split`, `deepCopy` and other words whose outputs are marked `new`.
+Storing, passing to a def, putting in a container, or `dup` makes a value stored.
+`map`, `filter`, `take`, `skip`, `reverse`, `sort` and slices give a new list when the elements hold no list or dict.
+A literal around a stored value is new only on the outside: `{a: @xs} as {a: [int], b?: int}` is fine, `{a: @xs} as {a: [int | str]}` is not.
+
+```mshell
+[1 2] as [int | str] xs!       # ok: the literal is new
+[1 2] ys!
+@ys as [int | str]             # error: ys is stored
+@ys deepCopy as [int | str]    # ok: a copy is new
+```
+
+`deepCopy` copies every list, dict and grid inside a value, once per path; strings and numbers are shared; a value that contains itself is an error.
+Words that change a type in place need a new value: a redirect (`[cmd] *` and `[cmd @args] *` are fine; `@c *` on a stored list is an error, use `@c deepCopy *`), a type-changing `updateCol`, `gridAddCol`, `gridRemoveCol`, `gridRenameCol`, and an `extend` that widens a column.
+
+A def output marked `new` is fresh for callers (`def load ( -- new Json)`).
+The mark must match the body exactly: missing on an output that is new on every path, or present on one that may be shared, is an error.
+
+`as T` does nothing at run time, so it needs evidence: the value's type must fit `T`, or the value must be new and fit `T` when widened.
+`"5" parseJson as int` is an error; use `tryAs`.
+
+### Validating data
+
+`tryAs T` checks at run time that the value conforms to `T`, giving `just` the same value or `none`; it never copies.
+Every element, dict value and enum payload is checked; a written shape allows other keys; a value that contains itself conforms to a type it has.
+`T` cannot be a quotation type, an enum holding one, or a def's generic.
+A check over 67,108,864 (1 << 26) steps stops the program.
+On a new value (`parseJson tryAs T ?`) any `T` is allowed; a stored value can only be checked against a type it already has, or one with no list or dict in it (otherwise `deepCopy tryAs T`).
+`is T name` in a match arm does the same check and binds the value.
 
 ```mshell
 type Person = {name: str, age: int}
-type Cell = int | float | str | bool | null
-type Row = [Cell]
-
-{ "name": "Ada", "age": 36 } as Person :age? 1 +
+'[{"name": "Ada", "age": 36}]' parseJson tryAs [Person] ? (:age?) map sum wl
 ```
 
-Dictionary types are split into homogeneous dictionaries and shapes.
-A homogeneous dictionary is for dynamic keys where every value has the same type.
-In a type expression, write `{str: int}`.
-In older definition signatures, `{ int }` or `{ *: int }` means the same string-keyed dictionary of ints.
+### Dicts
 
-```mshell
-{ "passed": 10, "failed": 2 } as {str: int} values len
-```
+`{T}` allows any key to be read, set (`setd`, `set`) and deleted (`del`).
+A written shape `{name: str}` says nothing about other keys; a shape literal's type is exact.
+`name?: T` is an optional key, which differs from `name: Maybe[T]` (key present, value may be `none`).
+`:field` gives `Maybe[T]`, `:field?` unwraps it; `get` with a literal key right before it reads that field.
+`get` with a key known only at run time gives `Maybe` of a type covering every field (unknown for a written shape).
+`keys`, `values`, `in`, `len` take any dict; `setd`, `del` and runtime-key `set` need `{T}`.
+A shape fits another that names fewer of its fields; a value lacking an optional key fits `timeout?: int` only when new; a shape never fits `{T}`; a `{T}` fits a shape only whose fields are all optional of type `T`.
+A new dict may gain keys: `{} "name" "Ada" set "age" 36 set` is a `{name: str, age: int}`.
 
-A shape is for record-like dictionaries with known fields.
-Shapes let `:field?` access preserve the precise field type.
+### Lists, grids, quotations
 
-```mshell
-def labelPerson ({ "name": str, "age": int, "active": bool } -- str)
-    person!
-    @person :name? name!
-    @person :age? age!
-    $"{@name} ({@age})"
-end
-```
+A list has one element type; `[1 "a"]` is `[int | str]`, and indexing gives the element type.
+A stored `[int]` does not fit a `[int | str]` parameter.
+A grid's type includes each column's type, worked out from literals and grid words (no syntax); reading a missing column is an error; a grid with unknown columns (`Grid`, `toGrid`) is read only.
 
-A shape field may be optional, written `name?: T` (and `"name"?: T` in `def`
-signatures). An optional field may be absent from a value; when present, its
-value is type `T` and is still type-checked. This is the precise way to type
-option dictionaries (e.g. `numFmt`, `httpGet`, grid `groupBy` aggregation specs,
-the `zip*` option dicts) instead of a loose `{v}`. The `?` marks the *key* as
-possibly-absent, which differs from `Maybe[T]` marking the *value*: `timeout?:
-int` means the key may be missing, while `timeout: Maybe[int]` means the key is
-always present with a possibly-`none` value. A required value satisfies an
-optional parameter, but an optional value does not satisfy a required one.
-Reading is unchanged (`:field` is `Maybe[T]`, `:field?` unwraps it); the language
-server flags `:field?` on a field a concrete shape does not declare, since that
-unwrap always fails. A string literal carries its value as a `str` refinement,
-so a `get` with a known key resolves the same way as the getter: `resp "body"
-get` reads the declared `body` field's type, not the union of every field type,
-so it is interchangeable with `resp :body`. The key resolves even when it
-reaches `get` through a variable (`"body" k! resp @k get`); a key computed at
-runtime returns the generic `Maybe[value]`.
+A quotation literal given to a word (`map`, `filter`, `each`, a def's quotation parameter) is checked against what the word passes it.
+A stored quotation is typed on its own; an overloaded word in it is decided by its later use, or needs an annotation.
+`x` needs the quotation's arity known.
+`break` and `continue` are allowed only in a `loop` body and in quotation literals given to `each`, `map` and similar words inside one.
+`map` on a Maybe, `bind` and `map2` run the quotation on the current stack, so a `break` there leaves the loop with what the quotation pushed so far, which must match the loop's stack.
 
-```mshell
-type Request = {url: str, timeout?: int}
+### Control flow and variables
 
-{ "url": "x" } as Request                # ok: timeout omitted
-{ "url": "x", "timeout": 30 } as Request # ok: timeout present and an int
-```
+The arms of `if`, `iff` and `match` must leave the same number of values; different types join: `1`/`2.5` gives `int | float`, `none`/`5 just` gives `Maybe[int]`, new `[1]`/`["a"]` gives `[int | str]`, stored lists of different types have no join (error).
+An arm that never returns (`exit`, a `never` def, `return`, `break`) is left out.
+An error about a union a join made names the arm each member came from.
+An overloaded builtin on a union is checked per member; the result is the join (`int | float` through `toFloat` is `float`; `int | float 2.0 /` is an error).
 
-Lists are homogeneous when every element has one type, such as `[int]` or `[Person]`.
-This is the strongest list type because higher-order functions preserve the element type.
+`def die (str -- never)` declares a def that never returns; `never` is allowed only as the whole output side.
 
-```mshell
-def doubleAll ([int] -- [int])
-    (2 *) map
-end
-
-def names ([{ "name": str, "age": int }] -- [str])
-    (:name?) map
-end
-```
-
-Heterogeneous lists are represented as lists whose element type is a union.
-For example, `[int | str]` means every element is either an int or a string.
-This is useful for JSON-like data, spreadsheet rows, and other shell data where each cell can be one of a fixed set of types.
-
-```mshell
-type Cell = int | float | str | bool
-type Row = [Cell]
-type Table = [Row]
-
-[1 "Ada" true] as [int | str | bool]
-```
-
-The checker currently models heterogeneous lists as lists of unions, not fixed-length tuples with per-index types.
-That means index `:0:` does not by itself prove a specific per-position type unless the value is converted or asserted.
-
-Quotation types describe the stack effect of code values.
-Operators with multiple valid signatures keep an overload set until context resolves them.
-For example, `(>)` can become `(int int -- bool)`, `(float float -- bool)`, `(str str -- bool)`, or `(datetime datetime -- bool)` depending on the expected quotation type.
-
-Control-flow branches must reconcile stack and variable state across reachable paths.
-Branches that diverge with `return`, `break`, or `continue` are excluded from reconciliation.
-When the reachable arms of a `match` or `if`/`else` block leave different types in a
-stack slot, those types are joined into a union for the code that follows.
-For example, `match []: 0.0, _ :> sum end` produces an `int | float`.
-An overloaded operation applied to a union operand is resolved for every member of
-the union; it type-checks when each member is handled, and the result is the union
-of the per-member results.
-So `int | float` through `toFloat` gives `float`, and `int | float { … } numFmt`
-formats fine.
-An operation that is valid for only some members is a type error — dividing an
-`int | float` by a `float` fails, because the `int` member has no matching overload.
+A variable has one type per scope (a def body, or the top level): its first store's.
+A store that does not fit is an error; widen the first store with `as`, or use a new name.
+`none r!` fixes nothing: a later `5 just r!` makes `r` a `Maybe[int]`.
+A variable must be set on every path before it is read.
+Match bindings are variables of the enclosing scope: two arms binding one name must agree on its type (use `int n`, `str s`).
+A kind pattern on a value of unknown type (an undeclared field of a written shape, a cell of an unknown grid) cannot bind a name; keep it on the stack with `:>`, or check it with `tryAs`/`is`.
+An error about an unknown names the read that made it; `get` with a runtime key on `{a: str}` gives `Maybe[unknown]`, so write `{a: str, *: str}` or `{str}`.
 
 For more detail, see the generated Type System help page.
 
@@ -810,6 +816,8 @@ end
 ```
 
 Metadata values must be static: strings (single or double quoted), integers, floats, booleans, or nested lists/dicts of the same. Interpolated strings are not allowed.
+
+A definition's name must not be taken already: defining a name twice, whether in the standard library, the init file or the script, is an error, as is defining a builtin's name or an enum member's.
 
 ### Tail-Call Optimization
 
@@ -1089,7 +1097,7 @@ end wl # Output: 3
 ### Type Matching
 
 Type keywords match based on the subject's type:
-`int`, `float`, `str`, `bool`, `list`, `dict`, `path`, `date`, `quotation`, `maybe`, `binary`, `null`.
+`int`, `float`, `str`, `bool`, `list`, `dict`, `path`, `datetime`, `quotation`, `maybe`, `binary`, `null`.
 
 A `null` arm matches the JSON null value (the `null` type), which is distinct from a `none` arm (the empty case of a `Maybe`).
 For a union such as `int | null`, the `int` and `null` arms cover it exhaustively with no wildcard needed.
@@ -1110,6 +1118,39 @@ Follow a type keyword with a name to bind the matched value (like `just v`):
     str s : @s len str,
     _     : "other",
 end wl # Output: 5
+```
+
+The name of a declared enum is a type pattern too: it matches any member of that enum,
+and may be followed by a name for the value, as in `Shape s`.
+
+### Typed Patterns: `is`
+
+`is T name` matches a value that conforms to type `T`, checked at run time as `tryAs` does, and binds it to `name` (`_` binds nothing).
+`is` has this meaning only at the start of a match arm.
+`is` arms that each name exactly one member of the value's type cover it, with no `_` arm needed.
+
+```mshell
+type Config = {url: str, timeout?: float}
+
+"{\"url\": \"http://example.com\"}" parseJson match
+    is Config c : @c :url? wl,
+    _ : "not a config" wl,
+end
+```
+
+### Enum Patterns
+
+A member pattern is the member's name followed by a name for each payload value, or `_` to skip one.
+A match on an enum covers every member, or has a `_` arm.
+
+```mshell
+def area (Shape -- float)
+    match
+        circle r : @r @r * 3.14159 *,
+        rect w h : @w @h *,
+        dot : 0.0,
+    end
+end
 ```
 
 ### Maybe Destructuring
@@ -1153,6 +1194,7 @@ end wl # Output: 1
 `...rest` can also appear in the middle of the pattern.
 Items before it match from the front, items after it match from the back,
 and the spread binding receives everything in between.
+The spread binding is a new list, so changing it does not change the matched list.
 
 ```mshell
 [1 2 3 4 5] match
@@ -1193,7 +1235,7 @@ end wl # Output: 11
 - `env`: Write all environment variables to stderr in sorted order (--)
 - `envInspect`: Get the session-local change history for an environment variable, oldest to newest. Each event contains `dt`, `kind`, `source`, and `changed`. Only the latest 256 events per variable are retained, and values are never included. `(str -- [{dt: datetime, kind: str, source: str, changed: bool}])`
 - `completionDefs`: Push a dictionary of completion definitions. Keys are command names, values are lists of quotations. `( -- dict)`
-- `setenv`: Set an environment variable by name, value then name. Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
+- `setenv`: Set an environment variable by name: the name, then the value. Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
 - `unsetenv`: Remove an environment variable by name. Unsetting a variable that does not exist is not an error. `(str -- )`
 - `dup`: Duplicate (a -- a a)
 - `swap`: Swap (a b -- b a)
@@ -1234,7 +1276,6 @@ end wl # Output: 11
   Regular files, pipes, captures, and non-file streams return false.
   Redirections and symlinks are classified by their opened target, so one that resolves to a terminal returns true.
   `( -- bool)`
-- `::`: Drop stdin onto the stack and split by lines `( -- [str])`. This is a shorthand for `stdin lines`.
 - `foldl`: Fold left. `(quote initial list -- result)`
 - `wt`: "Whitespace table", puts stdin split by lines and whitespace on the stack. `( -- [[str]])`
 - `ttFile`: "Tab table" from file, puts content from file name split by lines and tabs on the stack. `(str -- [[str]])`
@@ -1251,12 +1292,13 @@ end wl # Output: 11
 - `gridValues`: Extract Grid or GridView cell values as row-major lists, without a header row and without coercing cell types. (`Grid|GridView -- [[a]]`)
 - `toCsvCell`: Escape a single CSV cell. If the value contains `,`, `"`, or a newline, wraps the value in double quotes and doubles any embedded quotes; otherwise returns the input unchanged. (`str -- str`)
 - `toCsv`: Serialize a list of rows to a CSV string. Each cell is escaped with `toCsvCell`, cells are joined with `,`, and rows are joined with `\n`. (`[[str]] -- str`)
-- `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. JSON `null` becomes the `null` type (distinct from `none`). (`path|str|binary -- list|dict|numeric|str|bool|null`)
+- `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. JSON `null` becomes the `null` type (distinct from `none`). A number with no fraction or exponent becomes an `int` (a `float` if it is too large for one), and any other number a `float`. (`path|str|binary -- list|dict|numeric|str|bool|null`)
 - `parseExcel`: Parse an `.xlsx` (OOXML) spreadsheet into a list of sheets in workbook (tab) order. Each sheet is a dict with a `name` key (the worksheet name), a `data` key holding a rectangular list of rows (list of lists), a `hidden` key (bool; `true` for hidden or veryHidden sheets), and a `visibility` key (`"visible"`, `"hidden"`, or `"veryHidden"`). Cell values are typed: numbers become floats (dates appear as Excel serial floats), strings become strings (shared, inline, and formula-string results all resolved), booleans become booleans, error cells (e.g. `#DIV/0!`) become `none`, and empty/padding cells are the empty string. Chartsheets are skipped; hidden worksheets are included. Dates are returned as raw Excel serial floats; apply `fromOleDate` at the call site to convert. `parseExcel` assumes the default 1900-based date system, which matches `fromOleDate`'s OLE epoch (1899-12-30). Workbooks saved with the 1904 date system (`<workbookPr date1904="true"/>`, seen on some files originally authored on older Mac Excel or with the "Use 1904 date system" option enabled) have serials offset by 1462 days; on those files, add 1462 to each serial before calling `fromOleDate`, e.g. `@wb :0: :data? :3: :0: 1462 + fromOleDate`. (`path|binary -- list`)
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. A count of 0 or less produces an empty list. `(int -- [int])`
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
 - `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
-- `urlEncode`: URL-encode a string or dictionary of parameters. `(str|dict -- str)`
+- `urlEncode`: URL-encode a string or dictionary of parameters; a list value gives its key once per element. `(str -- str)`, `({UrlEncodable} -- str)`. A dict literal is given that type where it is passed; a stored dict needs it where it is made (`{...} as {UrlEncodable} params!`), with any stored list in it typed `[str | path | int]` where that list is made.
+- `deepCopy`: Copy a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original. A list reached through two places is copied twice; immutable values and quotes are shared. A value that contains itself is an error. `(a -- a)`
 - `toJson`: Serialize any value to a JSON string. Binary is base64 encoded; typed wrappers like path, date, Maybe, and pipe preserve their shape. Types that map directly to JSON types round-trip; extended types (like path or date) do not. `(a -- str)`
 - `sleep`: Sleep for a floating-point number of seconds. `(numeric -- )`
 - `nullDevice`: Cross-platform reference to either `/dev/null` or `NUL`. `( -- path)`
@@ -1293,8 +1335,8 @@ end wl # Output: 11
    Windows Terminal always reports 10x20 cells, so fonts with a different cell shape need this.
    Yank bindings copy text about the selected entry to the system clipboard: `yf` (file name), `yp` (full path), `yg` (path relative to the enclosing `.git` directory). `(str -- )`
 - `clip`: Copy a string to the system clipboard. Cross-platform: uses `pbcopy` on macOS, `clip` on Windows, and the first available of `wl-copy`, `xclip`, or `xsel` on Linux. `(str | path -- )`
-- `writeFile`: Write a string (UTF-8) or raw binary data to file. Overwrites file if it exists. `(str|bytes content str|path file -- )`
-- `appendFile`: Append a string (UTF-8) or raw binary data to file. `(str|bytes content str|path file -- )`
+- `writeFile`: Write a string (UTF-8) or raw binary data to file. Overwrites file if it exists. `(str|binary content str|path file -- )`
+- `appendFile`: Append a string (UTF-8) or raw binary data to file. `(str|binary content str|path file -- )`
 - `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`
 - `modTime`: Get a file's last modification time. Returns a Maybe (None on missing file or IO error). This is the only file timestamp that is portable across operating systems and filesystems; reported in local time. `(str|path -- Maybe datetime)`
 - `lsDir`: Get list of all items (files and directories) in directory. Full paths to the items. `(str|path -- [path])`
@@ -1310,10 +1352,10 @@ end wl # Output: 11
 - `abs`: Absolute value `(numeric -- numeric)`
 - `inc`: Increment an integer `(int -- int)`
 - `max2`: Maximum of two numbers `(numeric numeric -- numeric)`
-- `max`: Maximum of list of numbers or datetimes `([numeric] -- numeric) | ([DateTime] -- DateTime)`
+- `max`: Maximum of list of numbers or datetimes `([numeric] -- numeric) | ([datetime] -- datetime)`
 - `transpose`: Transpose list of lists `([[a]] -- [[a]])`
 - `min2`: Minimum of two numbers `(numeric numeric -- numeric)`
-- `min`: Minimum of list of numbers or datetimes `([numeric] -- numeric) | ([DateTime] -- DateTime)`
+- `min`: Minimum of list of numbers or datetimes `([numeric] -- numeric) | ([datetime] -- datetime)`
 - `mod`: Modulus `(numeric numeric -- numeric)`
 - `floor`: Round a number down to the nearest integer. `(numeric -- int)`
 - `ceil`: Round a number up to the nearest integer. `(numeric -- int)`
@@ -1336,7 +1378,7 @@ end wl # Output: 11
 
 - `str`: Convert to string
 - `findReplace`: Find and replace in string. `findReplace (str str, str find, str replace -- str)`
-- `leftPad`: Pad the left side of a string to reach the requested length. `(str str int -- str)`
+- `leftPad`: Pad the left side of a string to reach the requested length, counted in code points. `(str str int -- str)`
 - `lines`: Split string into list of string lines
 - `split`: Split string into list of strings by delimiter. (str delimiter -- [str])
 - `wsplit`: Split string into list of strings by runs of whitespace. (str -- [str])
@@ -1392,7 +1434,7 @@ end wl # Output: 11
 - `2id`: Two-argument identity quote. `(T1 T2 -- T1 T2)`
 - `3id`: Three-argument identity quote. `(T1 T2 T3 -- T1 T2 T3)`
 - `2tuple`: Pack the top two stack values into a new two-element list, `(a b -- [a b])`
-- `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
+- `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`. On a dictionary, remove a key (nothing happens when it is absent): `({a} str -- {a})`
 - `extend`: Extends an existing list with items from another list, or a `Grid`/`GridView` with rows from another `Grid`/`GridView`. Difference between this and `+` is that it modifies the receiver in place. For grids, see the Grid section below. `(originalList toAddList -- list)` or `(Grid|GridView Grid|GridView -- Grid|GridView)`
 - `insert`: Insert element into list, `(list element index -- list)`
 - `setAt`: Set element at index, negative index is allowed.  `(list element index -- list)`
@@ -1408,7 +1450,7 @@ end wl # Output: 11
 - `uniq`: Remove duplicate elements from list. Works for all non-compound types. `([a] -- [a])`
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 - `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
-- `toSvgPathStr`: Build an SVG path `d` string from a list of `[x y]` pairs. First pair uses `M`, remaining pairs use `L`. `([[numeric]] -- str)`
+- `toSvgPathStr`: Build an SVG path `d` string from a list of `[x y]` pairs. First pair uses `M`, remaining pairs use `L`. `([[int | float]] -- str)`
 - `scaleLinear`: Build a linear scaler from a domain/range pair; returns a quotation that maps input values. `([float] [float] -- (float -- float))`
 - `cartesian`: Extends each list in an accumulator with every element of a new list, producing the Cartesian product. Designed for chaining: start with the identity `[[]]` and apply `cartesian` once per list. `([[a]] [a] -- [[a]])`
 - `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string.
@@ -1416,7 +1458,7 @@ end wl # Output: 11
 - `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
 - `take`: Take the first `n` number of elements from list, or first n characters of string. `([a] int -- [a])` / `(str int -- str)`
 - `repeat`: Build a list by repeating the value the requested number of times. `(a int -- [a])`
-- `chunk`: Group a list into consecutive sublists of size `n`. The final chunk may be shorter if the list length isn't divisible by `n`. `([a] int -- [[a]])`
+- `chunk`: Group a list into consecutive sublists of size `n`. The final chunk may be shorter if the list length isn't divisible by `n`. A size of 0 or less is an error. `([a] int -- [[a]])`
 - `pop`: Remove the final element from the list in place and return it as a Maybe (`none` for the empty list). The list is mutated, not pushed. `([a] -- Maybe[a])`
 
 ## Grid Functions
@@ -1504,7 +1546,7 @@ Access the parts with `:k?` and `:v?`.
 
 ## Date Functions
 
-- `toDt`: Convert string to date/time `(str -- Maybe[date])`.
+- `toDt`: Convert string to date/time `(str -- Maybe[datetime])`.
   Separators are ignored, month names are accepted, and a time with optional AM/PM may follow.
   A leading four digit year is always year-month-day, so ISO dates like `2026-01-02` are never ambiguous.
   Other dates are tried as year-month-day, month-day-year, and day-month-year.
@@ -1512,32 +1554,32 @@ Access the parts with `:k?` and `:v?`.
   If several readings are valid (`01/02/2026`), the order learned from the most recent unambiguous
   non-ISO date in this evaluation decides. With no such date yet, the result is `none`.
   Out of range components (month 13, Feb 30, hour 25) give `none` rather than rolling over.
-- `now`: Push current local date/time onto the stack `( -- date)`
-- `date`: Drop the time portion from a datetime `(date -- date)`
-- `year`: Get year from date `(date -- int)`
-- `month`: Get month from date (1-12) `(date -- int)`
-- `day`: Get day from date (1-31) `(date -- int)`
-- `hour`: Get hour from date (0-23) `(date -- int)`
-- `minute`: Get minute from date (0-59) `(date -- int)`
-- `dateFmt`: Format a date using the [golang format string](https://pkg.go.dev/time#Layout) `(date str -- str)`. Jan 2, 2006 at 3:04pm (MST) is the reference time.
-- `isoDateFmt`: Format a date using the ISO 8601 format YYYY-MM-DD `(date -- str)`
-- `isoDateTimeFmt`: Format a date/time using ISO 8601 with seconds YYYY-MM-DDTHH:MM:SS `(date -- str)`
-- `isWeekend`: Check if date is a weekend `(date -- bool)`
-- `isWeekday`: Check if date is a weekday `(date -- bool)`
-- `dow`: Get day of week from date (0-6). Sunday = 0, .., Saturday = 6 `(date -- int)`
-- `toUnixTime`: Get unix time in seconds from date `(date -- int)`
-- `toUnixTimeMilli`: Get unix time in milliseconds from date `(date -- int)`
-- `toUnixTimeMicro`: Get unix time in microseconds from date `(date -- int)`
-- `toUnixTimeNano`: Get unix time in nanoseconds from date `(date -- int)`
-- `fromUnixTime`: Get date from unix time in seconds `(int -- date)`
-- `fromUnixTimeMilli`: Get date from unix time in milliseconds int `(int -- date)`
-- `fromUnixTimeMicro`: Get date from unix time in microseconds int `(int -- date)`
-- `fromUnixTimeNano`: Get date from unix time in nanoseconds int `(int -- date)`
-- `toOleDate`: Convert a date to an OLE Automation date float `(date -- float)`
-- `fromOleDate`: Convert an OLE Automation date float to a date `(numeric -- date)`
-- `addDays`: Add days to date `(date numeric -- date)`
-- `utcToCst`: Convert a UTC datetime to US Central Time `(date -- date)`
-- `cstToUtc`: Convert a US Central Time datetime to UTC `(date -- date)`
+- `now`: Push current local date/time onto the stack `( -- datetime)`
+- `date`: Drop the time portion from a datetime `(datetime -- datetime)`
+- `year`: Get year from date `(datetime -- int)`
+- `month`: Get month from date (1-12) `(datetime -- int)`
+- `day`: Get day from date (1-31) `(datetime -- int)`
+- `hour`: Get hour from date (0-23) `(datetime -- int)`
+- `minute`: Get minute from date (0-59) `(datetime -- int)`
+- `dateFmt`: Format a date using the [golang format string](https://pkg.go.dev/time#Layout) `(datetime str -- str)`. Jan 2, 2006 at 3:04pm (MST) is the reference time.
+- `isoDateFmt`: Format a date using the ISO 8601 format YYYY-MM-DD `(datetime -- str)`
+- `isoDateTimeFmt`: Format a date/time using ISO 8601 with seconds YYYY-MM-DDTHH:MM:SS `(datetime -- str)`
+- `isWeekend`: Check if date is a weekend `(datetime -- bool)`
+- `isWeekday`: Check if date is a weekday `(datetime -- bool)`
+- `dow`: Get day of week from date (0-6). Sunday = 0, .., Saturday = 6 `(datetime -- int)`
+- `toUnixTime`: Get unix time in seconds from date `(datetime -- int)`
+- `toUnixTimeMilli`: Get unix time in milliseconds from date `(datetime -- int)`
+- `toUnixTimeMicro`: Get unix time in microseconds from date `(datetime -- int)`
+- `toUnixTimeNano`: Get unix time in nanoseconds from date `(datetime -- int)`
+- `fromUnixTime`: Get date from unix time in seconds `(int -- datetime)`
+- `fromUnixTimeMilli`: Get date from unix time in milliseconds int `(int -- datetime)`
+- `fromUnixTimeMicro`: Get date from unix time in microseconds int `(int -- datetime)`
+- `fromUnixTimeNano`: Get date from unix time in nanoseconds int `(int -- datetime)`
+- `toOleDate`: Convert a date to an OLE Automation date float `(datetime -- float)`
+- `fromOleDate`: Convert an OLE Automation date float to a date `(numeric -- datetime)`
+- `addDays`: Add days to date `(datetime numeric -- datetime)`
+- `utcToCst`: Convert a UTC datetime to US Central Time `(datetime -- datetime)`
+- `cstToUtc`: Convert a US Central Time datetime to UTC `(datetime -- datetime)`
 
 ## Regular Expression Functions
 
@@ -1594,7 +1636,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTTP Requests
 
-- `httpGet`: Make a HTTP GET request. Signature is `(dict -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes, cookieJar?: [dict]}])`. Takes the request information in a dictionary that should have the following keys:
+- `httpGet`: Make a HTTP GET request. Signature is `(dict -- Maybe[{status: int, reason: str, headers: {[str]}, body: binary, cookieJar?: [dict]}])`. Takes the request information in a dictionary that should have the following keys:
 
   - `url`: Full URL, including all the query parameters (required, string)
   - `timeout`: Request timeout in seconds (optional, positive integer; default 30)
@@ -1613,7 +1655,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
   - `status`: Integer status code
   - `reason`: Full reason line, ex: `"200 OK"`
   - `headers`: Dictionary of header name to a list of values
-  - `body`: Body of response, as raw `bytes`. Decode with `utf8Str` if you want a UTF-8 string.
+  - `body`: Body of response, as raw `binary`. Decode with `utf8Str` if you want a UTF-8 string.
   - `cookieJar`: Present only when supplied on the request, referencing the same list.
 
 - `httpPost`: Make a HTTP POST request. Signature is the same as `httpGet`. The only difference is that on the request dictionary, you can also set the `body` field to a stringable value.
@@ -1681,12 +1723,12 @@ The whole jar round-trips through `toJson` and `parseJson`:
 
 ```mshell
 @jar toJson `cookies.json` writeFile
-`cookies.json` parseJson restoredJar!
+`cookies.json` parseJson tryAs [Cookie] ? restoredJar!
 {'url': 'https://example.com/account',
  'cookieJar': @restoredJar} httpGet ?
 ```
 
-New timestamps are integers; whole-number floats are also accepted because `parseJson` decodes JSON numbers as floats.
+Timestamps are integers, and `parseJson` reads them back as integers; whole-number floats are also accepted.
 Session cookies live as long as the caller retains them in the jar.
 Explicitly saving and restoring the list also saves session cookies; discard those records if starting a new session is desired.
 
@@ -1787,6 +1829,7 @@ The current object types supported by `mshell` are:
 9. Date/Times
 10. Dictionary
 11. Maybe
+12. Enum values
 
 ## LLM Notes
 

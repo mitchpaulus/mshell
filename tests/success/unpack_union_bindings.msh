@@ -15,7 +15,7 @@ true ([1]) ("not a list") iff
 @only 1 + drop
 
 # Bindings only include shapes capable of satisfying the whole pattern.
-true ({"a": 1, "b": "x"}) ({"a": 1.5}) iff
+true ({"a": 1, "b": "x"}) ({"a": 2}) iff
 => {'a': a, 'b': b}
 @a 1 + drop
 @b len drop
@@ -26,7 +26,7 @@ true ("3" toInt) ("1.5" toFloat) iff match
     _ : 0.0,
 end drop
 
-# Brands are transparent to structural patterns at runtime.
+# Aliases are transparent to structural patterns.
 type Numbers = [int]
 [1] as Numbers => [number]
 @number 1 + drop

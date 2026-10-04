@@ -1,0 +1,10 @@
+# Bare words from a list literal work as strings.
+[+5 inf abc aGk=] w!
+@w 0 nth toInt str wl
+@w 1 nth toFloat str wl
+@w 2 nth toInt str wl
+@w 2 nth lines len str wl
+@w 2 nth md5 wl
+@w 3 nth base64decode utf8Str wl
+@w 2 nth utf8Bytes utf8Str wl
+@w len str wl

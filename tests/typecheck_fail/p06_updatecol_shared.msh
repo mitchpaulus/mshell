@@ -1,0 +1,3 @@
+[| x; 1; 2; 3 |] g!
+@g "x" (str) updateCol drop
+@g "x" gridCol (1 +) map len wl

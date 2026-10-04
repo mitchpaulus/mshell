@@ -1,0 +1,2 @@
+# Json already has a list member.
+def f (Json | [int] -- ) drop end

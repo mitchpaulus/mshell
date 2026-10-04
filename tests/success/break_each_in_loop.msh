@@ -1,0 +1,2 @@
+0 ([1 2] (drop break) each) loop drop
+"done" wl

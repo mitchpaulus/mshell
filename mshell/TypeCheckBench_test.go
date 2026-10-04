@@ -9,7 +9,7 @@ import (
 )
 
 // Benchmarks for the type checker alone: files are parsed up front, so
-// only TypeCheckProgram is timed.
+// only the check is timed. The corpus benchmarks are in TypeCore_test.go.
 
 func benchParse(tb testing.TB, src string) *MShellFile {
 	tb.Helper()
@@ -29,40 +29,6 @@ func benchStdlib(tb testing.TB) []MShellDefinition {
 	return benchParse(tb, string(src)).Definitions
 }
 
-// benchCheck type checks f, surviving a checker panic so builds with
-// known crashes can still be compared on the same corpus.
-func benchCheck(f *MShellFile, std []MShellDefinition) {
-	defer func() { recover() }()
-	TypeCheckProgram(f, std)
-}
-
-// BenchmarkTypeCheckCorpus checks every script the test suites type check,
-// plus tests/msh-scripts.
-func BenchmarkTypeCheckCorpus(b *testing.B) {
-	std := benchStdlib(b)
-	var files []*MShellFile
-	for _, pattern := range []string{"../tests/success/*.msh", "../tests/typecheck_fail/*.msh", "../tests/msh-scripts/*"} {
-		paths, _ := filepath.Glob(pattern)
-		for _, p := range paths {
-			src, err := os.ReadFile(p)
-			if err != nil {
-				continue
-			}
-			file, err := NewMShellParser(NewLexer(string(src), nil)).ParseFile()
-			if err != nil {
-				continue
-			}
-			files = append(files, file)
-		}
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		for _, f := range files {
-			benchCheck(f, std)
-		}
-	}
-}
-
 // benchShapes are single top-level lines, repeated n times to show how
 // checking time grows with program length.
 var benchShapes = map[string]string{
@@ -80,7 +46,7 @@ var benchShapes = map[string]string{
 }
 
 func BenchmarkTypeCheckScaling(b *testing.B) {
-	std := benchStdlib(b)
+	base := NewCoreBase(benchStdlib(b), nil)
 	for _, name := range []string{"tokens", "list", "cmd", "dict", "fmt", "nested", "vars", "quote", "if", "match", "def"} {
 		for _, n := range []int{500, 1000, 2000, 4000} {
 			var sb strings.Builder
@@ -95,21 +61,10 @@ func BenchmarkTypeCheckScaling(b *testing.B) {
 			file := benchParse(b, sb.String())
 			b.Run(fmt.Sprintf("%s/%d", name, n), func(b *testing.B) {
 				for i := 0; i < b.N; i++ {
-					TypeCheckProgram(file, std)
+					base.Check(file)
 				}
 			})
 		}
-	}
-}
-
-// BenchmarkTypeCheckEmpty is the fixed cost of every check: building the
-// builtin tables and registering the stdlib signatures.
-func BenchmarkTypeCheckEmpty(b *testing.B) {
-	std := benchStdlib(b)
-	file := benchParse(b, "")
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		TypeCheckProgram(file, std)
 	}
 }
 
@@ -125,8 +80,60 @@ func BenchmarkLSPDiagnostics(b *testing.B) {
 		text := string(src)
 		b.Run(name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				s.computeDiagnostics(text)
+				s.computeDiagnostics("", text)
 			}
 		})
+	}
+}
+
+// generatedPrograms reads testdata/generated: programs the soundness
+// generator wrote (TypeSoundGen_test.go), denser in types, matches and
+// quotes than the test corpus. They are fixed files, so a change to the
+// generator does not change what the benchmarks measure.
+func generatedPrograms(tb testing.TB) []string {
+	tb.Helper()
+	paths, err := filepath.Glob("testdata/generated/*.msh")
+	if err != nil || len(paths) == 0 {
+		tb.Fatalf("no generated programs: %v", err)
+	}
+	var out []string
+	for _, p := range paths {
+		src, err := os.ReadFile(p)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		out = append(out, string(src))
+	}
+	return out
+}
+
+// BenchmarkCoreCheckGenerated checks the generated programs (about 50 KB).
+func BenchmarkCoreCheckGenerated(b *testing.B) {
+	base := NewCoreBase(nil, nil)
+	var files []*MShellFile
+	for _, src := range generatedPrograms(b) {
+		files = append(files, benchParse(b, src))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, f := range files {
+			if _, ok := base.Check(f); !ok {
+				b.Fatal("a generated program does not check")
+			}
+		}
+	}
+}
+
+// BenchmarkParseGenerated parses the same programs: the language server
+// parses before every check.
+func BenchmarkParseGenerated(b *testing.B) {
+	srcs := generatedPrograms(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, src := range srcs {
+			benchParse(b, src)
+		}
 	}
 }

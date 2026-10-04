@@ -1,0 +1,2 @@
+# map on a grid with no rows gives a grid with no columns: no row ran the quote.
+[| x; |] (drop {y: 1}) map gridCols len wl

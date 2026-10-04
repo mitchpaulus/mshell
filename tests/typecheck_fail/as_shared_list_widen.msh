@@ -1,0 +1,2 @@
+[1 2] l!
+@l as [int | str] drop

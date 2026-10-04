@@ -1,0 +1,2 @@
+# A list of indexers concatenates its parts; grid rows do not concatenate.
+[| a; 1; 2; 3 |] :0:,:1: drop

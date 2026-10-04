@@ -1,0 +1,14 @@
+# A recursive enum: build a tree, print it, and walk it.
+enum Tree = leaf int | node Tree Tree end
+
+1 leaf 2 leaf node 3 leaf node t!
+@t str wl
+@t toJson wl
+
+def treeSum (Tree -- int)
+    match
+        leaf n : @n,
+        node l r : @l treeSum @r treeSum +,
+    end
+end
+@t treeSum str wl

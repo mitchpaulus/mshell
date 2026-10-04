@@ -6,7 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,10 +47,43 @@ type lspServer struct {
 	envNames     map[string]struct{}
 	candsBuf     []string
 	stdlibDefs   []MShellDefinition
-	checkerBase     *CheckerBase // built from stdlibDefs on first use; see newChecker
-	checkerBaseOnce sync.Once
+	// startupDecls are the startup files' `type` and `enum` declarations.
+	startupDecls []MShellParseItem
+	// startupErrs are errors in the startup files that every document
+	// shows at its first line: an init file that does not parse, and the
+	// startup declarations' errors (CoreBase.StartupErrors).
+	startupErrs []string
+	// coreBase is the type checker's base, built from the startup files on
+	// first use and shared by every check.
+	coreBase     *CoreBase
+	coreBaseOnce sync.Once
+	// startupFiles are the startup files one by one, in load order. A
+	// document that is one of them is checked with only the files before it
+	// (startupFilesBefore), in a base of its own (prefixBases[n] for the
+	// first n files, built on first use).
+	startupFiles []lspStartupFile
+	prefixMu     sync.Mutex
+	prefixBases  map[int]*CoreBase
 	builtinSigs  map[string][]string // name -> formatted "(in -- out)" sigs from the type checker
 	stdlibHover  map[string][]string // name -> formatted sigs for stdlib defs
+
+	// diagMu guards diag, the diagnostics state of each open document
+	// (scheduleDiagnostics).
+	diagMu sync.Mutex
+	diag   map[protocol.DocumentURI]*lspDiagState
+}
+
+// lspDiagState is a document's diagnostics in progress. At most one check
+// of a document runs at a time; an edit made meanwhile leaves its text in
+// next, and the running check takes it when done, so only the newest text
+// is checked again. version counts edits: a result is published only if
+// no edit came after the text it checked, and the document is still open.
+type lspDiagState struct {
+	running bool
+	pending bool
+	next    string
+	version uint64
+	closed  bool
 }
 
 type lspDocument struct {
@@ -67,6 +105,55 @@ func (d *lspDocument) setText(text string) {
 		lines = append(lines, text[start:])
 	}
 	d.Lines = lines
+}
+
+// LSP positions count UTF-16 code units in a line; tokens carry 1-based
+// lines and columns in runes. These convert between the two, reading only
+// the line concerned.
+
+// runeCol is the 0-based rune column of an LSP position on its line.
+func (d *lspDocument) runeCol(p protocol.Position) int {
+	if int(p.Line) >= len(d.Lines) {
+		return int(p.Character)
+	}
+	units, col := uint32(0), 0
+	for _, r := range d.Lines[p.Line] {
+		if units >= p.Character {
+			break
+		}
+		units += uint32(utf16.RuneLen(r))
+		col++
+	}
+	return col
+}
+
+// position is the LSP position of 0-based line and rune column col.
+func (d *lspDocument) position(line, col int) protocol.Position {
+	if line < 0 {
+		line = 0
+	}
+	if line >= len(d.Lines) {
+		return protocol.Position{Line: uint32(line), Character: uint32(max(col, 0))}
+	}
+	units := uint32(0)
+	i := 0
+	for _, r := range d.Lines[line] {
+		if i >= col {
+			break
+		}
+		units += uint32(utf16.RuneLen(r))
+		i++
+	}
+	return protocol.Position{Line: uint32(line), Character: units}
+}
+
+// tokenRange is the LSP range of a token, on the line it starts on.
+func (d *lspDocument) tokenRange(tok Token) protocol.Range {
+	col := tok.Column - 1
+	return protocol.Range{
+		Start: d.position(tok.Line-1, col),
+		End:   d.position(tok.Line-1, col+utf8.RuneCountInString(tok.Lexeme)),
+	}
 }
 
 type builtinInfo struct {
@@ -137,70 +224,121 @@ func RunLSP(in io.Reader, out io.Writer) error {
 		envNames:  make(map[string]struct{}),
 	}
 
-	if defs, err := loadStdlibDefsForLSP(); err != nil {
+	if files, startupErrs, err := loadStartupFilesForLSP(); err != nil {
 		logLSP(fmt.Sprintf("type-check diagnostics: stdlib unavailable (%v); proceeding without stdlib sigs", err))
 	} else {
-		server.stdlibDefs = defs
+		server.startupFiles, server.startupErrs = files, startupErrs
+		server.stdlibDefs, server.startupDecls = joinStartupFiles(files)
 	}
 
-	server.builtinSigs, server.stdlibHover = buildHoverIndex(server.stdlibDefs)
+	server.builtinSigs, server.stdlibHover = buildHoverIndex(server.base(), server.stdlibDefs)
 
 	return server.run()
 }
 
-// buildHoverIndex renders QuoteSigs for typed builtins and for stdlib
-// definitions into pre-formatted strings keyed by name. The arena and
-// names tables are local to this call; only the formatted strings
-// escape, so we don't carry around the type-checker state.
-func buildHoverIndex(stdlibDefs []MShellDefinition) (map[string][]string, map[string][]string) {
-	arena := NewTypeArena()
-	names := NewNameTable()
-
+// buildHoverIndex formats the signatures of the builtins and of the
+// startup files' definitions, keyed by name. It formats in an overlay, so
+// the base stays frozen.
+func buildHoverIndex(base *CoreBase, stdlibDefs []MShellDefinition) (map[string][]string, map[string][]string) {
+	arena := base.arena.Overlay()
+	rel := NewRelations(arena)
+	std := make(map[string]bool, len(stdlibDefs))
+	for i := range stdlibDefs {
+		std[stdlibDefs[i].Name] = true
+	}
 	builtinSigs := make(map[string][]string)
-	for nameId, sigs := range builtinSigsByName(arena, names) {
-		name := names.Name(nameId)
-		formatted := make([]string, 0, len(sigs))
-		for _, sig := range sigs {
-			formatted = append(formatted, FormatType(arena, names, arena.MakeQuote(sig)))
-		}
-		builtinSigs[name] = formatted
-	}
-
 	stdlibHover := make(map[string][]string, len(stdlibDefs))
-	if len(stdlibDefs) > 0 {
-		checker := NewChecker(arena, names)
-		for i := range stdlibDefs {
-			def := &stdlibDefs[i]
-			sig := checker.ResolveDefSig(def.Inputs, def.Outputs)
-			formatted := FormatType(arena, names, arena.MakeQuote(sig))
-			stdlibHover[def.Name] = append(stdlibHover[def.Name], formatted)
+	for id, sigs := range base.table.byName {
+		if len(sigs) == 0 {
+			continue
+		}
+		name := base.names.Name(NameId(id))
+		formatted := make([]string, len(sigs))
+		for i := range sigs {
+			formatted[i] = formatCoreSig(arena, base.names, rel, &sigs[i])
+		}
+		if std[name] {
+			stdlibHover[name] = formatted
+		} else {
+			builtinSigs[name] = formatted
 		}
 	}
-
+	// A word typed partly by the table and partly by the walker (the dict
+	// form of urlEncode) shows both.
+	for name, sigs := range coreWalkerSigs {
+		for _, s := range sigs {
+			if !slices.Contains(builtinSigs[name], s) {
+				builtinSigs[name] = append(builtinSigs[name], s)
+			}
+		}
+	}
 	return builtinSigs, stdlibHover
 }
 
-// loadStdlibDefsForLSP locates the standard library file (honoring
-// MSHSTDLIB if set, else the version-keyed install path), parses it,
-// and returns its definitions. The bodies are not evaluated; we only
-// need the signatures to register as builtins for the type-checker.
-func loadStdlibDefsForLSP() ([]MShellDefinition, error) {
-	stdlibSpec, _, err := getStartupFileSpecs(startupLoadOptions{
+// lspStartupFile is one startup file's definitions and declarations.
+type lspStartupFile struct {
+	path  string
+	defs  []MShellDefinition
+	decls []MShellParseItem
+}
+
+// loadStartupForLSP reads the startup files for their definitions and
+// declarations, as a script run from the command line sees them: the
+// standard library (honoring MSHSTDLIB), and the user's init file (honoring
+// MSHINIT) if it is there and parses. Bodies are not evaluated; the checker
+// needs only the signatures and declarations.
+func loadStartupForLSP() ([]MShellDefinition, []MShellParseItem, error) {
+	files, _, err := loadStartupFilesForLSP()
+	defs, decls := joinStartupFiles(files)
+	return defs, decls, err
+}
+
+// joinStartupFiles puts files' definitions and declarations together, in
+// load order.
+func joinStartupFiles(files []lspStartupFile) ([]MShellDefinition, []MShellParseItem) {
+	var defs []MShellDefinition
+	var decls []MShellParseItem
+	for _, f := range files {
+		defs = append(defs, f.defs...)
+		decls = append(decls, f.decls...)
+	}
+	return defs, decls
+}
+
+// loadStartupFilesForLSP is loadStartupForLSP, file by file, also giving
+// the error of an init file that does not parse; the server goes on
+// without its definitions, and shows the error on every document, as the
+// command line fails on it. The init file is listed either way, so a
+// document that is the init file is still known as one.
+func loadStartupFilesForLSP() ([]lspStartupFile, []string, error) {
+	stdlibSpec, initSpec, err := getStartupFileSpecs(startupLoadOptions{
 		version:           mshellVersion,
 		allowEnvOverrides: true,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	source, err := os.ReadFile(stdlibSpec.path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	parsed, err := parseMShellInput(string(source), &TokenFile{stdlibSpec.path})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return parsed.Definitions, nil
+	files := []lspStartupFile{{path: stdlibSpec.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items)}}
+	var startupErrs []string
+	if source, err := os.ReadFile(initSpec.path); err == nil {
+		init := lspStartupFile{path: initSpec.path}
+		if parsed, err := parseMShellInput(string(source), &TokenFile{initSpec.path}); err == nil {
+			init.defs, init.decls = parsed.Definitions, declarationItems(parsed.Items)
+		} else {
+			logLSP(fmt.Sprintf("init file %s does not parse (%v); proceeding without it", initSpec.path, err))
+			startupErrs = append(startupErrs, fmt.Sprintf("the init file %s does not parse: %v", initSpec.path, err))
+		}
+		files = append(files, init)
+	}
+	return files, startupErrs, nil
 }
 
 func (s *lspServer) run() error {
@@ -353,6 +491,7 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 			return false, nil
 		}
 		delete(s.documents, params.TextDocument.URI)
+		s.closeDiagnostics(params.TextDocument.URI)
 		// Clear any diagnostics the client was showing for this doc.
 		_ = s.writeNotification("textDocument/publishDiagnostics", protocol.PublishDiagnosticsParams{
 			URI:         params.TextDocument.URI,
@@ -446,21 +585,98 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 	}
 }
 
+// sourceFixAll is the code action kind for fixing every error in a file.
+const sourceFixAll protocol.CodeActionKind = "source.fixAll"
+
 func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.CodeAction {
+	actions := []protocol.CodeAction{}
 	doc, ok := s.documents[params.TextDocument.URI]
-	if !ok || !codeActionKindRequested(params.Context.Only, protocol.RefactorRewrite) {
-		return []protocol.CodeAction{}
-	}
-
-	cursor, ok := lspPositionToRuneOffset(doc.Text, params.Range.Start)
 	if !ok {
-		return []protocol.CodeAction{}
+		return actions
 	}
-
 	parser := NewMShellParser(NewLexer(doc.Text, nil))
 	file, err := parser.ParseFile()
 	if err != nil {
-		return []protocol.CodeAction{}
+		return actions
+	}
+	actions = append(actions, s.typeFixActions(doc, file, params)...)
+	if codeActionKindRequested(params.Context.Only, protocol.RefactorRewrite) {
+		if a, ok := quoteLiteralsAction(doc, file, params); ok {
+			actions = append(actions, a)
+		}
+	}
+	return actions
+}
+
+// typeFixActions offers the fixes the core checker attaches to its errors:
+// each one whose error is in the requested range, as a quick fix, and all
+// of them at once.
+func (s *lspServer) typeFixActions(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) []protocol.CodeAction {
+	quick := codeActionKindRequested(params.Context.Only, protocol.QuickFix)
+	all := codeActionKindRequested(params.Context.Only, sourceFixAll)
+	if !quick && !all {
+		return nil
+	}
+	uri := params.TextDocument.URI
+	errs, arena, names := s.coreErrors(uri, file)
+	var actions []protocol.CodeAction
+	var every []protocol.TextEdit
+	for _, e := range errs {
+		if e.Fix.Kind == FixNone {
+			continue
+		}
+		edit := typeFixEdit(doc, e.Fix)
+		if all {
+			every = append(every, edit)
+		}
+		if !quick {
+			continue
+		}
+		if diag := typeErrorToDiagnostic(doc, e, arena, names); rangesOverlap(diag.Range, params.Range) {
+			actions = append(actions, protocol.CodeAction{
+				Title:       e.Fix.Title,
+				Kind:        protocol.QuickFix,
+				Diagnostics: []protocol.Diagnostic{diag},
+				IsPreferred: true,
+				Edit:        &protocol.WorkspaceEdit{Changes: map[protocol.DocumentURI][]protocol.TextEdit{uri: {edit}}},
+			})
+		}
+	}
+	if all && len(every) > 0 {
+		actions = append(actions, protocol.CodeAction{
+			Title: "Fix every `new` mark in this file",
+			Kind:  sourceFixAll,
+			Edit:  &protocol.WorkspaceEdit{Changes: map[protocol.DocumentURI][]protocol.TextEdit{uri: every}},
+		})
+	}
+	return actions
+}
+
+// typeFixEdit is the text edit of a fix. Each position reads one line
+// only, so fixing every mark of a long file is linear in its size.
+func typeFixEdit(doc *lspDocument, f TypeFix) protocol.TextEdit {
+	start := doc.position(f.At.Line-1, f.At.Column-1)
+	if f.Kind == FixDelete {
+		return protocol.TextEdit{Range: protocol.Range{Start: start, End: doc.position(f.Until.Line-1, f.Until.Column-1)}}
+	}
+	return protocol.TextEdit{Range: protocol.Range{Start: start, End: start}, NewText: f.Text}
+}
+
+// rangesOverlap reports whether two ranges share a position; a range that
+// is a single position overlaps one that contains it.
+func rangesOverlap(a, b protocol.Range) bool {
+	before := func(x, y protocol.Position) bool {
+		return x.Line < y.Line || x.Line == y.Line && x.Character < y.Character
+	}
+	return !before(a.End, b.Start) && !before(b.End, a.Start)
+}
+
+// quoteLiteralsAction offers to quote every bare word in the innermost
+// list literal at the cursor.
+func quoteLiteralsAction(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) (protocol.CodeAction, bool) {
+	cursor, ok := lspPositionToRuneOffset(doc.Text, params.Range.Start)
+	if !ok {
+		return protocol.CodeAction{}, false
 	}
 	lists := collectRuntimeLists(file)
 
@@ -476,12 +692,12 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 		}
 	}
 	if selected == nil {
-		return []protocol.CodeAction{}
+		return protocol.CodeAction{}, false
 	}
 
 	literals := collectListLiterals(selected)
 	if len(literals) == 0 {
-		return []protocol.CodeAction{}
+		return protocol.CodeAction{}, false
 	}
 	edits := make([]protocol.TextEdit, 0, len(literals))
 	for _, tok := range literals {
@@ -491,7 +707,7 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 		})
 	}
 
-	return []protocol.CodeAction{{
+	return protocol.CodeAction{
 		Title: "Quote all literals in list",
 		Kind:  protocol.RefactorRewrite,
 		Edit: &protocol.WorkspaceEdit{
@@ -499,7 +715,7 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 				params.TextDocument.URI: edits,
 			},
 		},
-	}}
+	}, true
 }
 
 func collectRuntimeLists(file *MShellFile) []*MShellParseList {
@@ -707,10 +923,84 @@ func (s *lspServer) updateDocument(uri protocol.DocumentURI, text string) {
 		s.documents[uri] = doc
 	}
 	doc.setText(text)
-	// Run diagnostics asynchronously so the event loop can keep
-	// servicing requests; the write side is mutex-guarded so the
-	// notification interleaves safely with response writes.
-	go s.publishDiagnosticsFor(uri, doc.Text)
+	s.scheduleDiagnostics(uri, doc.Text)
+}
+
+// scheduleDiagnostics checks text off the event loop, so it keeps serving
+// requests; the write side is mutex-guarded so the notification
+// interleaves safely with response writes. Checks of one document do not
+// overlap and are not queued: a check running when an edit arrives is
+// followed by one check of the newest text, and its own result, now out
+// of date, is dropped.
+func (s *lspServer) scheduleDiagnostics(uri protocol.DocumentURI, text string) {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	if s.diag == nil {
+		s.diag = map[protocol.DocumentURI]*lspDiagState{}
+	}
+	st := s.diag[uri]
+	if st == nil {
+		st = &lspDiagState{}
+		s.diag[uri] = st
+	}
+	st.version++
+	st.closed = false
+	if st.running {
+		st.pending, st.next = true, text
+		return
+	}
+	st.running = true
+	go s.diagnosticsLoop(uri, st, text, st.version)
+}
+
+// closeDiagnostics stops a closed document's diagnostics: a check still
+// running publishes nothing.
+func (s *lspServer) closeDiagnostics(uri protocol.DocumentURI) {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	if st := s.diag[uri]; st != nil {
+		st.closed, st.pending, st.next = true, false, ""
+		st.version++
+		if !st.running {
+			delete(s.diag, uri)
+		}
+	}
+}
+
+func (s *lspServer) diagnosticsLoop(uri protocol.DocumentURI, st *lspDiagState, text string, version uint64) {
+	for {
+		diags, ok := s.safeDiagnostics(uri, text)
+		s.diagMu.Lock()
+		current := version == st.version && !st.closed
+		if current && ok {
+			// Published under the lock, so a later check of this
+			// document cannot publish first.
+			s.publishDiagnostics(uri, diags)
+		}
+		if !st.pending {
+			st.running = false
+			if st.closed && s.diag[uri] == st {
+				delete(s.diag, uri)
+			}
+			s.diagMu.Unlock()
+			return
+		}
+		text, version = st.next, st.version
+		st.pending, st.next = false, ""
+		s.diagMu.Unlock()
+	}
+}
+
+// safeDiagnostics is computeDiagnostics, reporting a panic in the checker
+// instead of ending the server.
+func (s *lspServer) safeDiagnostics(uri protocol.DocumentURI, text string) (diags []protocol.Diagnostic, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			logLSP(fmt.Sprintf("diagnostics panicked: %v\n%s", r, debug.Stack()))
+			diags, ok = nil, false
+		}
+	}()
+	return s.computeDiagnostics(uri, text), true
 }
 
 // publishDiagnosticsFor parses the document text and runs the static
@@ -720,7 +1010,10 @@ func (s *lspServer) updateDocument(uri protocol.DocumentURI, text string) {
 // the client. Runs on its own goroutine; it builds a private parser
 // so it doesn't race with handlers using s.parser.
 func (s *lspServer) publishDiagnosticsFor(uri protocol.DocumentURI, text string) {
-	diags := s.computeDiagnostics(text)
+	s.publishDiagnostics(uri, s.computeDiagnostics(uri, text))
+}
+
+func (s *lspServer) publishDiagnostics(uri protocol.DocumentURI, diags []protocol.Diagnostic) {
 	if diags == nil {
 		diags = []protocol.Diagnostic{}
 	}
@@ -733,59 +1026,111 @@ func (s *lspServer) publishDiagnosticsFor(uri protocol.DocumentURI, text string)
 	}
 }
 
-// newChecker returns a type checker with the builtin and stdlib signatures
-// resolved. They are resolved once per server, and each check starts from
-// a copy, since diagnostics run on every edit and may run concurrently.
-func (s *lspServer) newChecker() *Checker {
-	s.checkerBaseOnce.Do(func() { s.checkerBase = NewCheckerBase(s.stdlibDefs) })
-	return s.checkerBase.NewChecker()
+// base returns the type checker's base, built once per server: each check
+// is an overlay of it, since diagnostics run on every edit and may run
+// concurrently.
+func (s *lspServer) base() *CoreBase {
+	s.coreBaseOnce.Do(func() { s.coreBase = NewCoreBase(s.stdlibDefs, s.startupDecls) })
+	return s.coreBase
 }
 
-func (s *lspServer) computeDiagnostics(text string) []protocol.Diagnostic {
+// baseFor returns the base a document is checked with, and the startup
+// errors it shows. A document that is one of the startup files is the
+// program, not a startup file: it is checked with only the startup files
+// before it, as the command line runs it, so its own definitions are not
+// also loaded as the startup file's.
+func (s *lspServer) baseFor(uri protocol.DocumentURI) (*CoreBase, []string) {
+	paths := make([]string, len(s.startupFiles))
+	for i, f := range s.startupFiles {
+		paths[i] = f.path
+	}
+	n := startupFilesBefore(documentPath(uri), paths...)
+	if n == len(paths) {
+		return s.base(), s.startupErrs
+	}
+	s.prefixMu.Lock()
+	defer s.prefixMu.Unlock()
+	if b := s.prefixBases[n]; b != nil {
+		return b, nil
+	}
+	if s.prefixBases == nil {
+		s.prefixBases = map[int]*CoreBase{}
+	}
+	defs, decls := joinStartupFiles(s.startupFiles[:n])
+	b := NewCoreBase(defs, decls)
+	s.prefixBases[n] = b
+	return b, nil
+}
+
+// documentPath is the file a document URI names, or "" for one that is
+// not a file.
+func documentPath(uri protocol.DocumentURI) string {
+	u, err := url.Parse(string(uri))
+	if err != nil || u.Scheme != "file" {
+		return ""
+	}
+	p := u.Path
+	if runtime.GOOS == "windows" && len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		p = p[1:] // /C:/x is C:/x
+	}
+	return filepath.FromSlash(p)
+}
+
+// coreErrors checks file, the text of the document uri.
+func (s *lspServer) coreErrors(uri protocol.DocumentURI, file *MShellFile) ([]TypeError, *TypeArena, *NameTable) {
+	base, _ := s.baseFor(uri)
+	return base.Errors(file)
+}
+
+func (s *lspServer) computeDiagnostics(uri protocol.DocumentURI, text string) []protocol.Diagnostic {
 	lexer := NewLexer(text, nil)
 	parser := NewMShellParser(lexer)
 	file, parseErr := parser.ParseFile()
 	if parseErr != nil {
-		return []protocol.Diagnostic{parseErrorToDiagnostic(parseErr)}
+		doc := &lspDocument{}
+		doc.setText(text)
+		return []protocol.Diagnostic{parseErrorToDiagnostic(doc, parseErr)}
 	}
 
-	checker := s.newChecker()
-	arena, names := checker.arena, checker.names
-	checker.CheckProgram(file)
-
-	errs := checker.Errors()
-	if len(errs) == 0 {
-		return nil
+	var diags []protocol.Diagnostic
+	base, startupErrs := s.baseFor(uri)
+	for _, msg := range append(startupErrs[:len(startupErrs):len(startupErrs)], base.DeclarationErrors()...) {
+		diags = append(diags, protocol.Diagnostic{
+			Range:    protocol.Range{End: protocol.Position{Character: 1}},
+			Severity: protocol.DiagnosticSeverityError,
+			Source:   "mshell",
+			Message:  msg,
+		})
 	}
-	diags := make([]protocol.Diagnostic, 0, len(errs))
-	for _, e := range errs {
-		diags = append(diags, typeErrorToDiagnostic(e, arena, names))
-	}
+	base.diagnose(file, func(errs []TypeError, arena *TypeArena, names *NameTable) {
+		if len(errs) == 0 {
+			return
+		}
+		doc := &lspDocument{}
+		doc.setText(text)
+		for _, e := range errs {
+			diags = append(diags, typeErrorToDiagnostic(doc, e, arena, names))
+		}
+	})
 	return diags
 }
 
-func typeErrorToDiagnostic(e TypeError, arena *TypeArena, names *NameTable) protocol.Diagnostic {
-	line := uint32(0)
-	col := uint32(0)
-	if e.Pos.Line > 0 {
-		line = uint32(e.Pos.Line - 1)
+func typeErrorToDiagnostic(doc *lspDocument, e TypeError, arena *TypeArena, names *NameTable) protocol.Diagnostic {
+	line, col := max(e.Pos.Line-1, 0), max(e.Pos.Column-1, 0)
+	n := utf8.RuneCountInString(e.Pos.Lexeme)
+	if n == 0 {
+		n = 1
 	}
-	if e.Pos.Column > 0 {
-		col = uint32(e.Pos.Column - 1)
-	}
-	endCol := col + uint32(utf8.RuneCountInString(e.Pos.Lexeme))
-	if endCol == col {
-		endCol = col + 1
+	start, end := doc.position(line, col), doc.position(line, col+n)
+	if end == start {
+		end.Character++
 	}
 	severity := protocol.DiagnosticSeverityError
 	if e.Severity == SeverityInfo {
 		severity = protocol.DiagnosticSeverityInformation
 	}
 	return protocol.Diagnostic{
-		Range: protocol.Range{
-			Start: protocol.Position{Line: line, Character: col},
-			End:   protocol.Position{Line: line, Character: endCol},
-		},
+		Range:    protocol.Range{Start: start, End: end},
 		Severity: severity,
 		Source:   "mshell",
 		Message:  stripErrorPrefix(e.Format(arena, names)),
@@ -807,25 +1152,21 @@ func stripErrorPrefix(formatted string) string {
 	return formatted
 }
 
-func parseErrorToDiagnostic(err error) protocol.Diagnostic {
+func parseErrorToDiagnostic(doc *lspDocument, err error) protocol.Diagnostic {
 	msg := err.Error()
-	line, col := uint32(0), uint32(0)
+	line, col := 0, 0
 	// Many parser errors begin with "line:col:" style. Best-effort
 	// extract; fall back to (0,0) on miss so the client still
 	// renders the message somewhere.
 	if l, c, ok := parseLineColPrefix(msg); ok {
-		if l > 0 {
-			line = uint32(l - 1)
-		}
-		if c > 0 {
-			col = uint32(c - 1)
-		}
+		line, col = max(l-1, 0), max(c-1, 0)
+	}
+	start, end := doc.position(line, col), doc.position(line, col+1)
+	if end == start {
+		end.Character++
 	}
 	return protocol.Diagnostic{
-		Range: protocol.Range{
-			Start: protocol.Position{Line: line, Character: col},
-			End:   protocol.Position{Line: line, Character: col + 1},
-		},
+		Range: protocol.Range{Start: start, End: end},
 		Severity: protocol.DiagnosticSeverityError,
 		Source:   "mshell",
 		Message:  msg,
@@ -965,7 +1306,7 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 	clear(s.varNames)
 	clear(s.envNames)
 	positionLine := int(params.Position.Line)
-	positionChar := int(params.Position.Character)
+	positionChar := doc.runeCol(params.Position)
 	var (
 		varPrefix             string
 		varFound              bool
@@ -1054,22 +1395,22 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 	}
 
 	if varFound {
-		return s.completeVariable(varToken, varPrefix), true
+		return s.completeVariable(doc, varToken, varPrefix), true
 	}
 
 	if envFound {
-		return s.completeEnv(envToken, envPrefix), true
+		return s.completeEnv(doc, envToken, envPrefix), true
 	}
 
 	// A lone `$` lexes as a literal (not an env token until a name
 	// follows); treat it as an empty-prefix env completion trigger.
 	if literalFound && literalToken.Lexeme == "$" {
-		return s.completeEnv(literalToken, ""), true
+		return s.completeEnv(doc, literalToken, ""), true
 	}
 
 	if literalFound && literalPrefix != "" {
 		if literalInListFirstPos {
-			return s.completeListFirstLiteral(literalToken, literalPrefix), true
+			return s.completeListFirstLiteral(doc, literalToken, literalPrefix), true
 		}
 		return s.completeWord(literalToken, literalPrefix, doc, defNames), true
 	}
@@ -1079,7 +1420,7 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 
 // completeVariable returns @-prefixed completions for the variables
 // collected during the lexer walk.
-func (s *lspServer) completeVariable(varToken Token, varPrefix string) []protocol.CompletionItem {
+func (s *lspServer) completeVariable(doc *lspDocument, varToken Token, varPrefix string) []protocol.CompletionItem {
 	candidates := s.candsBuf[:0]
 	for name := range s.varNames {
 		if strings.HasPrefix(name, varPrefix) {
@@ -1088,7 +1429,7 @@ func (s *lspServer) completeVariable(varToken Token, varPrefix string) []protoco
 	}
 
 	sort.Strings(candidates)
-	editRange := tokenEditRange(varToken)
+	editRange := doc.tokenRange(varToken)
 	items := make([]protocol.CompletionItem, 0, len(candidates))
 	for _, name := range candidates {
 		label := "@" + name
@@ -1127,7 +1468,7 @@ func envVarName(tok Token) string {
 // variables. Candidates are the actual process environment plus any env
 // names already referenced in the current file (so a `$FOO!` write
 // suggests `$FOO` later even if it is not yet exported to this process).
-func (s *lspServer) completeEnv(envToken Token, envPrefix string) []protocol.CompletionItem {
+func (s *lspServer) completeEnv(doc *lspDocument, envToken Token, envPrefix string) []protocol.CompletionItem {
 	candidates := s.candsBuf[:0]
 	seen := make(map[string]struct{})
 
@@ -1154,7 +1495,7 @@ func (s *lspServer) completeEnv(envToken Token, envPrefix string) []protocol.Com
 	}
 
 	sort.Strings(candidates)
-	editRange := tokenEditRange(envToken)
+	editRange := doc.tokenRange(envToken)
 	items := make([]protocol.CompletionItem, 0, len(candidates))
 	for _, name := range candidates {
 		label := "$" + name
@@ -1175,7 +1516,7 @@ func (s *lspServer) completeEnv(envToken Token, envPrefix string) []protocol.Com
 // completeListFirstLiteral returns PATH-binary completions when the
 // cursor sits on the first literal inside a `[ ... ]` (the typical
 // argv position).
-func (s *lspServer) completeListFirstLiteral(literalToken Token, literalPrefix string) []protocol.CompletionItem {
+func (s *lspServer) completeListFirstLiteral(doc *lspDocument, literalToken Token, literalPrefix string) []protocol.CompletionItem {
 	if s.pathBins == nil {
 		return []protocol.CompletionItem{}
 	}
@@ -1184,7 +1525,7 @@ func (s *lspServer) completeListFirstLiteral(literalToken Token, literalPrefix s
 		return []protocol.CompletionItem{}
 	}
 
-	editRange := tokenEditRange(literalToken)
+	editRange := doc.tokenRange(literalToken)
 	items := make([]protocol.CompletionItem, 0, len(matches))
 	for _, match := range matches {
 		items = append(items, protocol.CompletionItem{
@@ -1269,7 +1610,7 @@ func (s *lspServer) completeWord(literalToken Token, prefix string, doc *lspDocu
 	}
 	sort.Strings(labels)
 
-	editRange := tokenEditRange(literalToken)
+	editRange := doc.tokenRange(literalToken)
 	items := make([]protocol.CompletionItem, 0, len(labels))
 	for _, label := range labels {
 		c := seen[label]
@@ -1298,13 +1639,15 @@ func (s *lspServer) inFileDefSigs(text string) map[string][]string {
 	if len(file.Definitions) == 0 {
 		return nil
 	}
-	checker := s.newChecker()
-	arena, names := checker.arena, checker.names
+	// The file's own type declarations are declared first, so its
+	// signatures may name them.
+	c := s.base().newChecker()
+	c.declareAll(file.Items, map[string]Token{})
 	out := make(map[string][]string, len(file.Definitions))
 	for i := range file.Definitions {
 		def := &file.Definitions[i]
-		sig := checker.ResolveDefSig(def.Inputs, def.Outputs)
-		out[def.Name] = append(out[def.Name], FormatType(arena, names, arena.MakeQuote(sig)))
+		sig := newCoreSig(c.arena, c.res.resolveSig(def.Inputs, def.Outputs))
+		out[def.Name] = append(out[def.Name], formatCoreSig(c.arena, c.names, c.rel, &sig))
 	}
 	return out
 }
@@ -1320,9 +1663,38 @@ func tokenEditRange(tok Token) protocol.Range {
 }
 
 type renameTarget struct {
-	token Token
-	scope []Token
+	token renameTok
+	scope []renameTok
 	name  string
+}
+
+// renameTok is a token that may name a variable: a store, a load, or a
+// name a match pattern binds (binding).
+type renameTok struct {
+	Token
+	binding bool
+}
+
+// varName is the variable a token names, or "".
+func (t renameTok) varName() string {
+	if t.binding {
+		return t.Lexeme
+	}
+	return variableNameFromToken(t.Token)
+}
+
+// nameRange is the range of the name inside the token: without `@` or `!`.
+func (d *lspDocument) nameRange(t renameTok) protocol.Range {
+	col := t.Column - 1
+	n := utf8.RuneCountInString(t.Lexeme)
+	switch {
+	case t.binding:
+	case t.Type == VARRETRIEVE:
+		col, n = col+1, n-1
+	case t.Type == VARSTORE:
+		n--
+	}
+	return protocol.Range{Start: d.position(t.Line-1, col), End: d.position(t.Line-1, col+n)}
 }
 
 func (s *lspServer) findRenameTarget(doc *lspDocument, position protocol.Position) (*renameTarget, error) {
@@ -1334,26 +1706,23 @@ func (s *lspServer) findRenameTarget(doc *lspDocument, position protocol.Positio
 		return nil, newLSPError(jsonrpcCodeInternalError, "failed to parse document: %v", err)
 	}
 
-	scopes := make([][]Token, 0, len(file.Definitions)+1)
+	scopes := make([][]renameTok, 0, len(file.Definitions)+1)
 	scopes = append(scopes, collectScopeTokens(file.Items))
 	for _, def := range file.Definitions {
 		scopes = append(scopes, collectScopeTokens(def.Items))
 	}
 
 	line := int(position.Line)
-	character := int(position.Character)
+	character := doc.runeCol(position)
 
 	for _, scope := range scopes {
 		for _, tok := range scope {
-			if tok.Type != VARSTORE && tok.Type != VARRETRIEVE {
+			if !tokenContainsPosition(tok.Token, line, character) {
 				continue
 			}
-			if !tokenContainsPosition(tok, line, character) {
-				continue
-			}
-			name := variableNameFromToken(tok)
+			name := tok.varName()
 			if name == "" {
-				return nil, newLSPError(jsonrpcCodeInternalError, "failed to determine variable name at %d:%d", tok.Line, tok.Column)
+				continue
 			}
 			return &renameTarget{token: tok, scope: scope, name: name}, nil
 		}
@@ -1372,33 +1741,8 @@ func (s *lspServer) prepareRename(params protocol.PrepareRenameParams) (*protoco
 	if err != nil {
 		return nil, err
 	}
-
-	startChar := uint32(target.token.Column - 1)
-	runeLen := uint32(utf8.RuneCountInString(target.token.Lexeme))
-	if runeLen == 0 {
-		return nil, newLSPError(jsonrpcCodeInternalError, "empty variable token at %d:%d", target.token.Line, target.token.Column)
-	}
-
-	switch target.token.Type {
-	case VARRETRIEVE:
-		if runeLen <= 1 {
-			return nil, newLSPError(jsonrpcCodeInternalError, "invalid variable retrieve token at %d:%d", target.token.Line, target.token.Column)
-		}
-		startChar++
-		runeLen--
-	case VARSTORE:
-		if runeLen <= 1 {
-			return nil, newLSPError(jsonrpcCodeInternalError, "invalid variable store token at %d:%d", target.token.Line, target.token.Column)
-		}
-		runeLen--
-	}
-
-	endChar := startChar + runeLen
-	rng := &protocol.Range{
-		Start: protocol.Position{Line: uint32(target.token.Line - 1), Character: startChar},
-		End:   protocol.Position{Line: uint32(target.token.Line - 1), Character: endChar},
-	}
-	return rng, nil
+	rng := doc.nameRange(target.token)
+	return &rng, nil
 }
 
 func (s *lspServer) rename(params protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
@@ -1416,31 +1760,19 @@ func (s *lspServer) rename(params protocol.RenameParams) (*protocol.WorkspaceEdi
 		return nil, err
 	}
 
-	newName := params.NewName
 	edits := make([]protocol.TextEdit, 0, len(target.scope))
 	for _, tok := range target.scope {
-		if tok.Type != VARSTORE && tok.Type != VARRETRIEVE {
+		if tok.varName() != target.name {
 			continue
 		}
-		if variableNameFromToken(tok) != target.name {
-			continue
+		newText := params.NewName
+		if !tok.binding {
+			var ok bool
+			if newText, ok = replacementTextForToken(tok.Token, params.NewName); !ok {
+				return nil, newLSPError(jsonrpcCodeInternalError, "unable to build replacement for token at %d:%d", tok.Line, tok.Column)
+			}
 		}
-
-		newText, ok := replacementTextForToken(tok, newName)
-		if !ok {
-			return nil, newLSPError(jsonrpcCodeInternalError, "unable to build replacement for token at %d:%d", tok.Line, tok.Column)
-		}
-
-		startChar := uint32(tok.Column - 1)
-		endChar := startChar + uint32(utf8.RuneCountInString(tok.Lexeme))
-
-		edits = append(edits, protocol.TextEdit{
-			Range: protocol.Range{
-				Start: protocol.Position{Line: uint32(tok.Line - 1), Character: startChar},
-				End:   protocol.Position{Line: uint32(tok.Line - 1), Character: endChar},
-			},
-			NewText: newText,
-		})
+		edits = append(edits, protocol.TextEdit{Range: doc.tokenRange(tok.Token), NewText: newText})
 	}
 
 	if len(edits) == 0 {
@@ -1456,17 +1788,23 @@ func (s *lspServer) rename(params protocol.RenameParams) (*protocol.WorkspaceEdi
 	return edit, nil
 }
 
-func collectScopeTokens(items []MShellParseItem) []Token {
-	tokens := make([]Token, 0)
+func collectScopeTokens(items []MShellParseItem) []renameTok {
+	tokens := make([]renameTok, 0)
 	collectTokensFromItems(&tokens, items)
 	return tokens
 }
 
-func collectTokensFromItems(dst *[]Token, items []MShellParseItem) {
+// collectTokensFromItems collects the variable stores and loads in items,
+// in every nested body, and the names match patterns bind. Definitions are
+// parsed at the top level and their bodies are collected separately, so a
+// rename stays in one scope.
+func collectTokensFromItems(dst *[]renameTok, items []MShellParseItem) {
 	for _, item := range items {
 		switch v := item.(type) {
 		case Token:
-			*dst = append(*dst, v)
+			if v.Type == VARSTORE || v.Type == VARRETRIEVE {
+				*dst = append(*dst, renameTok{Token: v})
+			}
 		case *MShellParseList:
 			collectTokensFromItems(dst, v.Items)
 		case *MShellParseDict:
@@ -1474,6 +1812,8 @@ func collectTokensFromItems(dst *[]Token, items []MShellParseItem) {
 				collectTokensFromItems(dst, kv.Value)
 			}
 		case *MShellParseQuote:
+			collectTokensFromItems(dst, v.Items)
+		case *MShellParsePrefixQuote:
 			collectTokensFromItems(dst, v.Items)
 		case *MShellParseFormatString:
 			for _, interpolation := range v.Interpolations {
@@ -1483,11 +1823,47 @@ func collectTokensFromItems(dst *[]Token, items []MShellParseItem) {
 			collectTokensFromItems(dst, v.Indexers)
 		case MShellVarstoreList:
 			for _, t := range v.VarStores {
-				*dst = append(*dst, t)
+				*dst = append(*dst, renameTok{Token: t})
 			}
-			// Note: we intentionally do not descend into MShellDefinition here. Definitions are
-			// parsed at the top level and their bodies are collected separately to preserve scope
-			// boundaries when computing rename targets.
+		case *MShellParseIfBlock:
+			collectTokensFromItems(dst, v.IfBody)
+			for _, ei := range v.ElseIfs {
+				collectTokensFromItems(dst, ei.Condition)
+				collectTokensFromItems(dst, ei.Body)
+			}
+			collectTokensFromItems(dst, v.ElseBody)
+		case *MShellParseMatchBlock:
+			for _, arm := range v.Arms {
+				collectPatternBindings(dst, arm.Pattern)
+				collectTokensFromItems(dst, arm.Body)
+			}
+		case *MShellParseGrid:
+			if v.GridMeta != nil {
+				collectTokensFromItems(dst, []MShellParseItem{v.GridMeta})
+			}
+			for _, row := range v.Rows {
+				collectTokensFromItems(dst, row)
+			}
+		}
+	}
+}
+
+// collectPatternBindings collects the names a match pattern binds: a bare
+// word that is not one of the pattern words, in the pattern or in the list
+// and dict patterns inside it.
+func collectPatternBindings(dst *[]renameTok, pattern []MShellParseItem) {
+	for _, item := range pattern {
+		switch v := item.(type) {
+		case Token:
+			if v.Type == LITERAL && !patternWords[v.Lexeme] && !strings.HasPrefix(v.Lexeme, "...") {
+				*dst = append(*dst, renameTok{Token: v, binding: true})
+			}
+		case *MShellParseList:
+			collectPatternBindings(dst, v.Items)
+		case *MShellParseDict:
+			for _, kv := range v.Items {
+				collectPatternBindings(dst, kv.Value)
+			}
 		}
 	}
 }
@@ -1586,7 +1962,7 @@ func (d *lspDocument) wordAt(pos protocol.Position) (string, protocol.Range) {
 		return "", protocol.Range{}
 	}
 
-	col := max(0, int(pos.Character))
+	col := d.runeCol(pos)
 
 	if col > len(runes) {
 		return "", protocol.Range{}
@@ -1617,10 +1993,7 @@ func (d *lspDocument) wordAt(pos protocol.Position) (string, protocol.Range) {
 	}
 
 	word := string(runes[start:end])
-	rng := protocol.Range{
-		Start: protocol.Position{Line: pos.Line, Character: uint32(start)},
-		End:   protocol.Position{Line: pos.Line, Character: uint32(end)},
-	}
+	rng := protocol.Range{Start: d.position(lineIdx, start), End: d.position(lineIdx, end)}
 	return word, rng
 }
 

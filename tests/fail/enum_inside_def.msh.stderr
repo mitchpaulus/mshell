@@ -1,0 +1,1 @@
+Error parsing file stdin: 2:14: An enum is declared at the top level of a file, not inside a definition, list or quotation.

@@ -1,0 +1,3 @@
+# `square` is not a member of any enum.
+enum Shape = circle float | dot end
+dot match circle r : @r str wl, square s : "sq" wl, dot : "dot" wl end

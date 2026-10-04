@@ -1,0 +1,5 @@
+# A key column named only at run time may be any column, and the runtime
+# refuses a column of lists as a key.
+[| k, v; [1], "a"; [2], "b" |] g!
+["k"] keys!
+@g @keys [{agg: (len), name: "n"}] groupBy drop

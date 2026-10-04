@@ -1,0 +1,3 @@
+def onlyA ({a: int} -- {a: int}) end
+def vals ({str: int} -- ) values (1 + wl) each end
+{a: 1, b: "x"} onlyA vals

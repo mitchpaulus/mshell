@@ -1,0 +1,8 @@
+# Values of different kinds inside a Maybe are unequal, as in a dict:
+# a Maybe of int | null compares with null inside on either side.
+null as int | null just  5 as int | null just = str wl
+5 as int | null just  null as int | null just = str wl
+null as int | null just  null as int | null just = str wl
+{a: null as int | null just} {a: 5 as int | null just} = str wl
+"{\"a\": null, \"b\": 1}" parseJson tryAs {str: int | null} ? d!
+@d :a  @d :b  = str wl

@@ -1,0 +1,6 @@
+# Two defs that call each other both return a new list on every path once
+# each assumes the other's output is new, so both outputs must be marked
+# `new` (the largest consistent marks).
+def evens (int -- [int]) dup 0 = if drop [] else 1 - odds end end
+def odds (int -- [int]) dup 0 = if drop [] else 1 - evens end end
+3 evens len wl

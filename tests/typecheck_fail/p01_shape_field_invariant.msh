@@ -1,0 +1,2 @@
+def setA ({a: int | str} -- ) "a" "x" set drop end
+{a: 1} dup setA :a? 1 + wl

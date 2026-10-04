@@ -2,7 +2,24 @@ package main
 
 import "testing"
 
-// Phase-6 tests: type variables, substitution, generic instantiation.
+// Tests of type variables, the substitution, and equality unification.
+
+// unifyHarness is the substitution and unifier a check uses.
+type unifyHarness struct {
+	arena *TypeArena
+	names *NameTable
+	subst *Substitution
+	uni   *Unifier
+}
+
+func (h *unifyHarness) unify(a, b TypeId) bool { return h.uni.Unify(a, b) }
+
+func newCheckerForUnify() *unifyHarness {
+	arena := NewTypeArena()
+	h := &unifyHarness{arena: arena, names: NewNameTable(), subst: &Substitution{}}
+	h.uni = NewUnifier(arena, h.subst, NewRelations(arena))
+	return h
+}
 
 func TestSubstFreshVarsAreDistinct(t *testing.T) {
 	arena := NewTypeArena()
@@ -113,122 +130,6 @@ func TestApplyRebuildsList(t *testing.T) {
 	}
 }
 
-func TestInstantiatePolymorphicIdentity(t *testing.T) {
-	// Sig: ( T -- T ) — id function. Each call site should get a fresh T.
-	c := newCheckerForUnify()
-	tVar := TypeVarId(0)
-	tType := c.arena.MakeVar(tVar)
-	sig := QuoteSig{
-		Inputs:   []TypeId{tType},
-		Outputs:  []TypeId{tType},
-		Generics: []TypeVarId{tVar},
-	}
-
-	// Call 1: feed it an int.
-	c.stack.Push(TidInt)
-	c.applySig(sig, mkTok(LITERAL, "id"))
-	if errs := c.Errors(); len(errs) != 0 {
-		t.Fatalf("call 1 should not error: %+v", errs)
-	}
-	if c.stack.Len() != 1 || c.stack.Top() != TidInt {
-		t.Fatalf("call 1: expected int on top, got len=%d top=%v",
-			c.stack.Len(), c.stack.Top())
-	}
-
-	// Call 2: feed it a str. Each call gets fresh vars, so no conflict
-	// with the first call's binding.
-	c.stack.Reset()
-	c.stack.Push(TidStr)
-	c.applySig(sig, mkTok(LITERAL, "id"))
-	if errs := c.Errors(); len(errs) != 0 {
-		t.Fatalf("call 2 should not error: %+v", errs)
-	}
-	if c.stack.Len() != 1 || c.stack.Top() != TidStr {
-		t.Fatalf("call 2: expected str on top, got len=%d top=%v",
-			c.stack.Len(), c.stack.Top())
-	}
-}
-
-func TestInstantiatePolymorphicMaybeJust(t *testing.T) {
-	// Sig: ( T -- Maybe[T] ) — the `just` constructor.
-	c := newCheckerForUnify()
-	tVar := TypeVarId(0)
-	tType := c.arena.MakeVar(tVar)
-	maybeT := c.arena.MakeMaybe(tType)
-	sig := QuoteSig{
-		Inputs:   []TypeId{tType},
-		Outputs:  []TypeId{maybeT},
-		Generics: []TypeVarId{tVar},
-	}
-	c.stack.Push(TidInt)
-	c.applySig(sig, mkTok(LITERAL, "just"))
-	if errs := c.Errors(); len(errs) != 0 {
-		t.Fatalf("just should not error: %+v", errs)
-	}
-	want := c.arena.MakeMaybe(TidInt)
-	if c.stack.Top() != want {
-		t.Fatalf("expected Maybe[int] on top, got %v", c.stack.Top())
-	}
-}
-
-func TestInstantiateTwoTypeVars(t *testing.T) {
-	// Sig: ( T U -- {T: U} ) — pair-to-dict.
-	c := newCheckerForUnify()
-	tVar := TypeVarId(0)
-	uVar := TypeVarId(1)
-	tType := c.arena.MakeVar(tVar)
-	uType := c.arena.MakeVar(uVar)
-	dictTU := c.arena.MakeDict(tType, uType)
-	sig := QuoteSig{
-		Inputs:   []TypeId{tType, uType},
-		Outputs:  []TypeId{dictTU},
-		Generics: []TypeVarId{tVar, uVar},
-	}
-	c.stack.Push(TidStr)
-	c.stack.Push(TidInt)
-	c.applySig(sig, mkTok(LITERAL, "pairDict"))
-	if errs := c.Errors(); len(errs) != 0 {
-		t.Fatalf("unexpected errors: %+v", errs)
-	}
-	want := c.arena.MakeDict(TidStr, TidInt)
-	if c.stack.Top() != want {
-		t.Fatalf("expected {str:int}, got %v", c.stack.Top())
-	}
-}
-
-func TestInstantiateConstraintAcrossInputs(t *testing.T) {
-	// Sig: ( T T -- T ) — both inputs must be the same type.
-	c := newCheckerForUnify()
-	tVar := TypeVarId(0)
-	tType := c.arena.MakeVar(tVar)
-	sig := QuoteSig{
-		Inputs:   []TypeId{tType, tType},
-		Outputs:  []TypeId{tType},
-		Generics: []TypeVarId{tVar},
-	}
-
-	// Same types: ok.
-	c.stack.Push(TidInt)
-	c.stack.Push(TidInt)
-	c.applySig(sig, mkTok(LITERAL, "same"))
-	if errs := c.Errors(); len(errs) != 0 {
-		t.Fatalf("(int int) should match (T T): %+v", errs)
-	}
-	if c.stack.Top() != TidInt {
-		t.Fatalf("output should be int")
-	}
-
-	// Different types: error.
-	c.stack.Reset()
-	c.errors = nil
-	c.stack.Push(TidInt)
-	c.stack.Push(TidStr)
-	c.applySig(sig, mkTok(LITERAL, "same"))
-	if len(c.Errors()) == 0 {
-		t.Fatalf("(int str) should not match (T T)")
-	}
-}
-
 func TestApplyComposesQuote(t *testing.T) {
 	// Apply on a quote whose inputs reference a bound var should rebuild
 	// the quote with the var resolved.
@@ -252,47 +153,12 @@ func TestApplyComposesQuote(t *testing.T) {
 	}
 }
 
-func TestApplySkipsQuoteGenericInsideShapeUnion(t *testing.T) {
-	// A quote's own generic must NOT be resolved by Apply, even when it
-	// is bound in the substitution (e.g. its id was reused after a
-	// rollback). The generics-skip set has to reach the var no matter
-	// how deeply it is nested. Here the generic sits inside
-	// Maybe -> union -> list -> list -> shape, so this exercises the
-	// shape and union threading specifically.
-	c := freshChecker()
-	arena := c.arena
-	v := c.subst.FreshVar(arena)
-	vid := TypeVarId(arena.Node(v).A)
-
-	cell := arena.MakeUnion([]TypeId{TidBool, TidStr, arena.MakeMaybe(v)}, 0)
-	shape := arena.MakeShape([]ShapeField{
-		{Name: c.names.Intern("data"), Type: arena.MakeList(arena.MakeList(cell))},
-	})
-	q := arena.MakeQuote(QuoteSig{
-		Inputs:   []TypeId{shape},
-		Generics: []TypeVarId{vid},
-	})
-
-	// Simulate id reuse: the generic's slot gets bound to some unrelated
-	// concrete type after the quote was built.
-	if !c.subst.Bind(arena, vid, TidInt) {
-		t.Fatalf("Bind should succeed")
-	}
-
-	// Because vid is the quote's own generic, Apply must leave the quote
-	// untouched — resolving it would bake TidInt into the stored sig.
-	if got := c.subst.Apply(arena, q); got != q {
-		t.Fatalf("Apply must skip a quote's own generic nested in a shape/union; got %s, want %s",
-			FormatType(arena, c.names, got), FormatType(arena, c.names, q))
-	}
-}
-
 func TestFormatTypeVar(t *testing.T) {
 	arena := NewTypeArena()
 	names := NewNameTable()
 	v := arena.MakeVar(TypeVarId(7))
 	got := FormatType(arena, names, v)
-	if got != "T7" {
-		t.Fatalf("expected T7, got %q", got)
+	if got != "_" {
+		t.Fatalf("expected _, got %q", got)
 	}
 }

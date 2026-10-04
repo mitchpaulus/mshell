@@ -1,0 +1,1 @@
+def f (bool -- never | str) drop "a" end

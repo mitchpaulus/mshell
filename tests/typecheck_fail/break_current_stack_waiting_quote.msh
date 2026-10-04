@@ -1,0 +1,4 @@
+# A quote literal below map on a Maybe is still waiting for its consumer
+# when the quote's break leaves the loop. It must be typed on its own first:
+# ("a" +) is not the (int -- int) the loop's stack holds.
+(1 +) ( drop ("a" +) 5 just (drop break) map drop ) loop  2 swap x wl

@@ -1,0 +1,13 @@
+# A quote from completionDefs runs its definition as a call: the body's
+# variables are its own, and `return` leaves only the definition.
+def zzCompletion { 'complete': ['zz'] } ([str] -- new CompletionResult)
+    n!
+    @n len 0 = if ['first'] return end
+    ['later']
+end
+def run ( -- int)
+    [] completionDefs "zz" get ? 0 nth x drop
+    5
+end
+7 n!
+run @n + str wl

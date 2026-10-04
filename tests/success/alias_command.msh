@@ -1,0 +1,6 @@
+# An alias of a list type is a command like the list type it names.
+type Cmd = [str]
+def run (Cmd -- ) ; end
+def capture (Cmd -- str) deepCopy * ; end
+["echo" "hi"] run
+["echo" "there"] capture trim wl

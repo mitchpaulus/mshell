@@ -1,0 +1,3 @@
+# A parameter that only mentions a generic ([t] in + on lists) is not a
+# quote, so two quote literals do not fit it.
+(1) (2) + drop

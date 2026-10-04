@@ -1,0 +1,3 @@
+# As quote_infer_if_arm_input, with a match.
+( 2 match 1 : drop, _ : , end ) q!
+5 "x" @q x 1 + wl

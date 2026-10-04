@@ -1,2 +1,1 @@
-2:1 format string
-2:11: Format string interpolation must produce a str, path, or int, got Float.
+type error at line 2, column 11: '1.5' expected int | str | path at argument 0, got float

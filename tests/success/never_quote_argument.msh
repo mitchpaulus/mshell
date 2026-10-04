@@ -1,0 +1,2 @@
+def apply ((str -- int) bool -- int) if "x" swap x else drop 0 end end
+(wle 1 exit) false apply str wl

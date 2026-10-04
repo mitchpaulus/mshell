@@ -164,8 +164,8 @@ func (pbm *PathBinManager) DebugList() *MShellList {
 	l := NewList(len(keys))
 	for i, key := range keys {
 		innerList := NewList(2)
-		innerList.Items[0] = &MShellString{key}
-		innerList.Items[1] = &MShellString{pbm.binaryPaths[key]}
+		innerList.Items[0] = MShellString{key}
+		innerList.Items[1] = MShellString{pbm.binaryPaths[key]}
 		l.Items[i] = innerList
 	}
 	return l

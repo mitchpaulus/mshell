@@ -1,0 +1,3 @@
+def f ({str: int} -- ) drop end
+{a: 1} d!
+@d f

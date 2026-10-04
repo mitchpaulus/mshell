@@ -1,0 +1,1 @@
+"a\nb" lines 1 skip as [str | int] 5 append str wl

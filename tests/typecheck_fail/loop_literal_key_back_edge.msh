@@ -1,0 +1,4 @@
+# A literal key below a loop is replaced by the body: on the next run the
+# slot holds what the body left.
+{"a": 1, "b": "s"} d!
+"a" ( dup @d swap get ? 1 + wl drop "b" ) loop

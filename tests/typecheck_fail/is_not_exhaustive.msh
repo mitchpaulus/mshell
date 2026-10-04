@@ -1,0 +1,7 @@
+# An `is T` arm covers a member of the matched type only when the member is
+# equivalent to T: [Json] is not [Person], so the list member is not covered.
+type Person = {name: str, age: int, friends: [Person]}
+5 as int | [Json] match
+    is int n : @n,
+    is [Person] ps : @ps len,
+end wl

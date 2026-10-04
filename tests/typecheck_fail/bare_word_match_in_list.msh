@@ -1,0 +1,2 @@
+# As bare_word_if_in_list, in a match arm.
+[ 1 match 1 : foo, _ : bar, end ] str wl

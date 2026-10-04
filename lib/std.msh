@@ -3,7 +3,9 @@
 # type numeric int | float
 
 def chunk ([a] int -- [[a]])
-    [] chunkAcc
+    n!
+    @n 0 <= if $"chunk: the chunk size must be positive, got {@n}" wle 1 exit end
+    @n [] chunkAcc
 end
 
 def chunkAcc([a] int [[a]] -- [[a]])
@@ -33,11 +35,11 @@ def toCsv ([[str]] -- str)
 end
 
 def enumerate ([a] -- [{"item": a, "index": int }])
-    dup len seq (a!, i! { "item": @a, "index": @i }) zip
+    dup len seq (a!, i! { "item": @a, "index": @i } as {"item": a, "index": int}) zip
 end
 
 def enumerateN ([a] int -- [{"item": a, "index": int }])
-    start! dup len seq (@start +) map (a!, i! { "item": @a, "index": @i }) zip
+    start! dup len seq (@start +) map (a!, i! { "item": @a, "index": @i } as {"item": a, "index": int}) zip
 end
 
 def 2each (T T (T -- b) -- b b)
@@ -161,7 +163,7 @@ end
 def sumInt ([int] -- int) sum end
 
 # [s]tdin [l]ines
-def sl (-- [str]) stdin lines end
+def sl (-- new [str]) stdin lines end
 
 def ttFile (str|path -- [[str]])
     readFile lines (tab split) map
@@ -266,13 +268,13 @@ end
 
 
 def tab (-- str) "	" end
-def tsplit (str -- [str])  tab split end
+def tsplit (str -- new [str])  tab split end
 def tjoin ([str] -- str)  tab join end
 
 def cjoin ([str] -- str) "," join end
 
 # Build an SVG path "d" string from [x y] pairs.
-def toSvgPathStr ([[numeric]] -- str)
+def toSvgPathStr ([[int | float]] -- str)
     points!
     @points len 0 = if
         ""
@@ -351,11 +353,11 @@ def all ([T] (T -- bool) -- bool)
     quote! (@quote x not) any not
 end
 
-def isoDateFmt (date -- str)
+def isoDateFmt (datetime -- str)
     "2006-01-02" dateFmt
 end
 
-def isoDateTimeFmt (date -- str)
+def isoDateTimeFmt (datetime -- str)
     "2006-01-02T15:04:05" dateFmt
 end
 
@@ -382,18 +384,18 @@ def repeat (a int -- [a])
     @count seq (drop @item) map
 end
 
-def htmlDescendents (dict -- [dict])
+def htmlDescendents (HtmlNode -- [HtmlNode])
     [] htmlDescendentsAcc
 end
 
 # Accumulator version
-def htmlDescendentsAcc (dict [dict] -- [dict])
+def htmlDescendentsAcc (HtmlNode [HtmlNode] -- [HtmlNode])
     node!, accum!
     @node "children" get? (c! @c @accum htmlDescendentsAcc drop) each
     @accum @node append
 end
 
-def findByTag (dict str -- [dict])
+def findByTag (HtmlNode str -- [HtmlNode])
   tag! htmlDescendents ("tag" get (@tag =) map false maybe) filter
 end
 
@@ -419,9 +421,9 @@ def cartesian ([[a]] [a] -- [[a]])
     concat
 end
 
-def listToDict ([a] (a -- str) (a -- b) -- c)
+def listToDict ([a] (a -- str) (a -- b) -- {b})
     l!, keyFunc!, valFunc!
-    {} d!
+    {} as {b} d!
     @l
     (
         item!
@@ -433,7 +435,7 @@ def listToDict ([a] (a -- str) (a -- b) -- c)
     @d
 end
 
-def 2tuple (a b -- [a | b])
+def 2tuple (a a -- [a])
     [] rot append swap append
 end
 
@@ -455,7 +457,7 @@ def parseBin (str -- Maybe[int]) 2 fromBase end
 # msh {{{
 def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
-    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c' '-'] options!
+    ['-h' '--help' '--html' '--lex' '--parse' '--type-check-only' '--version' '-c' '-'] options!
     ['lsp' 'bin' 'edit' 'completions'] subcommands!
 
     @input len 0 > if
@@ -719,7 +721,7 @@ def __gitOptionsForSubcmd (str -- [str])
 end
 
 # Prefer untracked files for git add completions, then changed files, then repo files.
-def __gitAddFilePaths ( -- [str])
+def __gitAddFilePaths ( -- new [str])
     ['git' 'status' '--porcelain'] * ; lines (trim len 0 >) filter ('->' in not) filter (3:) map
 end
 
@@ -798,7 +800,7 @@ def __gitCompletion { 'complete': ['git'] } ([str] -- [str])
 end
 # }}}
 # fd {{{
-def __fdDefaultOptions ( -- [str])
+def __fdDefaultOptions ( -- new [str])
     [
         '-h' '--help' '-V' '--version' '-H' '--hidden' '-I' '--no-ignore' '-u' '--unrestricted'
         '-g' '--glob' '-t' '--type' '-e' '--extension' '-x' '--exec' '-X' '--exec-batch'
@@ -810,7 +812,7 @@ def __fdDefaultOptions ( -- [str])
     ]
 end
 
-def __fdCompletion { 'complete': ['fd'] } ([str] -- [str])
+def __fdCompletion { 'complete': ['fd'] } ([str] -- new [str])
     input! @input len 0 > if
         @input :-1: last!
         ['-t' '--type'] (@last =) any if
@@ -824,7 +826,7 @@ def __fdCompletion { 'complete': ['fd'] } ([str] -- [str])
 end
 # }}}
 # ssh {{{
-def __sshHosts ( -- [str])
+def __sshHosts ( -- new [str])
     # Parse ~/.ssh/config for Host entries
     $"{$HOME}/.ssh/config" configPath!
     @configPath fileExists if
@@ -839,7 +841,7 @@ def __sshHosts ( -- [str])
     end
 end
 
-def __sshDefaultOptions ( -- [str])
+def __sshDefaultOptions ( -- new [str])
     [
         '-4' '-6' '-A' '-a' '-B' '-b' '-C' '-c' '-D' '-E' '-e' '-F' '-f' '-G' '-g'
         '-I' '-i' '-J' '-K' '-k' '-L' '-l' '-M' '-m' '-N' '-n' '-O' '-o' '-P' '-p'
@@ -847,7 +849,7 @@ def __sshDefaultOptions ( -- [str])
     ]
 end
 
-def __sshOptionArgs ( -- {[str]})
+def __sshOptionArgs ( -- new {[str]})
     {
         '-c': ['aes128-ctr' 'aes192-ctr' 'aes256-ctr' 'aes128-gcm@openssh.com' 'aes256-gcm@openssh.com' 'chacha20-poly1305@openssh.com'],
         '-e': ['^' 'none'],
@@ -866,7 +868,12 @@ def __sshCompletion { 'complete': ['ssh'] } ([str] -- [str])
         '-J' @last = if
             __sshHosts
         else
-            __sshOptionArgs @last get (__sshDefaultOptions __sshHosts extend) maybe
+            # A match, not maybe: maybe would give the quote itself back, and
+            # the hosts are only looked up when needed.
+            __sshOptionArgs @last get match
+                just optionArgs : @optionArgs,
+                none : __sshDefaultOptions __sshHosts extend
+            end
         end
     else
         __sshDefaultOptions __sshHosts extend
@@ -874,7 +881,7 @@ def __sshCompletion { 'complete': ['ssh'] } ([str] -- [str])
 end
 # }}}
 # rg {{{
-def __rgDefaultOptions ( -- [str])
+def __rgDefaultOptions ( -- new [str])
     [
         '-h' '--help' '--version' '-g' '--glob' '-F' '--fixed-strings' '-e' '--regexp'
         '-i' '--ignore-case' '-S' '--smart-case' '-s' '--case-sensitive' '-U' '--multiline'
@@ -891,7 +898,7 @@ def __rgDefaultOptions ( -- [str])
     ]
 end
 
-def __rgCompletion { 'complete': ['rg'] } ([str] -- [str])
+def __rgCompletion { 'complete': ['rg'] } ([str] -- new [str])
     input!
     @input len 0 > if
         @input :-1: last!
@@ -1090,13 +1097,13 @@ end
 # }}}
 # cargo {{{
 # Options valid both at the top level and after any subcommand.
-def __cargoCommonOptions ( -- [str])
+def __cargoCommonOptions ( -- new [str])
     ['-h' '--help' '-V' '--version' '-v' '--verbose' '-q' '--quiet'
      '--color' '--config' '-Z' '--frozen' '--locked' '--offline']
 end
 
 # Parse `cargo --list` for the available subcommands (includes installed third-party ones).
-def __cargoSubcommands ( -- [str])
+def __cargoSubcommands ( -- new [str])
     ['cargo' '--list'] * ^ ; drop lines
     (' ' startsWith) filter
     (trim) map
@@ -1105,7 +1112,7 @@ def __cargoSubcommands ( -- [str])
 end
 
 # Installed targets from rustup if available, otherwise all targets known to rustc.
-def __cargoTargets ( -- [str])
+def __cargoTargets ( -- new [str])
     ['rustup' 'target' 'list'] * ^ ? code! drop out!
     @code 0 = if
         @out lines ('(installed)' in) filter (wsplit :0:) map
@@ -1115,7 +1122,7 @@ def __cargoTargets ( -- [str])
 end
 
 # Feature names from the current crate's manifest.
-def __cargoFeatures ( -- [str])
+def __cargoFeatures ( -- new [str])
     ['cargo' 'read-manifest'] * ^ ; drop out!
     @out trim len 0 > if
         @out parseJson match
@@ -1131,7 +1138,7 @@ def __cargoFeatures ( -- [str])
 end
 
 # Workspace package names from cargo metadata.
-def __cargoPackages ( -- [str])
+def __cargoPackages ( -- new [str])
     ['cargo' 'metadata' '--no-deps' '--format-version' '1'] * ^ ; drop out!
     @out trim len 0 > if
         @out parseJson match
@@ -1154,7 +1161,7 @@ end
 
 # cargo prints the available target names to stderr when the flag is given no value,
 # e.g. `cargo run --bin` lists "Available binaries:" with one indented name per line.
-def __cargoTargetNames (str -- [str])
+def __cargoTargetNames (str -- new [str])
     flag!
     { 'bin': 'run', 'example': 'run', 'test': 'test', 'bench': 'bench' } @flag 'run' getDef subcmd!
     ['cargo' @subcmd $"--{@flag}"] * ^ ; err! drop
@@ -1162,7 +1169,7 @@ def __cargoTargetNames (str -- [str])
 end
 
 # Crates listed by `cargo install --list`; unindented lines are "name vX.Y.Z:".
-def __cargoInstalled ( -- [str])
+def __cargoInstalled ( -- new [str])
     ['cargo' 'install' '--list'] * ^ ; drop lines
     (len 0 >) filter
     (' ' startsWith not) filter

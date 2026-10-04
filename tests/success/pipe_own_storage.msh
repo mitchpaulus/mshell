@@ -1,0 +1,6 @@
+# A pipe has its own storage: changing the list it was made from later
+# does not change the pipe.
+[[echo a] [cat]] c!
+@c | p!
+@c [echo b] 0 setAt drop
+@p ;

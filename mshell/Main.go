@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	// "bufio"
 	"golang.org/x/term"
+	"slices"
 	"strings"
 	// "runtime/pprof"
 	// "runtime/trace"
@@ -59,6 +60,10 @@ type startupLoadOptions struct {
 	version            string
 	allowEnvOverrides  bool
 	requireInit        bool
+	// script is the path of the file being run or checked, or "". When it
+	// is one of the startup files, that file is the program: it and the
+	// files after it are not loaded (startupFilesBefore).
+	script string
 }
 
 func getStartupDataDir() (string, error) {
@@ -180,8 +185,16 @@ func loadStartupFile(path string, description string, stack *MShellStack, contex
 		return fmt.Errorf("error parsing %s at %s: %w", description, path, err)
 	}
 
+	// Definitions first: a failed enum registration then records nothing.
+	if err := state.CheckDefinitionNames(*definitions, parsedFile.Definitions); err != nil {
+		return fmt.Errorf("error loading %s at %s: %s", description, path, strings.TrimSpace(err.Error()))
+	}
+	if err := state.RegisterDeclarations(parsedFile.Items, append(slices.Clone(*definitions), parsedFile.Definitions...)); err != nil {
+		return fmt.Errorf("error loading %s at %s: %s", description, path, strings.TrimSpace(err.Error()))
+	}
 	*definitions = append(*definitions, parsedFile.Definitions...)
 	state.AddCompletionDefinitions(parsedFile.Definitions)
+	state.StartupDecls = append(state.StartupDecls, declarationItems(parsedFile.Items)...)
 
 	if len(parsedFile.Items) > 0 {
 		callStackItem := CallStackItem{
@@ -264,6 +277,10 @@ func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, cont
 	}
 
 	definitions := make([]MShellDefinition, 0)
+	n := startupFilesBefore(options.script, stdlibSpec.path, initSpec.path)
+	if n == 0 {
+		return definitions, nil
+	}
 	if err := loadStartupFile(stdlibSpec.path, stdlibSpec.description, stack, context, state, &definitions); err != nil {
 		initStatus := preflightStartupFile(initSpec)
 		return nil, &startupLoadError{
@@ -276,6 +293,9 @@ func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, cont
 		}
 	}
 
+	if n == 1 {
+		return definitions, nil
+	}
 	if err := loadStartupFile(initSpec.path, initSpec.description, stack, context, state, &definitions); err != nil {
 		if !initSpec.required && errors.Is(err, os.ErrNotExist) {
 			return definitions, nil
@@ -284,6 +304,27 @@ func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, cont
 	}
 
 	return definitions, nil
+}
+
+// startupFilesBefore is how many of the startup files, in the order they
+// load, come before script: all of them, unless script is one of them.
+// Then that file is the program being run or checked, and loading it as a
+// startup file too would define everything in it twice; the files after it
+// may use it, so they are left out as well.
+func startupFilesBefore(script string, paths ...string) int {
+	if script == "" {
+		return len(paths)
+	}
+	info, err := os.Stat(script)
+	if err != nil {
+		return len(paths)
+	}
+	for i, p := range paths {
+		if pi, err := os.Stat(p); err == nil && os.SameFile(info, pi) {
+			return i
+		}
+	}
+	return len(paths)
 }
 
 // formatStartupErrorMessage builds a multi-line explanation of how msh searches
@@ -513,7 +554,8 @@ func main() {
 	var inputFile *TokenFile
 	inputFile = nil
 	inputFilePath := ""
-	checkTypes := false // --check-types: gate execution with the new Checker (Phase 10 step 3)
+	// A script is type checked, and runs only if it checks (plan question
+	// 26). --check-types is accepted and changes nothing.
 	typeCheckOnly := false
 	inputFromStdin := false
 
@@ -529,9 +571,8 @@ func main() {
 			command = CLILEX
 			// printLex = true
 		} else if arg == "--check-types" {
-			checkTypes = true
+			// Checking is the default; kept so existing command lines work.
 		} else if arg == "--type-check-only" {
-			checkTypes = true
 			typeCheckOnly = true
 		} else if arg == "--parse" {
 			command = CLIPARSE
@@ -553,8 +594,7 @@ func main() {
 			fmt.Println("  --html       Render the input as HTML")
 			fmt.Println("  --lex        Print the tokens lexed from the input")
 			fmt.Println("  --parse      Print the parsed Abstract Syntax Tree as JSON")
-			fmt.Println("  --check-types Run the new static type checker as a gate before evaluation (Phase 10 preview)")
-			fmt.Println("  --type-check-only Run the new static type checker and exit without evaluation")
+			fmt.Println("  --type-check-only Type check the input and exit without running it")
 			// fmt.Println("  --typecheck  Type check the input and report any errors") Ignore this for now.
 			fmt.Println("  --version    Print version information and exit")
 			fmt.Println("  -c INPUT     Execute INPUT as the program, before positional args")
@@ -725,6 +765,7 @@ func main() {
 		}
 		termState.evalState.EnvironmentHistory()
 
+		PrebuildCoreBuiltins()
 		err = termState.InteractiveMode()
 		if err != nil {
 			fmt.Fprint(os.Stderr, err.Error())
@@ -734,6 +775,12 @@ func main() {
 		}
 
 		return
+	}
+
+	if command == CLIEXECUTE {
+		// Every script is checked; the table is built while it is read and
+		// the startup files load.
+		PrebuildCoreBuiltins()
 	}
 
 	if !inputSet {
@@ -847,32 +894,38 @@ func main() {
 		version:           effectiveVersion,
 		allowEnvOverrides: allowStartupEnvOverrides,
 		requireInit:       requireVersionedInit,
+		script:            inputFilePath,
 	}, &stack, context, &state)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, formatStartupErrorMessage(err, inputFilePath, file.Version, file.VersionLine, file.VersionCol))
 		os.Exit(1)
 		return
 	}
+	if err := state.CheckDefinitionNames(startupDefinitions, file.Definitions); err != nil {
+		fmt.Fprint(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	if err := state.RegisterDeclarations(file.Items, append(slices.Clone(startupDefinitions), file.Definitions...)); err != nil {
+		fmt.Fprint(os.Stderr, err.Error())
+		os.Exit(1)
+	}
 	allDefinitions = append(allDefinitions, startupDefinitions...)
 	allDefinitions = append(allDefinitions, file.Definitions...)
 	state.AddCompletionDefinitions(file.Definitions)
 
-	if checkTypes {
-		errs, ok := TypeCheckProgram(file, startupDefinitions)
-		if !ok {
-			for _, e := range errs {
-				fmt.Fprintln(os.Stderr, e)
-			}
+	// The program runs only if it type checks.
+	errs, ok := CoreTypeCheckProgram(file, startupDefinitions, state.StartupDecls)
+	for _, e := range errs {
+		fmt.Fprintln(os.Stderr, e)
+	}
+	if typeCheckOnly {
+		if ok {
+			os.Exit(0)
 		}
-		if typeCheckOnly {
-			if ok {
-				os.Exit(0)
-			}
-			os.Exit(1)
-		}
-		if !ok {
-			os.Exit(1)
-		}
+		os.Exit(1)
+	}
+	if !ok {
+		os.Exit(1)
 	}
 
 	if len(file.Items) == 0 {
@@ -972,6 +1025,8 @@ type TermState struct {
 	evalState         EvalState
 	callStack         CallStack
 	stdLibDefs        []MShellDefinition
+	// checker checks each line before it runs; nil when checking is off.
+	checker *replChecker
 	initCallStackItem CallStackItem
 	// pathBinManager IPathBinManager
 
@@ -2362,6 +2417,9 @@ func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args [
 			completionList.Items[i] = MShellString{Content: arg}
 		}
 		completionStack := MShellStack{completionList}
+		// A def runs in a scope of its own, as a call to it would: the REPL's
+		// variables are not its to change.
+		completionContext.Variables = map[string]MShellObject{}
 		callStackItem := CallStackItem{MShellParseItem: def.NameToken, Name: def.Name, CallStackType: CALLSTACKDEF}
 		result := state.evalState.Evaluate(def.Items, &completionStack, completionContext, state.stdLibDefs, callStackItem)
 		if !result.Success {
@@ -3411,6 +3469,19 @@ func (state *TermState) InteractiveMode() error {
 
 	state.stdLibDefs = stdLibDefs
 
+	checker, startupErrs := newReplChecker(stdLibDefs, state.evalState.StartupDecls, len(state.stack), state.context.Variables)
+	state.checker = checker
+	if len(startupErrs) > 0 {
+		state.leaveRawMode()
+		fmt.Fprintln(os.Stderr, "Type errors in the startup files; a line that calls a definition with one is refused:")
+		for _, e := range startupErrs {
+			fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
+		}
+		if err := state.enterRawMode(); err != nil {
+			return err
+		}
+	}
+
 	history = make([]string, 0)
 	state.historyIndex = 0
 
@@ -3801,6 +3872,34 @@ ParseError:
 	// So want them to see non-raw mode terminal state.
 	state.leaveRawMode()
 
+	// An enum declared on this line constructs values on later lines.
+	// Definitions first: a failed enum registration then records nothing,
+	// so the corrected line can be entered again.
+	if err := state.evalState.CheckDefinitionNames(state.stdLibDefs, parsed.Definitions); err != nil {
+		fmt.Fprint(os.Stderr, terminalSafeText(err.Error(), true))
+		goto PromptPrint
+	}
+	// The line runs only if it checks (plan stage 9).
+	if state.checker != nil {
+		msgs, ok := state.checker.check(parsed)
+		for _, m := range msgs {
+			fmt.Fprintln(os.Stderr, terminalSafeText(m, true))
+		}
+		if !ok {
+			goto PromptPrint
+		}
+	}
+	if err := state.evalState.RegisterDeclarations(parsed.Items, append(slices.Clone(state.stdLibDefs), parsed.Definitions...)); err != nil {
+		if state.checker != nil {
+			state.checker.abort()
+		}
+		fmt.Fprint(os.Stderr, terminalSafeText(err.Error(), true))
+		goto PromptPrint
+	}
+	if state.checker != nil {
+		state.checker.commit(state.stack)
+	}
+
 	if len(parsed.Definitions) > 0 {
 		state.stdLibDefs = append(state.stdLibDefs, parsed.Definitions...)
 		state.evalState.AddCompletionDefinitions(parsed.Definitions)
@@ -3808,15 +3907,35 @@ ParseError:
 
 	if len(parsed.Items) > 0 {
 		state.initCallStackItem.MShellParseItem = parsed.Items[0]
+		state.evalState.ReturnedAtTop = false
 		result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem)
 
 		if result.ExitCalled {
 			return true, result.ExitCode
 		}
+		// A top-level return ends the session, as it ends a script.
+		if result.Success && state.evalState.ReturnedAtTop {
+			return true, 0
+		}
 
 		if !result.Success {
 			fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
+			if state.checker != nil {
+				if dropped := state.checker.failed(&state.stack); dropped > 0 {
+					fmt.Fprintln(os.Stderr, droppedNote(dropped))
+				}
+			}
 		}
+	}
+	// Getting here is a bug, and the checker's picture of the stack cannot
+	// be trusted: clear the stack, which the checker can follow, or exit.
+	if state.checker != nil && !state.checker.inSync(state.stack) {
+		fmt.Fprint(os.Stderr, lostTrackMessage(state.checker.session.Len(), len(state.stack)))
+		if !lostTrackClears(readPromptFromTTY) {
+			return true, 1
+		}
+		state.stack = state.stack[:0]
+		state.checker.clearStack()
 	}
 
 PromptPrint:
@@ -4651,12 +4770,16 @@ func HtmlFromInput(input string) string {
 
 	sb := strings.Builder{}
 	sb.WriteString("<code>")
-	for _, t := range tokens {
+	for i, t := range tokens {
 		if t.Type == WHITESPACE {
 			sb.WriteString(t.Lexeme)
 		} else {
 			sb.WriteString("<span class=\"mshell")
-			sb.WriteString(t.Type.String())
+			if htmlBaseTypeName(tokens, i) {
+				sb.WriteString("BASETYPE")
+			} else {
+				sb.WriteString(t.Type.String())
+			}
 			sb.WriteString("\">")
 			sb.WriteString(html.EscapeString(t.Lexeme))
 			sb.WriteString("</span>")
@@ -4664,6 +4787,25 @@ func HtmlFromInput(input string) string {
 	}
 	sb.WriteString("</code>")
 	return sb.String()
+}
+
+// htmlBaseTypeName reports whether tokens[i] is a base type name that the
+// lexer reads as a plain literal. A name followed by ':' is a dictionary key.
+func htmlBaseTypeName(tokens []Token, i int) bool {
+	if tokens[i].Type != LITERAL {
+		return false
+	}
+	switch tokens[i].Lexeme {
+	case "path", "datetime", "binary", "null":
+	default:
+		return false
+	}
+	for _, next := range tokens[i+1:] {
+		if next.Type != WHITESPACE {
+			return next.Type != COLON
+		}
+	}
+	return true
 }
 
 func runBinCommand(args []string) int {

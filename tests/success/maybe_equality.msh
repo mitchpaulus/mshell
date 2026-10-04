@@ -1,0 +1,8 @@
+# Maybe values compare by contents: none equals none, just compares payloads.
+none none = str wl
+"x" just "x" just = str wl
+5 just 5 just = str wl
+5 just 6 just = str wl
+5 just none = str wl
+none 5 just = str wl
+5 just 5 just != str wl

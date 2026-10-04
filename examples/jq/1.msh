@@ -1,1 +1,1 @@
-stdin parseJson 'name' get wl
+stdin parseJson tryAs {name: str} ? :name? wl

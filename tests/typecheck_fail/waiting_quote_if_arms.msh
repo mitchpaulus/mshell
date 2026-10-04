@@ -1,0 +1,3 @@
+# A quote literal waiting below an if is run in both arms; the first arm
+# must not decide its type for the other.
+"s" (1) false if x drop else x end "t" + wl

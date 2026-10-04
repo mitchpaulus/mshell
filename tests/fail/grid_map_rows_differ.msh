@@ -1,0 +1,6 @@
+# map on a grid takes its columns from the first row; a later row without one
+# is a checked failure (it used to leave a Go nil in the column).
+true if [| a, b; 1, [1] |] else [| a; 2 |] end g1!
+false if [| a, b; 1, [1] |] else [| a; 2 |] end g2!
+[| i; 0; 1 |] (:i? 0 = if @g1 :0: else @g2 :0: end) map h!
+@h "b" gridCol len str wl

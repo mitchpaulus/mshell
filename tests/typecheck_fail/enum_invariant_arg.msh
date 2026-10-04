@@ -1,0 +1,5 @@
+# Box is invariant in its parameter: the payload is a list.
+enum Box[a] = box [a] | empty end
+[1] box as Box[int] b!
+def wide (Box[int | str] -- ) drop end
+@b wide

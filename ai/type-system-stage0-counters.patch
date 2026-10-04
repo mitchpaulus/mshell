@@ -1,0 +1,346 @@
+diff --git a/mshell/TypeCheckProgram.go b/mshell/TypeCheckProgram.go
+index ca87e9aa..cc20d827 100644
+--- a/mshell/TypeCheckProgram.go
++++ b/mshell/TypeCheckProgram.go
+@@ -363,7 +363,10 @@ func (c *Checker) checkDefBody(def *MShellDefinition) {
+ 	initial := []quoteBranch{c.initialTopBranch(c.stack.items)}
+ 	c.stack.items = c.stack.items[:0]
+ 
++	savedCtx := statQuoteCtx
++	statQuoteCtx = []string{"DEF:" + def.Name}
+ 	branches := c.driveBranchesOverItems(initial, def.Items)
++	statQuoteCtx = savedCtx
+ 
+ 	expected := instSig.Outputs
+ 	if len(branches) == 0 {
+@@ -638,6 +641,7 @@ func (c *Checker) checkParseItemStep(item MShellParseItem) {
+ 	case *MShellAsCast:
+ 		target := c.resolveTypeExpr(it.Target, nil)
+ 		if target != TidNothing {
++			c.statCast(target, it.AsToken, c.freshBefore == 1, c.freshDeepBefore)
+ 			c.castTop(target, it.AsToken, c.freshBefore == 1, c.freshDeepBefore)
+ 		}
+ 		return
+@@ -693,7 +697,13 @@ func (c *Checker) checkParseItemStep(item MShellParseItem) {
+ 		// viable overload at each step. The result is the set of
+ 		// surviving sigs — one collapses to TKQuote, multiple to
+ 		// TKOverloadedQuote so the consumption site can resolve.
++		next := statNext
++		statQuoteCtx = append(statQuoteCtx, next)
+ 		sigs := c.InferQuoteSigItems(it.Items)
++		statQuoteCtx = statQuoteCtx[:len(statQuoteCtx)-1]
++		if len(sigs) > 1 {
++			stat("quote_multi", it.StartToken, "n=%d next=%s inferring=%v sigs=%s", len(sigs), next, c.inferring, c.statType(c.arena.MakeOverloadedQuote(sigs)))
++		}
+ 		c.stack.Push(c.arena.MakeOverloadedQuote(sigs))
+ 		return
+ 
+@@ -711,7 +721,12 @@ func (c *Checker) checkParseItemStep(item MShellParseItem) {
+ 		// saw the quote and the receiver carrying decoupled vars and
+ 		// failed to unify (e.g. iterating `parseExcel`/`enumerate` output
+ 		// whose element is a shape with a free var).
++		statQuoteCtx = append(statQuoteCtx, "PREFIX:"+funcName)
+ 		sigs := c.InferQuoteSigItems(it.Items)
++		statQuoteCtx = statQuoteCtx[:len(statQuoteCtx)-1]
++		if len(sigs) > 1 {
++			stat("quote_multi", it.StartToken, "n=%d next=PREFIX:%s inferring=%v sigs=%s", len(sigs), funcName, c.inferring, c.statType(c.arena.MakeOverloadedQuote(sigs)))
++		}
+ 		c.stack.Push(c.arena.MakeOverloadedQuote(sigs))
+ 		callTok := it.StartToken
+ 		callTok.Type = LITERAL
+@@ -851,6 +866,7 @@ func (c *Checker) checkParseItemStep(item MShellParseItem) {
+ 				storeName = storeName[:n-1]
+ 			}
+ 			storeNameId := c.names.Intern(storeName)
++			c.statStore(storeNameId, top, tok, "store")
+ 			c.vars.store(storeNameId, top)
+ 		}
+ 		return
+@@ -1164,6 +1180,14 @@ func (c *Checker) joinArmBranches(branches []quoteBranch) {
+ 			}
+ 		}
+ 		merged := c.arena.MakeUnion(scratch, 0)
++		if statOut != nil {
++			for _, t := range scratch[1:] {
++				if t != scratch[0] {
++					stat("var_arm_join", statCurTok, "name=%s everywhere=%v merged=%s", c.names.Name(nm), boundEverywhere, c.statType(merged))
++					break
++				}
++			}
++		}
+ 		if boundEverywhere {
+ 			mergedBound[nm] = merged
+ 		} else {
+@@ -1825,6 +1849,7 @@ func (c *Checker) bindPatternName(name string, typ TypeId) {
+ 	if name == "_" || name == "" {
+ 		return
+ 	}
++	c.statStore(c.names.Intern(name), typ, statCurTok, "binding")
+ 	c.vars.bind(c.names.Intern(name), typ)
+ }
+ 
+diff --git a/mshell/TypeChecker.go b/mshell/TypeChecker.go
+index e4af7586..ad4895f5 100644
+--- a/mshell/TypeChecker.go
++++ b/mshell/TypeChecker.go
+@@ -3,6 +3,7 @@ package main
+ import (
+ 	"fmt"
+ 	"strconv"
++	"strings"
+ )
+ 
+ // Core token-level checking: the simulated type stack, the variable
+@@ -420,6 +421,7 @@ func (c *Checker) checkOne(tok Token) {
+ 	if c.diverged {
+ 		return
+ 	}
++	statCurTok = tok
+ 	switch tok.Type {
+ 	case INTEGER:
+ 		c.stack.Push(TidInt)
+@@ -468,6 +470,7 @@ func (c *Checker) checkOne(tok Token) {
+ 		}
+ 		top := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+ 		topNode := c.arena.Node(top)
++		stat("x", tok, "kind=%s inferring=%v type=%s", topNode.Kind, c.inferring, c.statType(top))
+ 		if topNode.Kind == TKOverloadedQuote {
+ 			c.stack.items = c.stack.items[:c.stack.Len()-1]
+ 			c.resolveAndApply(c.arena.overloadedQuoteSigs[topNode.Extra], tok)
+@@ -560,6 +563,7 @@ func (c *Checker) checkOne(tok Token) {
+ 				return
+ 			}
+ 		case BREAK, CONTINUE:
++			stat("break", tok, "word=%s ctx=%s", tok.Lexeme, strings.Join(statQuoteCtx, " > "))
+ 			c.diverged = true
+ 			return
+ 		case QUESTION:
+@@ -747,6 +751,7 @@ func (c *Checker) tryIff(tok Token) bool {
+ 	// table arms only cover thunk-shaped branches; folding full arm
+ 	// dispatch into tryIff is the upgrade path if that bites.)
+ 	if secondNode.Kind == TKOverloadedQuote {
++		stat("oq_use", tok, "consumer=iff")
+ 		return false
+ 	}
+ 
+@@ -1451,10 +1456,18 @@ func (c *Checker) unify(got, want TypeId) bool {
+ 			return c.unifyOverloadedQuoteToQuote(wn, got)
+ 		}
+ 		if gn.Kind == TKDict && wn.Kind == TKShape {
+-			return c.unifyDictToShape(gn, wn)
++			ok := c.unifyDictToShape(gn, wn)
++			if ok {
++				stat("dict_to_shape", statCurTok, "readonly=%v got=%s want=%s", c.readOnlyArgs, c.statType(got), c.statType(want))
++			}
++			return ok
+ 		}
+ 		if gn.Kind == TKShape && wn.Kind == TKDict {
+-			return c.unifyShapeToDict(gn, wn)
++			ok := c.unifyShapeToDict(gn, wn)
++			if ok {
++				stat("shape_to_dict", statCurTok, "readonly=%v got=%s want=%s", c.readOnlyArgs, c.statType(got), c.statType(want))
++			}
++			return ok
+ 		}
+ 		if gn.Kind == TKUnion {
+ 			return c.unifyUnionToType(gn, want)
+@@ -1583,7 +1596,34 @@ func (c *Checker) unifyTypeToUnion(got TypeId, wn TypeNode) bool {
+ // lists are pre-sorted by NameId (see normalizeShapeFields), so the merge is
+ // linear.
+ func (c *Checker) unifyShape(gn, wn TypeNode) bool {
+-	return c.shapeFits(gn, wn, c.unify)
++	ok := c.shapeFits(gn, wn, c.unify)
++	if ok && statOut != nil {
++		gFields := c.arena.shapeFields[gn.Extra]
++		wFields := c.arena.shapeFields[wn.Extra]
++		width := len(gFields) != len(wFields)
++		depth := false
++		for _, wf := range wFields {
++			found := false
++			for _, gf := range gFields {
++				if gf.Name == wf.Name {
++					found = true
++					if gf.Optional != wf.Optional {
++						width = true
++					}
++					if c.subst.Apply(c.arena, gf.Type) != c.subst.Apply(c.arena, wf.Type) {
++						depth = true
++					}
++				}
++			}
++			if !found {
++				width = true
++			}
++		}
++		if width || depth {
++			stat("shape_sub", statCurTok, "width=%v depth=%v readonly=%v", width, depth, c.readOnlyArgs)
++		}
++	}
++	return ok
+ }
+ 
+ // shapeFits is unifyShape with the check on each shared field's value type
+diff --git a/mshell/TypeOverload.go b/mshell/TypeOverload.go
+index 10eef92e..c6ce485e 100644
+--- a/mshell/TypeOverload.go
++++ b/mshell/TypeOverload.go
+@@ -103,6 +103,7 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
+ 		// it requires the operands to actually be on the stack, so it
+ 		// never preempts genuine underflow synthesis.
+ 		if c.tryDistributeOverUnion(candidates) {
++			stat("union_distribute", callSite, "word=%s inferring=%v", callSite.Lexeme, c.inferring)
+ 			return
+ 		}
+ 		// In inferring mode (quote body), every candidate may drop
+@@ -154,6 +155,7 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
+ 	// pre-call value so each fan-out iteration sees the same
+ 	// starting point — otherwise iteration k's branch would
+ 	// carry the union of iterations 0..k-1's synthesized inputs.
++	stat("fanout", callSite, "word=%s n=%d inferring=%v", callSite.Lexeme, len(viable), c.inferring)
+ 	savedInferInputs := append([]TypeId(nil), c.inferInputs...)
+ 	for _, sc := range viable {
+ 		c.Fork(stackSnap)
+@@ -225,6 +227,7 @@ func (c *Checker) expandOverloadedQuoteOperands(candidates []QuoteSig) []dispatc
+ 					continue
+ 				}
+ 				arms := c.arena.overloadedQuoteSigs[gn.Extra]
++				stat("oq_use", statCurTok, "consumer=%s arms=%d", statCurTok.Lexeme, len(arms))
+ 				if len(variants)*len(arms) > maxUnionOperandVariants {
+ 					continue
+ 				}
+diff --git a/mshell/TypeQuote.go b/mshell/TypeQuote.go
+index ee447b53..1edb14f3 100644
+--- a/mshell/TypeQuote.go
++++ b/mshell/TypeQuote.go
+@@ -151,7 +151,8 @@ func (c *Checker) inferQuoteSigsItems(body []MShellParseItem) []QuoteSig {
+ func (c *Checker) driveBranchesOverItems(initial []quoteBranch, body []MShellParseItem) []quoteBranch {
+ 	return c.driveBranches(initial, len(body), func(i int) func() {
+ 		item := body[i]
+-		return func() { c.checkParseItem(item) }
++		next := statDescribeNext(body, i)
++		return func() { statNext = next; c.checkParseItem(item) }
+ 	})
+ }
+ 
+diff --git a/mshell/TypeStats.go b/mshell/TypeStats.go
+new file mode 100644
+index 00000000..a2952d16
+--- /dev/null
++++ b/mshell/TypeStats.go
+@@ -0,0 +1,116 @@
++package main
++
++// TEMPORARY stage-0 measurement counters (ai/type-system-plan.md, stage 0).
++// Not to be committed. Active only when MSH_TC_STATS names an output file;
++// each event is appended as one tab-separated line: kind, position, detail.
++
++import (
++	"fmt"
++	"os"
++	"strings"
++)
++
++var statOut *os.File
++var statCurTok Token
++var statNext string
++var statQuoteCtx []string
++
++func init() {
++	if p := os.Getenv("MSH_TC_STATS"); p != "" {
++		f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
++		if err == nil {
++			statOut = f
++		}
++	}
++}
++
++func statPos(t Token) string {
++	file := os.Getenv("MSH_TC_FILE")
++	if t.TokenFile != nil {
++		file = t.TokenFile.Path
++	}
++	return fmt.Sprintf("%s:%d:%d", file, t.Line, t.Column)
++}
++
++func stat(kind string, t Token, format string, args ...any) {
++	if statOut == nil {
++		return
++	}
++	detail := strings.ReplaceAll(fmt.Sprintf(format, args...), "\n", " ")
++	fmt.Fprintf(statOut, "%s\t%s\t%s\n", kind, statPos(t), detail)
++}
++
++// statDescribeNext names the first item after body[i] that is not a quote
++// literal, so `(a) (b) iff` reports `iff` for both quotes.
++func statDescribeNext(body []MShellParseItem, i int) string {
++	skipped := 0
++	for j := i + 1; j < len(body); j++ {
++		switch it := body[j].(type) {
++		case *MShellParseQuote:
++			skipped++
++			continue
++		case Token:
++			return fmt.Sprintf("%s(+%dq)", it.Lexeme, skipped)
++		case MShellVarstoreList:
++			return fmt.Sprintf("STORE(+%dq)", skipped)
++		default:
++			return fmt.Sprintf("%T(+%dq)", it, skipped)
++		}
++	}
++	return fmt.Sprintf("<end>(+%dq)", skipped)
++}
++
++func (c *Checker) statType(t TypeId) string {
++	return FormatType(c.arena, c.names, c.subst.Apply(c.arena, t))
++}
++
++// statCast classifies an `as` before castTop runs, probing each path on a
++// substitution checkpoint.
++func (c *Checker) statCast(target TypeId, tok Token, fresh, deep bool) {
++	if statOut == nil || c.stack.Len() == 0 {
++		return
++	}
++	src := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
++	dst := c.subst.Apply(c.arena, target)
++	cp := c.subst.Checkpoint()
++	path := "fail"
++	switch {
++	case src == dst:
++		path = "equal"
++	case func() bool { ok := c.unify(src, dst); c.subst.Rollback(cp); return ok }():
++		path = "unify"
++	case func() bool { ok := c.castOk(src, dst); c.subst.Rollback(cp); return ok }():
++		path = "brand"
++	case fresh && func() bool { ok := c.freshWidenOk(src, dst, deep); c.subst.Rollback(cp); return ok }():
++		path = "freshwiden"
++	}
++	c.subst.Rollback(cp)
++	stat("as", tok, "path=%s fresh=%v deep=%v inferring=%v src=%s dst=%s", path, fresh, deep, c.inferring,
++		FormatType(c.arena, c.names, src), FormatType(c.arena, c.names, dst))
++}
++
++func (c *Checker) statStore(name NameId, t TypeId, tok Token, what string) {
++	if statOut == nil {
++		return
++	}
++	old, ok := c.vars.bound[name]
++	if !ok {
++		old, ok = c.vars.maybeBound[name]
++	}
++	if !ok {
++		return
++	}
++	a := c.subst.Apply(c.arena, old)
++	b := c.subst.Apply(c.arena, t)
++	if a == b {
++		return
++	}
++	cp := c.subst.Checkpoint()
++	saved := c.readOnlyArgs
++	c.readOnlyArgs = false
++	unifiable := c.unify(a, b) && c.unify(b, a)
++	c.readOnlyArgs = saved
++	c.subst.Rollback(cp)
++	stat("var_retype", tok, "%s name=%s unifiable=%v inferring=%v old=%s new=%s", what, c.names.Name(name), unifiable, c.inferring,
++		FormatType(c.arena, c.names, a), FormatType(c.arena, c.names, b))
++}

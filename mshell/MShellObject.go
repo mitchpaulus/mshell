@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"golang.org/x/net/html"
+	"math"
 	"os"
 	"regexp"
 	"slices"
@@ -93,7 +94,7 @@ func (b MShellBinary) DebugString() string {
 
 func (b MShellBinary) Index(index int) (MShellObject, error) {
 	if index < 0 || index >= len(b) {
-		return nil, fmt.Errorf("Index %d out of range for Binary with length %d.\n", index, len(b))
+		return nil, checkedErrorf("Index %d out of range for Binary with length %d.\n", index, len(b))
 	}
 
 	return MShellBinary{b[index]}, nil
@@ -101,14 +102,14 @@ func (b MShellBinary) Index(index int) (MShellObject, error) {
 
 func (b MShellBinary) SliceStart(startInclusive int) (MShellObject, error) {
 	if startInclusive < 0 || startInclusive >= len(b) {
-		return nil, fmt.Errorf("Start index %d out of range for Binary with length %d.\n", startInclusive, len(b))
+		return nil, checkedErrorf("Start index %d out of range for Binary with length %d.\n", startInclusive, len(b))
 	}
 	return MShellBinary(b[startInclusive:]), nil
 }
 
 func (b MShellBinary) SliceEnd(end int) (MShellObject, error) {
 	if end < 0 || end > len(b) {
-		return nil, fmt.Errorf("End index %d out of range for Binary with length %d.\n", end, len(b))
+		return nil, checkedErrorf("End index %d out of range for Binary with length %d.\n", end, len(b))
 	}
 
 	return MShellBinary(b[:end]), nil
@@ -116,7 +117,7 @@ func (b MShellBinary) SliceEnd(end int) (MShellObject, error) {
 
 func (b MShellBinary) Slice(startInc int, endExc int) (MShellObject, error) {
 	if startInc < 0 || startInc >= len(b) || endExc < 0 || endExc > len(b) || startInc > endExc {
-		return nil, fmt.Errorf("Slice indices %d:%d out of range for Binary with length %d.\n", startInc, endExc, len(b))
+		return nil, checkedErrorf("Slice indices %d:%d out of range for Binary with length %d.\n", startInc, endExc, len(b))
 	}
 
 	return MShellBinary(b[startInc:endExc]), nil
@@ -199,10 +200,7 @@ func (m Maybe) CommandLine() string {
 
 // This is meant for things like error messages, should be limited in length to 30 chars or so.
 func (m Maybe) DebugString() string {
-	if m.obj == nil {
-		return "None"
-	}
-	return fmt.Sprintf("Maybe(%s)", m.obj.DebugString())
+	return renderValue(m, flavorDebug)
 }
 func (m Maybe) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into a Maybe.\n")
@@ -221,17 +219,11 @@ func (m Maybe) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (m Maybe) ToJson() string {
-	if m.obj == nil {
-		return "null"
-	}
-	return m.obj.ToJson()
+	return renderValue(m, flavorJson)
 }
 
 func (m Maybe) ToString() string {
-	if m.obj == nil {
-		return "None"
-	}
-	return fmt.Sprintf("Just(%s)", m.obj.ToString())
+	return renderValue(m, flavorStr)
 }
 
 func (m Maybe) IndexErrStr() string {
@@ -243,25 +235,84 @@ func (m Maybe) Concat(other MShellObject) (MShellObject, error) {
 }
 
 func (m Maybe) Equals(other MShellObject) (bool, error) {
-	otherMaybe, ok := other.(Maybe)
+	// The runtime holds Maybe values as *Maybe, so accept both forms.
+	o, ok := asMaybe(other)
 	if !ok {
 		return false, nil
 	}
-
-	if m.obj == nil && otherMaybe.obj == nil {
-		return true, nil
+	if m.obj == nil || o.obj == nil {
+		return m.obj == nil && o.obj == nil, nil
 	}
-
-	if m.obj == nil || otherMaybe.obj == nil {
+	// Values of different kinds inside are unequal, as in a dict or an
+	// enum payload: Maybe(5) and Maybe(null) included.
+	if m.obj.TypeName() != o.obj.TypeName() {
 		return false, nil
 	}
-
-	equal, err := m.obj.Equals(otherMaybe.obj)
-	return equal, err
+	return equalsIter(m.obj, o.obj)
 }
 
 func (m Maybe) CastString() (string, error) {
 	return "", fmt.Errorf("Cannot cast a Maybe to a string.\n")
+}
+
+// }}}
+
+// Enum {{{
+
+// MShellEnum is a value of a declared enum: the enum's name, the member, and
+// the member's payload values (nil for a member with none). Member names are
+// unique, so the member identifies the value; the enum's name is what a
+// `Name x` pattern tests. An enum value is never changed after it is made.
+type MShellEnum struct {
+	EnumName string
+	Member   string
+	// MemberIndex is the member's position in its declaration.
+	MemberIndex int
+	Payload     []MShellObject
+}
+
+func (e *MShellEnum) TypeName() string       { return e.EnumName }
+func (e *MShellEnum) IsCommandLineable() bool { return false }
+func (e *MShellEnum) IsNumeric() bool         { return false }
+func (e *MShellEnum) FloatNumeric() float64   { return 0 }
+func (e *MShellEnum) CommandLine() string     { return "" }
+func (e *MShellEnum) DebugString() string     { return renderValue(e, flavorDebug) }
+func (e *MShellEnum) ToString() string        { return renderValue(e, flavorStr) }
+
+// ToJson is externally tagged: a member with no payload is its name as a
+// string, one payload is `{"member": value}`, several are
+// `{"member": [v0, v1, ...]}`.
+func (e *MShellEnum) ToJson() string { return renderValue(e, flavorJson) }
+
+func (e *MShellEnum) Index(index int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot index into an enum value.\n")
+}
+
+func (e *MShellEnum) SliceStart(startInclusive int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice an enum value.\n")
+}
+
+func (e *MShellEnum) SliceEnd(end int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice an enum value.\n")
+}
+
+func (e *MShellEnum) Slice(startInc int, endExc int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice an enum value.\n")
+}
+
+func (e *MShellEnum) IndexErrStr() string { return "" }
+
+func (e *MShellEnum) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate an enum value.\n")
+}
+
+// Equals compares the enum's name, the member, then the payloads.
+func (e *MShellEnum) Equals(other MShellObject) (bool, error) {
+	return equalsIter(e, other)
+}
+
+func (e *MShellEnum) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast an enum value to a string; use str.\n")
 }
 
 // }}}
@@ -333,6 +384,17 @@ func (n MShellNull) Concat(other MShellObject) (MShellObject, error) {
 func (n MShellNull) Equals(other MShellObject) (bool, error) {
 	_, ok := other.(MShellNull)
 	return ok, nil
+}
+
+// objectsEqual compares two objects for '=' and '!='.
+// null equals only null, whichever side it is on.
+func objectsEqual(a MShellObject, b MShellObject) (bool, error) {
+	_, aNull := a.(MShellNull)
+	_, bNull := b.(MShellNull)
+	if aNull || bNull {
+		return aNull && bNull, nil
+	}
+	return a.Equals(b)
 }
 
 func (n MShellNull) CastString() (string, error) {
@@ -463,16 +525,7 @@ func (*MShellDict) CommandLine() string {
 
 // This is meant for things like error messages, should be limited in length to 30 chars or so.
 func (d *MShellDict) DebugString() string {
-	// TODO: implement this
-
-	sb := strings.Builder{}
-	sb.WriteString("Dictionary{")
-	for key, value := range d.Items {
-		sb.WriteString(fmt.Sprintf("%s: %s, ", key, value.DebugString()))
-	}
-	sb.WriteString("}")
-	return sb.String()
-
+	return renderValue(d, flavorDebug)
 }
 func (*MShellDict) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into a dictionary.\n")
@@ -488,43 +541,7 @@ func (*MShellDict) Slice(startInc int, endExc int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice a dictionary.\n")
 }
 func (d *MShellDict) ToJson() string {
-	var sb strings.Builder
-
-	if len(d.Items) == 0 {
-		return "{}"
-	}
-
-	if len(d.Items) == 1 {
-		for key, value := range d.Items {
-			keyEnc, _ := json.Marshal(key)
-			return fmt.Sprintf("{%s: %s}", string(keyEnc), value.ToJson())
-		}
-	}
-
-	keys := make([]string, 0, len(d.Items))
-	for key := range d.Items {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	sb.WriteString("{")
-
-	// Write the first key-value pair
-	firstKey := keys[0]
-	firstValue := d.Items[firstKey]
-
-	firstKeyEnc, _ := json.Marshal(firstKey)
-	sb.WriteString(fmt.Sprintf("%s: %s", string(firstKeyEnc), firstValue.ToJson()))
-
-	for _, key := range keys[1:] {
-		value := d.Items[key]
-		keyEnc, _ := json.Marshal(key)
-		sb.WriteString(fmt.Sprintf(", %s: %s", string(keyEnc), value.ToJson()))
-	}
-
-	sb.WriteString("}")
-
-	return sb.String()
+	return renderValue(d, flavorJson)
 }
 
 func (d *MShellDict) ToString() string { // This is what is used with 'str' command
@@ -540,51 +557,7 @@ func (*MShellDict) Concat(other MShellObject) (MShellObject, error) {
 }
 
 func (thisDict *MShellDict) Equals(other MShellObject) (bool, error) {
-	thisKeys := make([]string, 0, len(thisDict.Items))
-	for key := range thisDict.Items {
-		thisKeys = append(thisKeys, key)
-	}
-	sort.Strings(thisKeys)
-
-	otherDict, ok := other.(*MShellDict)
-	if !ok {
-		return false, nil
-	}
-
-	otherKeys := make([]string, 0, len(otherDict.Items))
-	for key := range otherDict.Items {
-		otherKeys = append(otherKeys, key)
-	}
-	sort.Strings(otherKeys)
-
-	if len(thisKeys) != len(otherKeys) {
-		return false, nil
-	}
-
-	for i, key := range thisKeys {
-		if key != otherKeys[i] {
-			return false, nil
-		}
-	}
-
-	for _, key := range thisKeys {
-		thisValue := thisDict.Items[key]
-		otherValue := otherDict.Items[key]
-
-		if thisValue.TypeName() != otherValue.TypeName() {
-			return false, nil
-		}
-
-		equal, err := thisValue.Equals(otherValue)
-		if err != nil {
-			return false, err
-		}
-		if !equal {
-			return false, nil
-		}
-	}
-
-	return true, nil
+	return equalsIter(thisDict, other)
 }
 
 // This is meant for completely unambiougous conversion to a string value.
@@ -593,10 +566,6 @@ func (*MShellDict) CastString() (string, error) {
 }
 
 // }}}
-
-type MShellLiteral struct {
-	LiteralText string
-}
 
 type MShellBool struct {
 	Value bool
@@ -979,10 +948,6 @@ type MShellFloat struct {
 }
 
 // ToString
-func (obj MShellLiteral) ToString() string {
-	return obj.LiteralText
-}
-
 func (obj MShellBool) ToString() string {
 	return strconv.FormatBool(obj.Value)
 }
@@ -1020,10 +985,6 @@ func (obj *MShellSimple) ToString() string {
 }
 
 // TypeNames
-func (obj MShellLiteral) TypeName() string {
-	return "Literal"
-}
-
 func (obj MShellBool) TypeName() string {
 	return "Boolean"
 }
@@ -1062,10 +1023,6 @@ func (obj *MShellSimple) TypeName() string {
 
 // IsCommandLineable
 
-func (obj MShellLiteral) IsCommandLineable() bool {
-	return true
-}
-
 func (obj MShellBool) IsCommandLineable() bool {
 	return false
 }
@@ -1103,10 +1060,6 @@ func (obj MShellFloat) IsCommandLineable() bool {
 }
 
 // IsNumeric
-func (obj MShellLiteral) IsNumeric() bool {
-	return false
-}
-
 func (obj MShellBool) IsNumeric() bool {
 	return false
 }
@@ -1144,10 +1097,6 @@ func (obj *MShellSimple) IsNumeric() bool {
 }
 
 // FloatNumeric
-func (obj MShellLiteral) FloatNumeric() float64 {
-	return 0
-}
-
 func (obj MShellBool) FloatNumeric() float64 {
 	return 0
 }
@@ -1185,10 +1134,6 @@ func (obj *MShellSimple) FloatNumeric() float64 {
 }
 
 // CommandLine
-func (obj MShellLiteral) CommandLine() string {
-	return obj.LiteralText
-}
-
 func (obj MShellBool) CommandLine() string {
 	return ""
 }
@@ -1238,10 +1183,6 @@ func DebugStrs(objs []MShellObject) []string {
 	return debugStrs
 }
 
-func (obj MShellLiteral) DebugString() string {
-	return obj.LiteralText
-}
-
 func (obj MShellBool) DebugString() string {
 	return strconv.FormatBool(obj.Value)
 }
@@ -1271,8 +1212,7 @@ func (obj *MShellQuotation) DebugString() string {
 }
 
 func (obj *MShellList) DebugString() string {
-	// Join the tokens with a space, surrounded by '[' and ']'
-	return "[" + strings.Join(DebugStrs(obj.Items), " ") + "]"
+	return renderValue(obj, flavorDebug)
 }
 
 func cleanStringForTerminal(input string) string {
@@ -1317,8 +1257,7 @@ func (obj MShellPath) DebugString() string {
 }
 
 func (obj *MShellPipe) DebugString() string {
-	// Join each item with a ' | '
-	return strings.Join(DebugStrs(obj.List.Items), " | ")
+	return renderValue(obj, flavorDebug)
 }
 
 func (obj MShellInt) DebugString() string {
@@ -1331,10 +1270,6 @@ func (obj MShellFloat) DebugString() string {
 
 func (obj *MShellSimple) DebugString() string {
 	return obj.Token.Lexeme
-}
-
-func (obj MShellLiteral) IndexErrStr() string {
-	return fmt.Sprintf(" (%s)", obj.LiteralText)
 }
 
 func (obj MShellBool) IndexErrStr() string {
@@ -1380,7 +1315,7 @@ func (obj MShellFloat) IndexErrStr() string {
 
 func IndexCheck(index int, length int, obj MShellObject) error {
 	if index < 0 || index >= length {
-		return fmt.Errorf("Index %d out of range for %s with length %d.%s\n", index, obj.TypeName(), length, obj.IndexErrStr())
+		return checkedErrorf("Index %d out of range for %s with length %d.%s\n", index, obj.TypeName(), length, obj.IndexErrStr())
 	} else {
 		return nil
 	}
@@ -1388,24 +1323,13 @@ func IndexCheck(index int, length int, obj MShellObject) error {
 
 func IndexCheckExc(index int, length int, obj MShellObject) error {
 	if index < 0 || index > length {
-		return fmt.Errorf("Index %d out of range for %s with length %d.%s\n", index, obj.TypeName(), length, obj.IndexErrStr())
+		return checkedErrorf("Index %d out of range for %s with length %d.%s\n", index, obj.TypeName(), length, obj.IndexErrStr())
 	} else {
 		return nil
 	}
 }
 
 // Index
-func (obj MShellLiteral) Index(index int) (MShellObject, error) {
-	if index < 0 {
-		index = len(obj.LiteralText) + index
-	}
-
-	if err := IndexCheck(index, len(obj.LiteralText), obj); err != nil {
-		return nil, err
-	}
-	return MShellLiteral{LiteralText: string(obj.LiteralText[index])}, nil
-}
-
 func (obj MShellBool) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into a boolean.\n")
 }
@@ -1479,17 +1403,6 @@ func (obj *MShellSimple) Index(index int) (MShellObject, error) {
 }
 
 // SliceStart
-func (obj MShellLiteral) SliceStart(start int) (MShellObject, error) {
-	if start < 0 {
-		start = len(obj.LiteralText) + start
-	}
-
-	if err := IndexCheckExc(start, len(obj.LiteralText), obj); err != nil {
-		return nil, err
-	}
-	return MShellLiteral{LiteralText: obj.LiteralText[start:]}, nil
-}
-
 func (obj MShellBool) SliceStart(start int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice a boolean.\n")
 }
@@ -1551,7 +1464,7 @@ func (obj *MShellPipe) SliceStart(start int) (MShellObject, error) {
 	}
 
 	newList := NewList(0)
-	newList.Items = obj.List.Items[start:]
+	newList.Items = slices.Clone(obj.List.Items[start:])
 	return newList, nil
 }
 
@@ -1568,17 +1481,6 @@ func (obj *MShellSimple) SliceStart(start int) (MShellObject, error) {
 }
 
 // SliceEnd
-func (obj MShellLiteral) SliceEnd(end int) (MShellObject, error) {
-	if end < 0 {
-		end = len(obj.LiteralText) + end
-	}
-
-	if err := IndexCheckExc(end, len(obj.LiteralText), obj); err != nil {
-		return nil, err
-	}
-	return MShellLiteral{LiteralText: obj.LiteralText[:end]}, nil
-}
-
 func (obj MShellBool) SliceEnd(end int) (MShellObject, error) {
 	return nil, fmt.Errorf("cannot slice a boolean.\n")
 }
@@ -1637,7 +1539,7 @@ func (obj *MShellPipe) SliceEnd(end int) (MShellObject, error) {
 		return nil, err
 	}
 	newList := NewList(0)
-	newList.Items = obj.List.Items[:end]
+	newList.Items = slices.Clone(obj.List.Items[:end])
 	return newList, nil
 }
 
@@ -1664,25 +1566,10 @@ func SliceIndexCheck(startInc int, endExc int, length int, obj MShellObject) err
 	}
 
 	if startInc < 0 || startInc > endExc || endExc > length {
-		return fmt.Errorf("Invalid slice range [%d:%d) for %s with length %d.\n", startInc, endExc, obj.TypeName(), length)
+		return checkedErrorf("Invalid slice range [%d:%d) for %s with length %d.\n", startInc, endExc, obj.TypeName(), length)
 	} else {
 		return nil
 	}
-}
-
-func (obj MShellLiteral) Slice(startInc int, endExc int) (MShellObject, error) {
-	if startInc < 0 {
-		startInc = len(obj.LiteralText) + startInc
-	}
-
-	if endExc < 0 {
-		endExc = len(obj.LiteralText) + endExc
-	}
-
-	if err := SliceIndexCheck(startInc, endExc, len(obj.LiteralText), obj); err != nil {
-		return nil, err
-	}
-	return MShellLiteral{LiteralText: obj.LiteralText[startInc:endExc]}, nil
 }
 
 func (obj MShellBool) Slice(startInc int, endExc int) (MShellObject, error) {
@@ -1769,7 +1656,7 @@ func (obj *MShellPipe) Slice(startInc int, endExc int) (MShellObject, error) {
 	}
 
 	newList := NewList(0)
-	newList.Items = obj.List.Items[startInc:endExc]
+	newList.Items = slices.Clone(obj.List.Items[startInc:endExc])
 	return newList, nil
 }
 
@@ -1786,11 +1673,6 @@ func (obj *MShellSimple) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 // ToJson
-func (obj MShellLiteral) ToJson() string {
-	escBytes, _ := json.Marshal(obj.LiteralText)
-	return fmt.Sprintf("%s", string(escBytes))
-}
-
 func (obj MShellBool) ToJson() string {
 	if obj.Value {
 		return "true"
@@ -1814,17 +1696,7 @@ func (obj *MShellQuotation) ToJson() string {
 }
 
 func (obj *MShellList) ToJson() string {
-	builder := strings.Builder{}
-	builder.WriteString("[")
-	if len(obj.Items) > 0 {
-		builder.WriteString(obj.Items[0].ToJson())
-		for _, item := range obj.Items[1:] {
-			builder.WriteString(", ")
-			builder.WriteString(item.ToJson())
-		}
-	}
-	builder.WriteString("]")
-	return builder.String()
+	return renderValue(obj, flavorJson)
 }
 
 func (obj MShellString) ToJson() string {
@@ -1840,7 +1712,7 @@ func (obj MShellPath) ToJson() string {
 }
 
 func (obj *MShellPipe) ToJson() string {
-	return obj.List.ToJson()
+	return renderValue(obj, flavorJson)
 }
 
 func (obj MShellInt) ToJson() string {
@@ -1848,6 +1720,10 @@ func (obj MShellInt) ToJson() string {
 }
 
 func (obj MShellFloat) ToJson() string {
+	// JSON has no NaN or infinity. Write null, as JavaScript does.
+	if math.IsNaN(obj.Value) || math.IsInf(obj.Value, 0) {
+		return "null"
+	}
 	escBytes, _ := json.Marshal(obj.Value)
 	return fmt.Sprintf("%s", string(escBytes))
 }
@@ -1857,15 +1733,6 @@ func (obj *MShellSimple) ToJson() string {
 }
 
 // Concat
-func (obj MShellLiteral) Concat(other MShellObject) (MShellObject, error) {
-	asLiteral, ok := other.(MShellLiteral)
-	if !ok {
-		return nil, fmt.Errorf("Cannot concatenate a Literal with a %s.\n", other.TypeName())
-	}
-
-	return MShellLiteral{LiteralText: obj.LiteralText + asLiteral.LiteralText}, nil
-}
-
 func (obj MShellBool) Concat(other MShellObject) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot concatenate a boolean.\n")
 }
@@ -2014,7 +1881,6 @@ func ParseRawPath(inputString string) (string, error) {
 }
 
 // Equals {{{
-// MShellLiteral struct {
 // MShellBool struct {
 // MShellQuotation struct {
 // MShellList struct {
@@ -2023,20 +1889,6 @@ func ParseRawPath(inputString string) (string, error) {
 // MShellPipe struct {
 // MShellInt struct {
 // MShellFloat struct {
-
-func (obj MShellLiteral) Equals(other MShellObject) (bool, error) {
-	// Define equality for other as string or as literal or path.
-	switch o := other.(type) {
-	case MShellLiteral:
-		return obj.LiteralText == o.LiteralText, nil
-	case MShellString:
-		return obj.LiteralText == o.Content, nil
-	case MShellPath:
-		return obj.LiteralText == o.Path, nil
-	default:
-		return false, fmt.Errorf("Cannot compare a literal with a %s.\n", other.TypeName())
-	}
-}
 
 func (obj MShellBool) Equals(other MShellObject) (bool, error) {
 	asBool, ok := other.(MShellBool)
@@ -2060,9 +1912,6 @@ func (obj MShellString) Equals(other MShellObject) (bool, error) {
 	case MShellString:
 		asString, _ := other.(MShellString)
 		return obj.Content == asString.Content, nil
-	case MShellLiteral:
-		asLiteral, _ := other.(MShellLiteral)
-		return obj.Content == asLiteral.LiteralText, nil
 	default:
 		return false, fmt.Errorf("Cannot compare a string with a %s.\n", other.TypeName())
 	}
@@ -2074,9 +1923,6 @@ func (obj MShellPath) Equals(other MShellObject) (bool, error) {
 	case MShellPath:
 		asPath, _ := other.(MShellPath)
 		return obj.Path == asPath.Path, nil
-	case MShellLiteral:
-		asLiteral, _ := other.(MShellLiteral)
-		return obj.Path == asLiteral.LiteralText, nil
 	default:
 		return false, fmt.Errorf("Cannot compare a path with a %s.\n", other.TypeName())
 	}
@@ -2105,10 +1951,6 @@ func (obj MShellFloat) Equals(other MShellObject) (bool, error) {
 // }}}
 
 // CastString {{{
-
-func (obj MShellLiteral) CastString() (string, error) {
-	return obj.LiteralText, nil
-}
 
 func (obj MShellBool) CastString() (string, error) {
 	return "", fmt.Errorf("Cannot cast a boolean to a string.\n")
@@ -2270,32 +2112,38 @@ func (col *GridColumn) internDictString(s string) int32 {
 	return code
 }
 
-// Set sets the value at the given row index
+// Set sets the value at the given row index. A value that the column's typed
+// storage cannot hold turns the column's storage generic first.
 func (col *GridColumn) Set(index int, value MShellObject) {
 	switch col.ColType {
 	case COL_INT:
 		if intVal, ok := value.(MShellInt); ok {
 			col.IntData[index] = int64(intVal.Value)
+			return
 		}
 	case COL_FLOAT:
 		if floatVal, ok := value.(MShellFloat); ok {
 			col.FloatData[index] = floatVal.Value
+			return
 		}
 	case COL_STRING:
 		if strVal, ok := value.(MShellString); ok {
 			col.StringData[index] = strVal.Content
+			return
 		}
 	case COL_DICT_STRING:
 		if strVal, ok := value.(MShellString); ok {
 			col.DictCodes[index] = col.internDictString(strVal.Content)
+			return
 		}
 	case COL_DATETIME:
 		if dtVal, ok := value.(*MShellDateTime); ok {
 			col.DateTimeData[index] = dtVal.Time
+			return
 		}
-	default:
-		col.GenericData[index] = value
 	}
+	widenColumnToGeneric(col)
+	col.GenericData[index] = value
 }
 
 // Len returns the number of rows in the column
@@ -2388,7 +2236,7 @@ func (g *MShellGrid) Index(index int) (MShellObject, error) {
 		index = g.RowCount + index
 	}
 	if index < 0 || index >= g.RowCount {
-		return nil, fmt.Errorf("Index %d out of range for Grid with %d rows.\n", index, g.RowCount)
+		return nil, checkedErrorf("Index %d out of range for Grid with %d rows.\n", index, g.RowCount)
 	}
 	return g.GetRow(index), nil
 }
@@ -2398,7 +2246,7 @@ func (g *MShellGrid) SliceStart(startInclusive int) (MShellObject, error) {
 		startInclusive = g.RowCount + startInclusive
 	}
 	if startInclusive < 0 || startInclusive > g.RowCount {
-		return nil, fmt.Errorf("Start index %d out of range for Grid with %d rows.\n", startInclusive, g.RowCount)
+		return nil, checkedErrorf("Start index %d out of range for Grid with %d rows.\n", startInclusive, g.RowCount)
 	}
 	indices := make([]int, g.RowCount-startInclusive)
 	for i := range indices {
@@ -2412,7 +2260,7 @@ func (g *MShellGrid) SliceEnd(end int) (MShellObject, error) {
 		end = g.RowCount + end
 	}
 	if end < 0 || end > g.RowCount {
-		return nil, fmt.Errorf("End index %d out of range for Grid with %d rows.\n", end, g.RowCount)
+		return nil, checkedErrorf("End index %d out of range for Grid with %d rows.\n", end, g.RowCount)
 	}
 	indices := make([]int, end)
 	for i := range indices {
@@ -2429,7 +2277,7 @@ func (g *MShellGrid) Slice(startInc int, endExc int) (MShellObject, error) {
 		endExc = g.RowCount + endExc
 	}
 	if startInc < 0 || endExc > g.RowCount || startInc > endExc {
-		return nil, fmt.Errorf("Slice [%d:%d) out of range for Grid with %d rows.\n", startInc, endExc, g.RowCount)
+		return nil, checkedErrorf("Slice [%d:%d) out of range for Grid with %d rows.\n", startInc, endExc, g.RowCount)
 	}
 	indices := make([]int, endExc-startInc)
 	for i := range indices {
@@ -2439,17 +2287,7 @@ func (g *MShellGrid) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (g *MShellGrid) ToJson() string {
-	var sb strings.Builder
-	sb.WriteString("[")
-	for i := 0; i < g.RowCount; i++ {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-		row := g.GetRow(i)
-		sb.WriteString(row.ToJson())
-	}
-	sb.WriteString("]")
-	return sb.String()
+	return renderValue(g, flavorJson)
 }
 
 func (g *MShellGrid) ToString() string {
@@ -2550,7 +2388,7 @@ func (v *MShellGridView) Index(index int) (MShellObject, error) {
 		index = len(v.Indices) + index
 	}
 	if index < 0 || index >= len(v.Indices) {
-		return nil, fmt.Errorf("Index %d out of range for GridView with %d rows.\n", index, len(v.Indices))
+		return nil, checkedErrorf("Index %d out of range for GridView with %d rows.\n", index, len(v.Indices))
 	}
 	return v.GetRow(index), nil
 }
@@ -2560,7 +2398,7 @@ func (v *MShellGridView) SliceStart(startInclusive int) (MShellObject, error) {
 		startInclusive = len(v.Indices) + startInclusive
 	}
 	if startInclusive < 0 || startInclusive > len(v.Indices) {
-		return nil, fmt.Errorf("Start index %d out of range for GridView with %d rows.\n", startInclusive, len(v.Indices))
+		return nil, checkedErrorf("Start index %d out of range for GridView with %d rows.\n", startInclusive, len(v.Indices))
 	}
 	return &MShellGridView{Source: v.Source, Indices: v.Indices[startInclusive:]}, nil
 }
@@ -2570,7 +2408,7 @@ func (v *MShellGridView) SliceEnd(end int) (MShellObject, error) {
 		end = len(v.Indices) + end
 	}
 	if end < 0 || end > len(v.Indices) {
-		return nil, fmt.Errorf("End index %d out of range for GridView with %d rows.\n", end, len(v.Indices))
+		return nil, checkedErrorf("End index %d out of range for GridView with %d rows.\n", end, len(v.Indices))
 	}
 	return &MShellGridView{Source: v.Source, Indices: v.Indices[:end]}, nil
 }
@@ -2583,23 +2421,13 @@ func (v *MShellGridView) Slice(startInc int, endExc int) (MShellObject, error) {
 		endExc = len(v.Indices) + endExc
 	}
 	if startInc < 0 || endExc > len(v.Indices) || startInc > endExc {
-		return nil, fmt.Errorf("Slice [%d:%d) out of range for GridView with %d rows.\n", startInc, endExc, len(v.Indices))
+		return nil, checkedErrorf("Slice [%d:%d) out of range for GridView with %d rows.\n", startInc, endExc, len(v.Indices))
 	}
 	return &MShellGridView{Source: v.Source, Indices: v.Indices[startInc:endExc]}, nil
 }
 
 func (v *MShellGridView) ToJson() string {
-	var sb strings.Builder
-	sb.WriteString("[")
-	for i, idx := range v.Indices {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-		row := &MShellGridRow{Grid: v.Source, RowIndex: idx}
-		sb.WriteString(row.ToJson())
-	}
-	sb.WriteString("]")
-	return sb.String()
+	return renderValue(v, flavorJson)
 }
 
 func (v *MShellGridView) ToString() string {
@@ -2671,8 +2499,7 @@ func (r *MShellGridRow) CommandLine() string {
 }
 
 func (r *MShellGridRow) DebugString() string {
-	d := r.ToDict()
-	return fmt.Sprintf("GridRow%s", d.DebugString())
+	return renderValue(r, flavorDebug)
 }
 
 func (r *MShellGridRow) Index(index int) (MShellObject, error) {
@@ -2680,7 +2507,7 @@ func (r *MShellGridRow) Index(index int) (MShellObject, error) {
 		index = len(r.Grid.Columns) + index
 	}
 	if index < 0 || index >= len(r.Grid.Columns) {
-		return nil, fmt.Errorf("Index %d out of range for GridRow with %d columns.\n", index, len(r.Grid.Columns))
+		return nil, checkedErrorf("Index %d out of range for GridRow with %d columns.\n", index, len(r.Grid.Columns))
 	}
 	return r.Grid.Columns[index].Get(r.RowIndex), nil
 }
@@ -2698,17 +2525,7 @@ func (r *MShellGridRow) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (r *MShellGridRow) ToJson() string {
-	var sb strings.Builder
-	sb.WriteString("{")
-	for i, col := range r.Grid.Columns {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-		keyEnc, _ := json.Marshal(col.Name)
-		sb.WriteString(fmt.Sprintf("%s: %s", string(keyEnc), col.Get(r.RowIndex).ToJson()))
-	}
-	sb.WriteString("}")
-	return sb.String()
+	return renderValue(r, flavorJson)
 }
 
 func (r *MShellGridRow) ToString() string {

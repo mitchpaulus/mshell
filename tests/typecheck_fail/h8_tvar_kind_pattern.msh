@@ -1,0 +1,1 @@
+def h (a -- int) match str s : @s 1 + , _ : drop 0 end end

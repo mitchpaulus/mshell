@@ -1,1 +1,1 @@
-1:43: Cannot write a binary with a newline. You are allowed to write contents directly with `w` or `we`.
+type error at line 1, column 43: 'wle' expected int | str at argument 0, got binary; binary is not text with lines: write it with `w` or `we`, which add no newline

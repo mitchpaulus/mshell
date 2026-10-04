@@ -9,6 +9,22 @@
             "match": "#.*$"
         },
         {
+            "name": "keyword.control.mshell",
+            "match": "else\\*|\\*if"
+        },
+        {
+            "name": "keyword.control.mshell",
+            "match": "\\b(def|end|if|iff|loop|read|str|break|continue|else|enum|type|tryAs|match|as)\\b(?!!)"
+        },
+        {
+            "name": "keyword.operator.word.mshell",
+            "match": "\\b(and|or|not)\\b(?!!)"
+        },
+        {
+            "name": "keyword.other.mshell",
+            "match": "\\bsoe\\b"
+        },
+        {
             "name": "constant.language.bool",
             "match": "\\b(true|false)\\b"
         },

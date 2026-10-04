@@ -1,0 +1,3 @@
+[echo hi] c!
+@c * ; drop
+5 @c ; 1 + wl

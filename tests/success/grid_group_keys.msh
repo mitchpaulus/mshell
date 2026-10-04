@@ -27,7 +27,7 @@
 # Join tuple keys with a shifting boundary.
 [| a, b, l; "a", "bc", "L1"; "ab", "c", "L2" |] left!
 [| x, y, r; "ab", "c", "R1"; "a", "bc", "R2" |] right!
-@left @right (r! [@r :a? @r :b?]) (r! [@r :x? @r :y?]) join toJson wl
+@left @right (l! [@l :a? @l :b?]) (r! [@r :x? @r :y?]) join toJson wl
 
 # Join keys: int 1 and string "1" do not match.
 [| k, l; 1, "L1"; "1", "L2" |] [| k2, r; "1", "R1"; 1, "R2" |] (:k?) (:k2?) join toJson wl

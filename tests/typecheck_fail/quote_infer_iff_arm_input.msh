@@ -1,0 +1,3 @@
+# As quote_infer_if_arm_input, with iff.
+( (drop) iff ) q!
+5 "x" false @q x 1 + wl

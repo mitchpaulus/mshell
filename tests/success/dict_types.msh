@@ -1,8 +1,8 @@
-def homogenousDict ( { int } -- { "a": str })
+def homogenousDict ( { int } -- new { "a": str })
     drop {"a": "hello"}
 end
 
-def nonHomogenousDict ( -- { "a": int, "b": str, "c": { "d": int }})
+def nonHomogenousDict ( -- new { "a": int, "b": str, "c": { "d": int }})
     {
         "a": 1,
         "b" : "hello",
@@ -12,37 +12,37 @@ def nonHomogenousDict ( -- { "a": int, "b": str, "c": { "d": int }})
     }
 end
 
-def trailingComma (  -- { 'a': str, })
+def trailingComma (  -- new { 'a': str, })
     {
         "a": "hello"
     }
 end
 
-def wildcardDict ( -- { *: int })
+def wildcardDict ( -- new { *: int })
     {
         "x": 1,
         "y": 2,
     }
 end
 
-def mixedDict ( -- { "a": int, *: str })
+def mixedDict ( -- new { "a": int, *: str })
     {
         "a": 1,
         "b": "hello",
     }
 end
 
-def emptyDict ( -- {} )
+def emptyDict ( -- new {} )
     {}
 end
 
-def nestedDictList ( -- [ { *: int } ])
+def nestedDictList ( -- new [ { *: int } ])
     [
         {"value": 1}
     ]
 end
 
-def trailingCommaWildcard ( -- { "a": int, *: str, })
+def trailingCommaWildcard ( -- new { "a": int, *: str, })
     {
         "a": 1,
         "b": "hello"

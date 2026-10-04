@@ -1,0 +1,6 @@
+# H3: a dict literal around a stored list is new, but the list is not: it
+# keeps its type, so it cannot be widened through the dict.
+[1 2] xs!
+{a: @xs} as {a: [int | str]} d!
+@d :a? "s" append drop
+@xs (1 +) map len wl

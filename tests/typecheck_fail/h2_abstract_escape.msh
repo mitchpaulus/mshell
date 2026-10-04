@@ -1,0 +1,4 @@
+def g (a -- )
+    [] acc!
+    match list :> acc! , _ : end
+end

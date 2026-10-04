@@ -1,0 +1,5 @@
+# A column name known only at run time may be one the grid's type says is
+# optional: that column may now hold the new values.
+"a" n!
+[| a, b; 1, 2 |] @n gridRemoveCol @n "s" gridAddCol g!
+@g "a" gridCol :0: 1 + wl

@@ -576,6 +576,8 @@ func (m *MShellParseMatchBlock) DebugString() string {
 type MShellDefinition struct {
 	Name      string
 	NameToken Token
+	// File is the file the definition is in, or nil (standard input).
+	File      *TokenFile
 	Items     []MShellParseItem
 	Inputs    []MShellParseItem // type-expression AST for signature inputs
 	Outputs   []MShellParseItem // type-expression AST for signature outputs
@@ -779,7 +781,7 @@ func itemsMayUseVariables(items []MShellParseItem) bool {
 					return true
 				}
 			}
-		case *MShellGetter, *MShellTypeDecl, *MShellAsCast:
+		case *MShellGetter, *MShellTypeDecl, *MShellEnumDecl, *MShellAsCast, *MShellTryAs:
 		default:
 			// Quotations capture the map, match arms and varstore lists
 			// store into it, and indexing a quotation builds one.
@@ -1014,7 +1016,7 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 		}
 
 		nameToken := parser.curr
-		def := MShellDefinition{Name: parser.curr.Lexeme, NameToken: nameToken, Items: []MShellParseItem{}}
+		def := MShellDefinition{Name: parser.curr.Lexeme, NameToken: nameToken, File: parser.lexer.tokenFile, Items: []MShellParseItem{}}
 		_ = parser.Match(parser.curr, LITERAL)
 
 		if parser.curr.Type == LEFT_CURLY {
@@ -1027,7 +1029,7 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 
 		inputs, outputs, err := parser.parseDefSignature()
 		if err != nil {
-			return file, fmt.Errorf("def %s signature: %s", def.Name, err.Error())
+			return file, inParseContext("def "+def.Name+" signature", err.Error())
 		}
 		def.Inputs = inputs
 		def.Outputs = outputs
@@ -1056,6 +1058,12 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 			// parser.ParseDefinition()
 		case TYPE:
 			decl, err := parser.ParseTypeDecl()
+			if err != nil {
+				return file, err
+			}
+			file.Items = append(file.Items, decl)
+		case ENUM:
+			decl, err := parser.ParseEnumDecl()
 			if err != nil {
 				return file, err
 			}
@@ -1444,6 +1452,10 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParsePrefixQuote()
 	case AS:
 		return parser.ParseAsCast()
+	case TRYAS:
+		return parser.ParseTryAs()
+	case ENUM:
+		return nil, fmt.Errorf("%d:%d: An enum is declared at the top level of a file, not inside a definition, list or quotation.", parser.curr.Line, parser.curr.Column)
 	case FORMATSTRINGSTART:
 		return parser.ParseFormatString()
 	case FORMATSTRINGMID, FORMATSTRINGEND:
@@ -2027,6 +2039,19 @@ func (parser *MShellParser) ParseMatchBlock() (*MShellParseMatchBlock, error) {
 
 		arm := MShellParseMatchArm{}
 
+		// `is T x`: a typed pattern. `is` has this meaning only at the head
+		// of an arm, so it is not a reserved word.
+		if parser.curr.Type == LITERAL && parser.curr.Lexeme == "is" {
+			pat, err := parser.parseIsPattern()
+			if err != nil {
+				return matchBlock, err
+			}
+			arm.Pattern = append(arm.Pattern, pat)
+			if parser.curr.Type != COLON && parser.curr.Type != MATCHARMDUP {
+				return matchBlock, fmt.Errorf("%d:%d: Expected ':' or ':>' after the typed pattern 'is %s %s', got %s.", parser.curr.Line, parser.curr.Column, pat.Target.DebugString(), pat.Binding.Lexeme, tokDesc(parser.curr))
+			}
+		}
+
 		// Parse pattern items until COLON or MATCHARMDUP
 		for {
 			if parser.curr.Type == COLON || parser.curr.Type == MATCHARMDUP {
@@ -2175,6 +2200,18 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 		return nil
 	}
 
+	if len(pattern) > 2 {
+		// An enum member and its payload bindings: `pair a b`.
+		for _, item := range pattern[1:] {
+			if tok, ok := item.(Token); ok && tok.Type == LITERAL {
+				if err := addBinding(tok, tok.Lexeme); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
 	if len(pattern) != 1 {
 		return nil
 	}
@@ -2233,3 +2270,61 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 	}
 	return nil
 }
+
+// formatPatternSnippet renders a match-arm pattern as a short string,
+// recursing into list / dict / quote literals so patterns like
+// `[a ...rest]` display their contents rather than collapsing to
+// `[...]` the way formatItemsSnippet does for arbitrary composites.
+func formatPatternSnippet(items []MShellParseItem) string {
+	var sb strings.Builder
+	for i, it := range items {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(formatPatternItem(it))
+	}
+	return sb.String()
+}
+
+func formatPatternItem(it MShellParseItem) string {
+	switch v := it.(type) {
+	case Token:
+		return v.Lexeme
+	case *MShellParseOrPattern:
+		return v.DebugString()
+	case *MShellParseList:
+		return "[" + formatPatternSnippet(v.Items) + "]"
+	default:
+		start := it.GetStartToken().Lexeme
+		end := it.GetEndToken().Lexeme
+		if end != "" && end != start {
+			return start + "…" + end
+		}
+		return start
+	}
+}
+
+// isTypeKeywordToken reports whether tok is one of the match type-keyword
+// patterns: int, float, str, bool, list, dict, path, datetime, quotation,
+// maybe, binary.
+func isTypeKeywordToken(tok Token) bool {
+	switch tok.Type {
+	case TYPEINT, TYPEFLOAT, STR, TYPEBOOL:
+		return true
+	case LITERAL:
+		switch tok.Lexeme {
+		case "list", "dict", "path", "datetime", "quotation", "maybe", "binary":
+			return true
+		}
+	}
+	return false
+}
+
+// matchPatternFormsHint lists the legal match-arm pattern forms, used in
+// the diagnostic raised when an arm pattern is not recognized.
+const matchPatternFormsHint = "expected one of: `_`; a type keyword " +
+	"(int, float, str, bool, list, dict, path, datetime, quotation, maybe, binary), " +
+	"optionally followed by a binding name; a value literal (42, 1.5, \"text\", true, false, PATH); " +
+	"two or more value literals of the same kind (strings, ints, or paths) matched as OR alternatives; " +
+	"`none`; `just <name>`; an enum member followed by a name for each payload value; " +
+	"an enum's name, optionally followed by a binding name; a list pattern `[ ... ]`; or a dict pattern `{ ... }`"

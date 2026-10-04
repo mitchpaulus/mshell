@@ -1,0 +1,8 @@
+# null equals only null, on either side.
+1 as int | null one!
+null as int | null n!
+@one @n = str wl
+@n @one = str wl
+@one @n != str wl
+@n @one != str wl
+@n @n = str wl
