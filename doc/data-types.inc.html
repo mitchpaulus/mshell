@@ -116,6 +116,16 @@ Indexes are zero-based, and negative indexes count from the end.
 Slice ranges must be forward (start less than or equal to end). Reverse ranges like <code>3:1</code> are invalid; use <code>reverse</code> after slicing if needed.
 </p>
 
+<p>
+Several indexers separated by commas apply to the same list, and their results are joined into one list.
+A trailing comma after the last indexer is a parse error, since commas also separate <code>match</code> arms.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellINDEXER">:0:</span><span class="mshellCOMMA">,</span> <span class="mshellINDEXER">2:</span> <span class="mshellLINECOMMENT"># [4 2 1]</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellINDEXER">:-1:</span><span class="mshellCOMMA">,</span> <span class="mshellINDEXER">:0:</span> <span class="mshellLINECOMMENT"># [1 4]</span></code>
+</pre>
+
 
 <h1 id="data-type-string">String <a class="section-link" href="#data-type-string" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 

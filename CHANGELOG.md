@@ -407,6 +407,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A trailing comma after a comma-separated variable store list (`a!, b!,`) is now a parse error.
   Commas also separate `match` arms, so the trailing comma was ambiguous.
 
+- A trailing comma after a comma-separated indexer list (`:0:, 2:,`) is now a parse error,
+  for the same reason as variable stores.
+
 - A number immediately followed by a literal character now lexes as a single
   literal token instead of a float/int plus a separate literal, so bare file
   arguments like `redo 1.pdf` work. Floats still end at token-ending

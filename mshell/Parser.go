@@ -1114,22 +1114,20 @@ func (parser *MShellParser) ParseIndexer() *MShellIndexerList {
 	indexerList.Indexers = append(indexerList.Indexers, parser.curr)
 	parser.NextToken()
 
-	for {
-		if parser.curr.Type == COMMA {
-			parser.NextToken()
-			if parser.curr.Type == ENDINDEXER || parser.curr.Type == STARTINDEXER || parser.curr.Type == INDEXER || parser.curr.Type == SLICEINDEXER {
-				indexerList.Indexers = append(indexerList.Indexers, parser.curr)
-				parser.NextToken()
-			} else {
-				// No error here, just a trailing comma which is fine.
-				break
-			}
-		} else {
-			break
-		}
+	// A comma belongs to the indexer list only when another indexer follows it.
+	// Otherwise it is left for the enclosing construct (a match arm or a
+	// dict entry). Anywhere else, ParseItem reports it as unexpected.
+	for parser.curr.Type == COMMA && isIndexerToken(parser.Peek().Type) {
+		parser.NextToken()
+		indexerList.Indexers = append(indexerList.Indexers, parser.curr)
+		parser.NextToken()
 	}
 
 	return indexerList
+}
+
+func isIndexerToken(t TokenType) bool {
+	return t == INDEXER || t == ENDINDEXER || t == STARTINDEXER || t == SLICEINDEXER
 }
 
 func (parser *MShellParser) ParseVarstoreList() MShellVarstoreList {
@@ -1437,7 +1435,7 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 	case VARSTORE:
 		return parser.ParseVarstoreList(), nil
 	case COMMA:
-		return nil, fmt.Errorf("%d:%d: Unexpected ','. Commas only separate match arms, dict entries, and variable stores like a!, b!.", parser.curr.Line, parser.curr.Column)
+		return nil, fmt.Errorf("%d:%d: Unexpected ','. Commas only separate match arms, dict entries, variable stores (a!, b!), and indexers (:0:, :2:).", parser.curr.Line, parser.curr.Column)
 	case EOF:
 		return nil, errors.New("Unexpected EOF while parsing item")
 	case COLON:

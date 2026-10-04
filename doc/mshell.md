@@ -388,6 +388,14 @@ If the indexing is fixed, there is dedicated syntax for it.
 @nested :1: :0: # 'is'
 ```
 
+Several indexers separated by commas apply to the same list, and their results are joined into one list.
+A trailing comma after the last indexer is a parse error, since commas also separate `match` arms.
+
+```mshell
+[ 4 3 2 1 ] :0:, 2:    # [ 4 2 1 ]
+[ 4 3 2 1 ] :-1:, :0:  # [ 1 4 ]
+```
+
 For non-fixed indexing, you have the `nth` operator.
 
 ```mshell
