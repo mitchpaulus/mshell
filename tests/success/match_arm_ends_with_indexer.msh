@@ -1,0 +1,8 @@
+# A match arm body may end with an indexer. The comma then separates the arms.
+[1 2 3] a!
+true match true : @a :0:, false : @a :1: end wl
+false match true : @a :0:, false : @a :1: end wl
+# Same inside a dict entry.
+{ "x": @a :2:, "y": 20 } :x? wl
+# Comma-separated indexers still work in an arm.
+true match true : @a :0:, 2:, false : @a :1:, 1: end str wl

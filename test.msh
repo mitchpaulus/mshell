@@ -1,0 +1,5 @@
+[1 2 3] a!
+true match
+    true: @a :0:,
+    false: @a :1:
+end
