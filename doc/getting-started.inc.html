@@ -73,7 +73,6 @@ An example installer script is available at
 <p>
 The interactive shell's prompt is set in <code>init.msh</code> with <code>setPrompt</code>.
 It takes a quotation that is given a <code>PromptInfo</code> and returns a list of <code>PromptItem</code> values.
-Write the prompt as a definition, so the variables it stores are its own.
 </p>
 
 <pre>
@@ -102,7 +101,6 @@ Write the prompt as a definition, so the variables it stores are its own.
 The shell runs the quotation before every prompt.
 Text is shown as written, except that control characters, including newlines, are shown visibly (<code>^[</code>, <code>^J</code>).
 Start a new line with <code>promptNewline</code>.
-Colors and attributes take no space on the screen, so the shell always knows where the command starts.
 Each color or attribute lasts until it is changed, and everything is reset before the command.
 </p>
 
@@ -111,7 +109,7 @@ Each color or attribute lasts until it is changed, and everything is reset befor
         <tr> <th>PromptItem</th> <th>Description</th> </tr>
     </thead>
     <tbody>
-        <tr> <td><code>promptText str</code></td> <td>Text.</td> </tr>
+        <tr> <td><code>promptText str</code></td> <td>Prompt text with control characters sanitized.</td> </tr>
         <tr> <td><code>promptNewline</code></td> <td>Start a new line.</td> </tr>
         <tr> <td><code>setFgColorBase16 Base16Color BaseBrightness</code></td> <td>Text color from the terminal's 16 colors: <code>baseBlack</code>, <code>baseRed</code>, <code>baseGreen</code>, <code>baseYellow</code>, <code>baseBlue</code>, <code>baseMagenta</code>, <code>baseCyan</code> or <code>baseWhite</code>, and <code>baseNormal</code> or <code>baseBright</code>.</td> </tr>
         <tr> <td><code>setFgColor256 int</code></td> <td>Text color from the 256 color palette, 0 to 255.</td> </tr>
@@ -136,7 +134,7 @@ Each color or attribute lasts until it is changed, and everything is reset befor
     </thead>
     <tbody>
         <tr> <td><code>stackDepth</code></td> <td><code>int</code></td> <td>How many values are on the stack.</td> </tr>
-        <tr> <td><code>stackTypes</code></td> <td><code>[str]</code></td> <td>The type of each value on the stack, bottom first, such as <code>["int" "[str]"]</code>.</td> </tr>
+        <tr> <td><code>stackTypes</code></td> <td><code>[str]</code></td> <td>The type of each value on the stack, bottom first, such as <code>[<span class="mshellSTRING">"int"</span> <span class="mshellSTRING">"[str]"</span>]</code>.</td> </tr>
         <tr> <td><code>lastLineOk</code></td> <td><code>bool</code></td> <td>Whether the last line ran without an error. A line that does not parse or type check counts as an error.</td> </tr>
         <tr> <td><code>lastExitCode</code></td> <td><code>Maybe[int]</code></td> <td>The exit code of the last command the last line ran, or <code>none</code> if it ran none.</td> </tr>
         <tr> <td><code>lastDurationMs</code></td> <td><code>int</code></td> <td>How long the last line took, in milliseconds.</td> </tr>
@@ -144,7 +142,6 @@ Each color or attribute lasts until it is changed, and everything is reset befor
 </table>
 
 <p>
-An empty line leaves these as they were.
 The prompt runs on its own stack, so it cannot change the values on yours.
 </p>
 
