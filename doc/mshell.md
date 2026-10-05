@@ -699,7 +699,9 @@ and parse a string in a given base with `fromBase` / `parseHex` / `parseOctal` /
 
 Every script is type-checked before it runs; if the check fails, nothing runs.
 `msh --type-check-only script.msh` checks and exits.
-The checker checks every def body and the top-level code, and the standard library's and startup file's defs too: code that calls a startup def with a type error is refused.
+The checker checks every def body and the top-level code, and the standard library's and startup file's defs too, on every run: code that calls a startup def with a type error is refused, and a script that does not call it runs with a warning.
+The startup files' top-level code is checked before it runs, and the script is checked from the stack and variables it leaves, with their types.
+Startup top-level code that does not check is not run, and then no script runs.
 It only accepts or rejects: no word behaves differently because of it.
 
 Signatures list inputs before `--` and outputs after it; the rightmost input is the top of the stack.

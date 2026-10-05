@@ -64,6 +64,10 @@ type lspServer struct {
 	startupFiles []lspStartupFile
 	prefixMu     sync.Mutex
 	prefixBases  map[int]*CoreBase
+	// sessions holds, for each base, sessions that checked the top-level
+	// code of the startup files before a document (checkDocument).
+	sessionsMu sync.Mutex
+	sessions   map[*CoreBase]*sync.Pool
 	builtinSigs  map[string][]string // name -> formatted "(in -- out)" sigs from the type checker
 	stdlibHover  map[string][]string // name -> formatted sigs for stdlib defs
 
@@ -275,11 +279,13 @@ func buildHoverIndex(base *CoreBase, stdlibDefs []MShellDefinition) (map[string]
 	return builtinSigs, stdlibHover
 }
 
-// lspStartupFile is one startup file's definitions and declarations.
+// lspStartupFile is one startup file's definitions and declarations, and
+// its top-level code, which a document is checked after.
 type lspStartupFile struct {
 	path  string
 	defs  []MShellDefinition
 	decls []MShellParseItem
+	top   *MShellFile
 }
 
 // loadStartupForLSP reads the startup files for their definitions and
@@ -326,12 +332,12 @@ func loadStartupFilesForLSP() ([]lspStartupFile, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	files := []lspStartupFile{{path: stdlibSpec.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items)}}
+	files := []lspStartupFile{{path: stdlibSpec.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items), top: startupTopLevel(parsed)}}
 	var startupErrs []string
 	if source, err := os.ReadFile(initSpec.path); err == nil {
 		init := lspStartupFile{path: initSpec.path}
 		if parsed, err := parseMShellInput(string(source), &TokenFile{initSpec.path}); err == nil {
-			init.defs, init.decls = parsed.Definitions, declarationItems(parsed.Items)
+			init.defs, init.decls, init.top = parsed.Definitions, declarationItems(parsed.Items), startupTopLevel(parsed)
 		} else {
 			logLSP(fmt.Sprintf("init file %s does not parse (%v); proceeding without it", initSpec.path, err))
 			startupErrs = append(startupErrs, fmt.Sprintf("the init file %s does not parse: %v", initSpec.path, err))
@@ -618,30 +624,31 @@ func (s *lspServer) typeFixActions(doc *lspDocument, file *MShellFile, params pr
 		return nil
 	}
 	uri := params.TextDocument.URI
-	errs, arena, names := s.coreErrors(uri, file)
 	var actions []protocol.CodeAction
 	var every []protocol.TextEdit
-	for _, e := range errs {
-		if e.Fix.Kind == FixNone {
-			continue
+	s.checkDocument(uri, file, func(diags []TypeError, arena *TypeArena, names *NameTable, _ []string) {
+		for _, e := range diags {
+			if e.Severity != SeverityError || e.Fix.Kind == FixNone {
+				continue
+			}
+			edit := typeFixEdit(doc, e.Fix)
+			if all {
+				every = append(every, edit)
+			}
+			if !quick {
+				continue
+			}
+			if diag := typeErrorToDiagnostic(doc, e, arena, names); rangesOverlap(diag.Range, params.Range) {
+				actions = append(actions, protocol.CodeAction{
+					Title:       e.Fix.Title,
+					Kind:        protocol.QuickFix,
+					Diagnostics: []protocol.Diagnostic{diag},
+					IsPreferred: true,
+					Edit:        &protocol.WorkspaceEdit{Changes: map[protocol.DocumentURI][]protocol.TextEdit{uri: {edit}}},
+				})
+			}
 		}
-		edit := typeFixEdit(doc, e.Fix)
-		if all {
-			every = append(every, edit)
-		}
-		if !quick {
-			continue
-		}
-		if diag := typeErrorToDiagnostic(doc, e, arena, names); rangesOverlap(diag.Range, params.Range) {
-			actions = append(actions, protocol.CodeAction{
-				Title:       e.Fix.Title,
-				Kind:        protocol.QuickFix,
-				Diagnostics: []protocol.Diagnostic{diag},
-				IsPreferred: true,
-				Edit:        &protocol.WorkspaceEdit{Changes: map[protocol.DocumentURI][]protocol.TextEdit{uri: {edit}}},
-			})
-		}
-	}
+	})
 	if all && len(every) > 0 {
 		actions = append(actions, protocol.CodeAction{
 			Title: "Fix every `new` mark in this file",
@@ -1039,19 +1046,19 @@ func (s *lspServer) base() *CoreBase {
 // program, not a startup file: it is checked with only the startup files
 // before it, as the command line runs it, so its own definitions are not
 // also loaded as the startup file's.
-func (s *lspServer) baseFor(uri protocol.DocumentURI) (*CoreBase, []string) {
+func (s *lspServer) baseFor(uri protocol.DocumentURI) (*CoreBase, []lspStartupFile, []string) {
 	paths := make([]string, len(s.startupFiles))
 	for i, f := range s.startupFiles {
 		paths[i] = f.path
 	}
 	n := startupFilesBefore(documentPath(uri), paths...)
 	if n == len(paths) {
-		return s.base(), s.startupErrs
+		return s.base(), s.startupFiles, s.startupErrs
 	}
 	s.prefixMu.Lock()
 	defer s.prefixMu.Unlock()
 	if b := s.prefixBases[n]; b != nil {
-		return b, nil
+		return b, s.startupFiles[:n], nil
 	}
 	if s.prefixBases == nil {
 		s.prefixBases = map[int]*CoreBase{}
@@ -1059,7 +1066,7 @@ func (s *lspServer) baseFor(uri protocol.DocumentURI) (*CoreBase, []string) {
 	defs, decls := joinStartupFiles(s.startupFiles[:n])
 	b := NewCoreBase(defs, decls)
 	s.prefixBases[n] = b
-	return b, nil
+	return b, s.startupFiles[:n], nil
 }
 
 // documentPath is the file a document URI names, or "" for one that is
@@ -1076,10 +1083,82 @@ func documentPath(uri protocol.DocumentURI) string {
 	return filepath.FromSlash(p)
 }
 
-// coreErrors checks file, the text of the document uri.
-func (s *lspServer) coreErrors(uri protocol.DocumentURI, file *MShellFile) ([]TypeError, *TypeArena, *NameTable) {
-	base, _ := s.baseFor(uri)
-	return base.Errors(file)
+// startupSession is a session that checked the top-level code of the
+// startup files before a document, with the errors in that code.
+type startupSession struct {
+	session *CoreSession
+	errs    []string
+	// fresh is the size of the session's arena once the startup code was
+	// checked. A document's line is taken back after it is checked, but
+	// the types it made stay in the arena, so a session whose arena grew
+	// more than sessionArenaGrowth past fresh is dropped for a new one.
+	fresh int
+}
+
+const sessionArenaGrowth = 1 << 14
+
+// sessionPool returns the pool of startup sessions for base, whose
+// startup files are files.
+func (s *lspServer) sessionPool(base *CoreBase, files []lspStartupFile) *sync.Pool {
+	s.sessionsMu.Lock()
+	defer s.sessionsMu.Unlock()
+	if p := s.sessions[base]; p != nil {
+		return p
+	}
+	if s.sessions == nil {
+		s.sessions = map[*CoreBase]*sync.Pool{}
+	}
+	p := &sync.Pool{New: func() any { return newStartupSession(base, files) }}
+	s.sessions[base] = p
+	return p
+}
+
+// newStartupSession checks the top-level code of files, in order, as the
+// first lines of a session of base, as the command line does before a
+// script: a file whose top level does not check is left out, with its
+// errors.
+func newStartupSession(base *CoreBase, files []lspStartupFile) *startupSession {
+	ss := &startupSession{session: base.NewSession(0)}
+	for _, f := range files {
+		if f.top == nil || len(f.top.Items) == 0 {
+			continue
+		}
+		diags, ok := ss.session.Check(f.top)
+		if ok {
+			ss.session.Commit()
+			continue
+		}
+		for _, e := range diags {
+			if e.Severity == SeverityError {
+				e.Pos = withFile(e.Pos, &TokenFile{f.path})
+				ss.errs = append(ss.errs, "the startup file's top-level code does not check, so it does not run, and neither does a script: "+
+					formatStartupError(e, ss.session.Arena(), ss.session.Names()))
+			}
+		}
+		ss.session.Abort()
+	}
+	ss.fresh = ss.session.Arena().Len()
+	return ss
+}
+
+// checkDocument checks file, the text of the document uri, as the command
+// line checks a script: as the next line of a session that checked the
+// top-level code of the startup files before it, so the document starts
+// from the stack and variables they leave (ai/startup-checking.md). It
+// calls fn with the document's diagnostics, and the startup files' errors
+// that stop every program, each naming its file; the line is taken back
+// after.
+func (s *lspServer) checkDocument(uri protocol.DocumentURI, file *MShellFile, fn func(diags []TypeError, arena *TypeArena, names *NameTable, startupErrs []string)) {
+	base, files, startupErrs := s.baseFor(uri)
+	pool := s.sessionPool(base, files)
+	ss := pool.Get().(*startupSession)
+	diags, _ := ss.session.Check(file)
+	all := append(append(slices.Clone(startupErrs), base.DeclarationErrors()...), ss.errs...)
+	fn(diags, ss.session.Arena(), ss.session.Names(), all)
+	ss.session.Abort()
+	if ss.session.Arena().Len() <= ss.fresh+sessionArenaGrowth {
+		pool.Put(ss)
+	}
 }
 
 func (s *lspServer) computeDiagnostics(uri protocol.DocumentURI, text string) []protocol.Diagnostic {
@@ -1093,23 +1172,21 @@ func (s *lspServer) computeDiagnostics(uri protocol.DocumentURI, text string) []
 	}
 
 	var diags []protocol.Diagnostic
-	base, startupErrs := s.baseFor(uri)
-	for _, msg := range append(startupErrs[:len(startupErrs):len(startupErrs)], base.DeclarationErrors()...) {
-		diags = append(diags, protocol.Diagnostic{
-			Range:    protocol.Range{End: protocol.Position{Character: 1}},
-			Severity: protocol.DiagnosticSeverityError,
-			Source:   "mshell",
-			Message:  msg,
-		})
-	}
-	base.diagnose(file, func(errs []TypeError, arena *TypeArena, names *NameTable) {
-		if len(errs) == 0 {
-			return
+	s.checkDocument(uri, file, func(errs []TypeError, arena *TypeArena, names *NameTable, startupErrs []string) {
+		for _, msg := range startupErrs {
+			diags = append(diags, protocol.Diagnostic{
+				Range:    protocol.Range{End: protocol.Position{Character: 1}},
+				Severity: protocol.DiagnosticSeverityError,
+				Source:   "mshell",
+				Message:  msg,
+			})
 		}
-		doc := &lspDocument{}
-		doc.setText(text)
-		for _, e := range errs {
-			diags = append(diags, typeErrorToDiagnostic(doc, e, arena, names))
+		if len(errs) > 0 {
+			doc := &lspDocument{}
+			doc.setText(text)
+			for _, e := range errs {
+				diags = append(diags, typeErrorToDiagnostic(doc, e, arena, names))
+			}
 		}
 	})
 	return diags

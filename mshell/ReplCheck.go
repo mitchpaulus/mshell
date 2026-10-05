@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,17 +19,6 @@ type replChecker struct {
 	// pre is the stack before the committed line: its references, not
 	// copies of the values (design doc, "Checking by default").
 	pre MShellStack
-}
-
-// newReplChecker starts checking with the startup files' definitions and
-// declarations, and the stack and variables they left (their values have
-// unknown types: startup code is not checked).
-// It returns the errors in the startup files, to show once: a line that
-// calls a definition whose signature has one is refused (plan question 21).
-func newReplChecker(stdlibDefs []MShellDefinition, decls []MShellParseItem, stackLen int, startupVars map[string]MShellObject) (*replChecker, []string) {
-	base := NewCoreBase(stdlibDefs, decls)
-	names := slices.Sorted(maps.Keys(startupVars))
-	return &replChecker{session: base.NewSession(stackLen, names...)}, base.StartupErrors()
 }
 
 // check checks a line. It returns the errors and the `dbg` snapshots,

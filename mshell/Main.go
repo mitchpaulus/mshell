@@ -64,6 +64,9 @@ type startupLoadOptions struct {
 	// is one of the startup files, that file is the program: it and the
 	// files after it are not loaded (startupFilesBefore).
 	script string
+	// checkOnly says the startup files' top-level code is checked but not
+	// run (--type-check-only).
+	checkOnly bool
 }
 
 func getStartupDataDir() (string, error) {
@@ -171,45 +174,89 @@ func getStartupFileSpecs(options startupLoadOptions) (startupFileSpec, startupFi
 	return stdlibSpec, initSpec, nil
 }
 
-func loadStartupFile(path string, description string, stack *MShellStack, context ExecuteContext, state *EvalState, definitions *[]MShellDefinition) error {
+// readStartupFile reads and parses a startup file, and registers its
+// definitions and declarations. Its top-level code is not run.
+func readStartupFile(path string, description string, state *EvalState, definitions *[]MShellDefinition) (*MShellFile, error) {
 	sourceBytes, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("%s not found at %s: %w", description, path, err)
+			return nil, fmt.Errorf("%s not found at %s: %w", description, path, err)
 		}
-		return fmt.Errorf("error reading %s at %s: %w", description, path, err)
+		return nil, fmt.Errorf("error reading %s at %s: %w", description, path, err)
 	}
 
 	parsedFile, err := parseMShellInput(string(sourceBytes), &TokenFile{path})
 	if err != nil {
-		return fmt.Errorf("error parsing %s at %s: %w", description, path, err)
+		return nil, fmt.Errorf("error parsing %s at %s: %w", description, path, err)
 	}
 
 	// Definitions first: a failed enum registration then records nothing.
 	if err := state.CheckDefinitionNames(*definitions, parsedFile.Definitions); err != nil {
-		return fmt.Errorf("error loading %s at %s: %s", description, path, strings.TrimSpace(err.Error()))
+		return nil, fmt.Errorf("error loading %s at %s: %s", description, path, strings.TrimSpace(err.Error()))
 	}
 	if err := state.RegisterDeclarations(parsedFile.Items, append(slices.Clone(*definitions), parsedFile.Definitions...)); err != nil {
-		return fmt.Errorf("error loading %s at %s: %s", description, path, strings.TrimSpace(err.Error()))
+		return nil, fmt.Errorf("error loading %s at %s: %s", description, path, strings.TrimSpace(err.Error()))
 	}
 	*definitions = append(*definitions, parsedFile.Definitions...)
 	state.AddCompletionDefinitions(parsedFile.Definitions)
 	state.StartupDecls = append(state.StartupDecls, declarationItems(parsedFile.Items)...)
+	return parsedFile, nil
+}
 
-	if len(parsedFile.Items) > 0 {
-		callStackItem := CallStackItem{
-			MShellParseItem: parsedFile.Items[0],
-			Name:            path,
-			CallStackType:   CALLSTACKFILE,
-		}
+// runStartupFile runs a startup file's top-level code.
+func runStartupFile(file *MShellFile, path string, description string, stack *MShellStack, context ExecuteContext, state *EvalState, definitions []MShellDefinition) error {
+	if len(file.Items) == 0 {
+		return nil
+	}
+	callStackItem := CallStackItem{
+		MShellParseItem: file.Items[0],
+		Name:            path,
+		CallStackType:   CALLSTACKFILE,
+	}
+	result := state.Evaluate(file.Items, stack, context, definitions, callStackItem)
+	if !result.Success {
+		return fmt.Errorf("error evaluating %s at %s", description, path)
+	}
+	return nil
+}
 
-		result := state.Evaluate(parsedFile.Items, stack, context, *definitions, callStackItem)
-		if !result.Success {
-			return fmt.Errorf("error evaluating %s at %s", description, path)
+// startupTopLevel is a startup file's top-level code, as a line for the
+// type checker's session: its declarations are already in the base.
+func startupTopLevel(file *MShellFile) *MShellFile {
+	top := &MShellFile{}
+	for _, item := range file.Items {
+		switch item.(type) {
+		case *MShellTypeDecl, *MShellEnumDecl:
+		default:
+			top.Items = append(top.Items, item)
 		}
 	}
+	return top
+}
 
-	return nil
+// checkStartupTopLevel checks a startup file's top-level code as the next
+// line of the startup session, and says whether it may run. A top level
+// that does not check is not run, as a line in the interactive shell is
+// not; its errors, naming the file, are kept in state.StartupTypeErrors.
+func checkStartupTopLevel(file *MShellFile, path string, state *EvalState) bool {
+	top := startupTopLevel(file)
+	if len(top.Items) == 0 {
+		return true
+	}
+	session := state.StartupSession
+	diags, ok := session.Check(top)
+	if ok {
+		session.Commit()
+		return true
+	}
+	for _, e := range diags {
+		if e.Severity == SeverityError {
+			e.Pos = withFile(e.Pos, &TokenFile{path})
+			state.StartupTypeErrors = append(state.StartupTypeErrors, formatStartupError(e, session.Arena(), session.Names()))
+		}
+	}
+	session.Abort()
+	return false
 }
 
 func clearStartupOverrideEnv(state *EvalState) error {
@@ -278,31 +325,54 @@ func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, cont
 
 	definitions := make([]MShellDefinition, 0)
 	n := startupFilesBefore(options.script, stdlibSpec.path, initSpec.path)
-	if n == 0 {
-		return definitions, nil
-	}
-	if err := loadStartupFile(stdlibSpec.path, stdlibSpec.description, stack, context, state, &definitions); err != nil {
-		initStatus := preflightStartupFile(initSpec)
-		return nil, &startupLoadError{
+	stdlibError := func(err error) error {
+		return &startupLoadError{
 			which:       "stdlib",
 			spec:        stdlibSpec,
 			options:     options,
 			cause:       err,
 			otherSpec:   &initSpec,
-			otherStatus: initStatus,
+			otherStatus: preflightStartupFile(initSpec),
 		}
 	}
-
-	if n == 1 {
-		return definitions, nil
+	initError := func(err error) error {
+		return &startupLoadError{which: "init", spec: initSpec, options: options, cause: err}
 	}
-	if err := loadStartupFile(initSpec.path, initSpec.description, stack, context, state, &definitions); err != nil {
-		if !initSpec.required && errors.Is(err, os.ErrNotExist) {
-			return definitions, nil
+
+	// Every startup file's definitions and declarations are registered
+	// before any top-level code runs, so the code sees the same names the
+	// type checker does.
+	var stdlibFile, initFile *MShellFile
+	if n >= 1 {
+		file, err := readStartupFile(stdlibSpec.path, stdlibSpec.description, state, &definitions)
+		if err != nil {
+			return nil, stdlibError(err)
 		}
-		return nil, &startupLoadError{which: "init", spec: initSpec, options: options, cause: err}
+		stdlibFile = file
+	}
+	if n >= 2 {
+		file, err := readStartupFile(initSpec.path, initSpec.description, state, &definitions)
+		if err != nil && (initSpec.required || !errors.Is(err, os.ErrNotExist)) {
+			return nil, initError(err)
+		}
+		initFile = file
 	}
 
+	// The top-level code of each file is checked as a line of the
+	// session the script or the interactive shell continues, and runs only
+	// if it checks (ai/startup-checking.md).
+	state.StartupBase = NewCoreBase(definitions, state.StartupDecls)
+	state.StartupSession = state.StartupBase.NewSession(0)
+	if stdlibFile != nil && checkStartupTopLevel(stdlibFile, stdlibSpec.path, state) && !options.checkOnly {
+		if err := runStartupFile(stdlibFile, stdlibSpec.path, stdlibSpec.description, stack, context, state, definitions); err != nil {
+			return nil, stdlibError(err)
+		}
+	}
+	if initFile != nil && checkStartupTopLevel(initFile, initSpec.path, state) && !options.checkOnly {
+		if err := runStartupFile(initFile, initSpec.path, initSpec.description, stack, context, state, definitions); err != nil {
+			return nil, initError(err)
+		}
+	}
 	return definitions, nil
 }
 
@@ -895,6 +965,7 @@ func main() {
 		allowEnvOverrides: allowStartupEnvOverrides,
 		requireInit:       requireVersionedInit,
 		script:            inputFilePath,
+		checkOnly:         typeCheckOnly,
 	}, &stack, context, &state)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, formatStartupErrorMessage(err, inputFilePath, file.Version, file.VersionLine, file.VersionCol))
@@ -913,18 +984,32 @@ func main() {
 	allDefinitions = append(allDefinitions, file.Definitions...)
 	state.AddCompletionDefinitions(file.Definitions)
 
-	// The program runs only if it type checks.
-	base := NewCoreBase(startupDefinitions, state.StartupDecls)
+	// The program runs only if it type checks, as the next line of the
+	// session the startup files' top-level code was checked in: it starts
+	// from the stack and variables they left (ai/startup-checking.md).
+	base, session := state.StartupBase, state.StartupSession
 	if defErrs := base.DefinitionErrors(); len(defErrs) > 0 {
 		fmt.Fprintln(os.Stderr, "Warning: type errors in the startup files; code that calls a definition with one is refused:")
 		for _, e := range defErrs {
 			fmt.Fprintln(os.Stderr, e)
 		}
 	}
-	errs, ok := base.Check(file)
+	ok := true
+	if len(state.StartupTypeErrors) > 0 {
+		// The startup code that does not check did not run, so the script
+		// does not either.
+		fmt.Fprintln(os.Stderr, "Type errors in the startup files' top-level code, which was not run:")
+		for _, e := range state.StartupTypeErrors {
+			fmt.Fprintln(os.Stderr, e)
+		}
+		ok = false
+	}
+	diags, _ := session.Check(file)
+	errs, scriptOk := base.formatCheck(diags, session.Arena(), session.Names())
 	for _, e := range errs {
 		fmt.Fprintln(os.Stderr, e)
 	}
+	ok = ok && scriptOk
 	if typeCheckOnly {
 		if ok {
 			os.Exit(0)
@@ -3476,13 +3561,24 @@ func (state *TermState) InteractiveMode() error {
 
 	state.stdLibDefs = stdLibDefs
 
-	checker, startupErrs := newReplChecker(stdLibDefs, state.evalState.StartupDecls, len(state.stack), state.context.Variables)
-	state.checker = checker
-	if len(startupErrs) > 0 {
+	// The lines continue the session the startup files' top-level code
+	// was checked in.
+	state.checker = &replChecker{session: state.evalState.StartupSession}
+	startupErrs := state.evalState.StartupBase.StartupErrors()
+	topErrs := state.evalState.StartupTypeErrors
+	if len(startupErrs) > 0 || len(topErrs) > 0 {
 		state.leaveRawMode()
-		fmt.Fprintln(os.Stderr, "Type errors in the startup files; a line that calls a definition with one is refused:")
-		for _, e := range startupErrs {
-			fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
+		if len(startupErrs) > 0 {
+			fmt.Fprintln(os.Stderr, "Type errors in the startup files; a line that calls a definition with one is refused:")
+			for _, e := range startupErrs {
+				fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
+			}
+		}
+		if len(topErrs) > 0 {
+			fmt.Fprintln(os.Stderr, "Type errors in the startup files' top-level code, which was not run:")
+			for _, e := range topErrs {
+				fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
+			}
 		}
 		if err := state.enterRawMode(); err != nil {
 			return err

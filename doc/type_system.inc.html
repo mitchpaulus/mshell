@@ -35,10 +35,21 @@ msh --type-check-only script.msh</code></pre>
 
 <p>
 The checker checks every definition body in the file, and the code outside definitions.
-It also checks the definitions of the standard library and the startup file.
-A definition there whose signature or body has a type error is still defined, but code that calls it is refused, with the error; code that does not call it is unaffected.
+It also checks the standard library and the startup file, on every run.
+A definition there whose signature or body has a type error is still defined, but code that calls it is refused, with the error.
+A script that does not call it runs, and the errors are printed as a warning.
+</p>
+
+<p>
+The startup files' top-level code, the code outside their definitions, is checked before it runs, and runs only if it checks.
+The script is checked from where that code leaves off: a variable the startup file sets, or a value it leaves on the stack, has its type in the script.
+If the startup file's top-level code does not check, it is not run, its errors are printed, and no script runs until it is fixed.
+<code>--type-check-only</code> checks the startup files' top-level code without running it.
+</p>
+
+<p>
 When the file being checked is the startup file itself, it is checked as the program, with only the standard library before it.
-The language server runs the same checker on every edit.
+The language server runs the same checker on every edit, after the startup files' top-level code.
 </p>
 
 <p>
@@ -77,7 +88,8 @@ What the line did to stored values and variables stays.
 <p>
 <code><span class="mshellLITERAL">return</span></code> at the top level of a line ends the session, as it ends a script.
 Type errors in the startup files' definitions are printed once when the shell starts, and a line that calls such a definition is refused.
-The startup files' top-level code is not checked, so a value it leaves on the stack, or a variable it sets, has unknown type, which a <code><span class="mshellMATCH">match</span></code> on its kind can narrow.
+The startup files' top-level code is checked as the session's first lines: the shell starts with the types of the values and variables it leaves.
+If it does not check, it is not run, its errors are printed, and the shell starts without it.
 </p>
 
 <h1 id="type-system-stack-effects">Stack Effects <a class="section-link" href="#type-system-stack-effects" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>

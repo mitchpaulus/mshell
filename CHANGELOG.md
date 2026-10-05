@@ -49,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The type checker checks the standard library's and the startup file's definitions as well as the script's.
   Every definition in them is checked on every run, whether or not the script calls it.
   A script runs even when one of them has a type error, with a warning listing the errors; a call to such a definition is refused.
+- The startup files' top-level code is type-checked before it runs, and runs only if it checks.
+  A script, and the interactive shell, start from the stack and variables it leaves, with their types: a script can use a variable the startup file sets.
+  When it does not check, its errors are printed and it is not run; a script then does not run either, and the interactive shell starts without it.
+  `--type-check-only` checks it without running it.
   A definition there with a type error stays defined, but code that calls it is refused, with the error; code that does not call it is checked as before.
 - The match pattern for a date/time is `datetime`, the same as the type name: `datetime d : ...`. Previously it was `date`.
 - `return` at the top level of an interactive line exits the shell, as it ends a script. Previously it ended only the line.

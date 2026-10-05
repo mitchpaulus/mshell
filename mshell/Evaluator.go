@@ -499,6 +499,15 @@ type EvalState struct {
 	// StartupDecls are the `type` and `enum` declarations of the startup
 	// files, which the type checker sees as the script's own.
 	StartupDecls []MShellParseItem
+	// StartupBase is the type checker's base for the startup files'
+	// definitions and declarations, and StartupSession the session their
+	// top-level code was checked in, which the script or the interactive
+	// shell's lines continue (loadStartupDefinitions).
+	StartupBase    *CoreBase
+	StartupSession *CoreSession
+	// StartupTypeErrors are the type errors in the startup files'
+	// top-level code, which was not run.
+	StartupTypeErrors []string
 	// ReturnedAtTop is set when a `return` ended the code being evaluated
 	// rather than a def: the interactive shell exits on it, as a script ends.
 	ReturnedAtTop bool
