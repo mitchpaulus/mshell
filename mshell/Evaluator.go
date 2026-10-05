@@ -520,6 +520,20 @@ type EvalState struct {
 
 	// FailureKind is the kind of the last runtime failure, or NoFailure.
 	FailureKind FailureKind
+
+	// PromptQuote is the quote setPrompt registered, run before each
+	// interactive prompt (Prompt.go), and CursorShape the CursorShape
+	// member setCursorShape chose, or "".
+	PromptQuote *MShellQuotation
+	CursorShape string
+	// lastExitCode is the exit code of the last process to finish, when
+	// ranProcess is set.
+	lastExitCode int
+	ranProcess   bool
+	// cancel, when set, stops the evaluation from another goroutine, and
+	// failOut takes the messages Fail would print to stderr.
+	cancel  *evalCancel
+	failOut io.Writer
 }
 
 // FailureKind says whether a checked program may stop with a runtime
@@ -622,6 +636,7 @@ var patternWords = map[string]bool{
 // names an unknown type, refers to itself with nothing in between, or has a
 // union of two members of one kind; then nothing from items is recorded.
 func (state *EvalState) RegisterDeclarations(items []MShellParseItem, defs []MShellDefinition) error {
+	state.ensureBuiltinEnums()
 	names := make(map[string]Token)
 	for i := range defs {
 		if _, ok := names[defs[i].Name]; !ok {
@@ -682,10 +697,6 @@ func (state *EvalState) RegisterDeclarations(items []MShellParseItem, defs []MSh
 	for _, item := range items {
 		switch d := item.(type) {
 		case *MShellEnumDecl:
-			if state.EnumMembers == nil {
-				state.EnumMembers = make(map[string]EnumMemberInfo)
-				state.EnumNames = make(map[string]bool)
-			}
 			state.EnumNames[d.Name] = true
 			for i, m := range d.Members {
 				state.EnumMembers[m] = EnumMemberInfo{EnumName: d.Name, Arity: len(d.MemberPayloads[i]), Ordinal: i}
@@ -707,6 +718,7 @@ func (state *EvalState) RegisterDeclarations(items []MShellParseItem, defs []MSh
 // "Names"); without this a later definition would be silently ignored, since
 // the first one with a name is the one that runs.
 func (state *EvalState) CheckDefinitionNames(existing, added []MShellDefinition) error {
+	state.ensureBuiltinEnums()
 	seen := make(map[string]Token, len(existing)+len(added))
 	for i := range existing {
 		if _, ok := seen[existing[i].Name]; !ok {
@@ -1093,20 +1105,24 @@ func (state *EvalState) failErrPtr(err error, message string) *EvalResult {
 // Fail prints message with the call stack and returns a failed result.
 func (state *EvalState) Fail(kind FailureKind, message string) EvalResult {
 	state.FailureKind = kind
+	var out io.Writer = os.Stderr
+	if state.failOut != nil {
+		out = state.failOut
+	}
 	if reportFailureKind {
 		sep := ""
 		if !strings.HasSuffix(message, "\n") {
 			sep = "\n"
 		}
-		defer fmt.Fprintf(os.Stderr, "%smsh error kind: %s\n", sep, kind)
+		defer fmt.Fprintf(out, "%smsh error kind: %s\n", sep, kind)
 	}
 	// Messages quote user input and file names, which may hold bytes a
 	// terminal would execute. Print them visibly instead.
 	message = terminalSafeText(message, true)
 	// Log message to stderr
 	if state.CallStack == nil {
-		fmt.Fprintf(os.Stderr, "No call stack available.\n")
-		fmt.Fprint(os.Stderr, message)
+		fmt.Fprintf(out, "No call stack available.\n")
+		fmt.Fprint(out, message)
 		return EvalResult{false, false, -1, 1, false}
 	}
 
@@ -1116,18 +1132,18 @@ func (state *EvalState) Fail(kind FailureKind, message string) EvalResult {
 
 		name := terminalSafeText(callStackItem.Name, false)
 		if parseItem == nil {
-			fmt.Fprintf(os.Stderr, "%s\n", name)
+			fmt.Fprintf(out, "%s\n", name)
 		} else {
 			startToken := parseItem.GetStartToken()
 			if startToken.TokenFile != nil {
-				fmt.Fprintf(os.Stderr, "%s:%d:%d %s\n", terminalSafeText(startToken.TokenFile.Path, false), startToken.Line, startToken.Column, name)
+				fmt.Fprintf(out, "%s:%d:%d %s\n", terminalSafeText(startToken.TokenFile.Path, false), startToken.Line, startToken.Column, name)
 			} else {
-				fmt.Fprintf(os.Stderr, "%d:%d %s\n", startToken.Line, startToken.Column, name)
+				fmt.Fprintf(out, "%d:%d %s\n", startToken.Line, startToken.Column, name)
 			}
 		}
 	}
 
-	fmt.Fprint(os.Stderr, message)
+	fmt.Fprint(out, message)
 	return EvalResult{false, false, -1, 1, false}
 }
 
@@ -1203,6 +1219,7 @@ func (state *EvalState) EvaluateQuote(quotation *MShellQuotation, stack *MShellS
 // pushEvaluateFrame pushes the bottom frame of an Evaluate call. The caller
 // sets its Context.
 func (state *EvalState) pushEvaluateFrame(objects []MShellParseItem, stack *MShellStack, definitions []MShellDefinition, callStackItem CallStackItem) *EvaluationFrame {
+	state.ensureBuiltinEnums()
 	if callStackItem.MShellParseItem != nil {
 		state.CallStack.Push(callStackItem)
 	}
@@ -1267,6 +1284,10 @@ func (state *EvalState) run(base int) EvalResult {
 				return *result
 			}
 			continue
+		}
+
+		if state.cancel != nil && state.cancel.requested.Load() {
+			return cancelledResult()
 		}
 
 		token := frame.Objects[frame.Index]
@@ -1816,10 +1837,8 @@ func (state *EvalState) emptyMatchSubjectFailure(matchBlock *MShellParseMatchBlo
 // matchPattern checks if a subject matches a pattern (list of parse items).
 // Returns (matched bool, bindings map, result EvalResult).
 func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
-	if state.EnumMembers != nil {
-		if handled, matched, bindings, result := state.matchEnumPattern(pattern, subject); handled {
-			return matched, bindings, result
-		}
+	if handled, matched, bindings, result := state.matchEnumPattern(pattern, subject); handled {
+		return matched, bindings, result
 	}
 	if is, ok := pattern[0].(*MShellIsPattern); ok && len(pattern) == 1 {
 		conforms, err := state.validateValue(subject, is.Target, &is.resolved)
@@ -4391,7 +4410,9 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 				context.PipelineGroup.waitAllStagesLaunched()
 			}
 
+			stopWatch := state.killOnCancel(cmd.Process)
 			waitErr := cmd.Wait()
+			stopWatch()
 
 			// Reclaim the terminal before evaluation can resume shell input.  A
 			// reclaim failure is shell bookkeeping and must not override the
@@ -4414,6 +4435,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			} else {
 				exitCode = cmd.ProcessState.ExitCode()
 			}
+			state.cancelOnInterrupt(exitCode)
 		}
 	}
 
@@ -11456,6 +11478,26 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: The second parameter in 'skip' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
+				case "setPrompt":
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'setPrompt' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					quote, ok := obj.(*MShellQuotation)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: 'setPrompt' takes a quotation, found a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+					state.PromptQuote = quote
+				case "setCursorShape":
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'setCursorShape' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					shape, ok := obj.(*MShellEnum)
+					if !ok || shape.EnumName != "CursorShape" {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: 'setCursorShape' takes a CursorShape, found a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+					state.CursorShape = shape.Member
 				case "hostname":
 					host, err := os.Hostname()
 					if err != nil {
@@ -11860,7 +11902,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						// Ignore
 					} else {
 						// Sleep for the specified number of seconds
-						time.Sleep(time.Duration(secs * float64(time.Second)))
+						state.sleepUnlessCancelled(time.Duration(secs * float64(time.Second)))
 					}
 				case "parseLinkHeader":
 					// Parse a string in the form of https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Link#specifications
@@ -12258,6 +12300,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				default:
 					return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot execute a non-list object. Found %s %s\n", t.Line, t.Column, top.TypeName(), top.DebugString()))
 				}
+
+				state.lastExitCode, state.ranProcess = exitCode, true
 
 				if (state.StopOnError || (t.Type == BANG)) && exitCode != 0 {
 					// Exit completely, with that exit code, don't need to print a different message. Usually the command itself will have printed an error.

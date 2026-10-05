@@ -138,6 +138,16 @@ func (s *CoreSession) Names() *NameTable { return s.c.names }
 // Len is the number of values the checker has on the stack.
 func (s *CoreSession) Len() int { return len(s.c.stack) }
 
+// StackTypes are the types of the values on the stack, bottom first, as
+// an error message writes them.
+func (s *CoreSession) StackTypes() []string {
+	out := make([]string, len(s.c.stack))
+	for i, slot := range s.c.stack {
+		out[i] = s.c.format(slot.t)
+	}
+	return out
+}
+
 // Check checks a line. With no errors the line is open: Commit keeps it
 // (the REPL runs it), Abort takes it back. With errors the session is
 // left as it was before the line. The informational diagnostics and `dbg`

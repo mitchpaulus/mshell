@@ -301,18 +301,43 @@ func (state *TermState) paintPrompt(writer io.Writer, readTerminal func() (Termi
 	}
 	finishWidthResolution(source, atoms, &state.widthCache)
 	layout := layoutAtomsInto(nil, atoms, ByteOffset(len(source)), 0, columns)
-	output := []byte("\033[35m")
+	// Each style is written before the first atom at or after its offset.
+	// A background color is turned off for each line break and set again
+	// after it; otherwise a terminal that scrolls fills the new row with it.
+	var output []byte
+	styles := state.promptStyles
+	next, bg := 0, ""
+	writeStyles := func(upTo ByteOffset) {
+		for ; next < len(styles) && styles[next].Offset <= upTo; next++ {
+			output = append(output, styles[next].Seq...)
+			switch styles[next].Bg {
+			case bgSet:
+				bg = styles[next].Seq
+			case bgClear:
+				bg = ""
+			}
+		}
+	}
+	lineBreak := func() {
+		if bg != "" {
+			output = append(output, "\033[49m"...)
+		}
+		output = append(output, '\r', '\n')
+		output = append(output, bg...)
+	}
 	for i, row := range layout.Rows {
 		if i > 0 && layout.Rows[i-1].EndType != RowEndSoftExact {
-			output = append(output, '\r', '\n')
+			lineBreak()
 		}
 		for j := row.AtomStart; j < row.AtomEnd; j++ {
+			writeStyles(atoms[j].SourceStart)
 			output = append(output, atoms[j].displayText(source)...)
 		}
 	}
+	writeStyles(ByteOffset(len(source)))
 	row, col := int(layout.CursorRow), int(layout.CursorCol)
 	if layout.PendingWrap {
-		output = append(output, '\r', '\n')
+		lineBreak()
 		row++
 		col = 0
 	}

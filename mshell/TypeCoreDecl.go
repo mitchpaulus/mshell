@@ -69,6 +69,8 @@ func (c *coreChecker) declareAll(items []MShellParseItem, defNames map[string]To
 		_, builtinAlias := c.res.aliases[name]
 		def, isDef := defNames[lex]
 		switch prev, ok := taken[name]; {
+		case ok && prev.TokenFile == builtinDeclFile:
+			declErr(tok, "'"+lex+"' is a built-in name, so "+what+" cannot have that name")
 		case ok:
 			declErr(tok, "'"+lex+"' is already declared at "+tokenPosStr(prev))
 		case reservedTypeNames[lex] || builtinAlias:

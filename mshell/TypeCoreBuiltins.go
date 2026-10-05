@@ -510,6 +510,8 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("prompt", "(str | path -- str)")
 	b.reg("runtime", "( -- str)")
 	b.reg("hostname", "( -- str)")
+	b.reg("setPrompt", "((PromptInfo -- [PromptItem]) -- )")
+	b.reg("setCursorShape", "(CursorShape -- )")
 	// Name below, value on top.
 	b.reg("setenv", "(str | path str | path -- )")
 	b.reg("unsetenv", "(str | path -- )")

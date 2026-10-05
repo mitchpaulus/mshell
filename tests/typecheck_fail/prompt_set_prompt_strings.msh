@@ -1,0 +1,2 @@
+# The prompt quote must return a list of PromptItem values.
+(drop ["> "]) setPrompt

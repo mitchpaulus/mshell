@@ -1,0 +1,2 @@
+# A built-in type cannot be declared again.
+type PromptInfo = int

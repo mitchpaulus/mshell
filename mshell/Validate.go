@@ -74,6 +74,7 @@ func newRuntimeTypes() *runtimeTypes {
 	res.declareHtmlNode()
 	(&coreTableBuilder{res: &res, t: &coreTable{}}).builtinAliases()
 	c := &coreChecker{arena: arena, names: names, rel: rel, table: &coreTable{}, res: res, defs: map[NameId]*coreSig{}}
+	c.declareBuiltins()
 	return &runtimeTypes{c: c}
 }
 

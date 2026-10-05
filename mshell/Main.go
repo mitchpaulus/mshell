@@ -810,6 +810,7 @@ func main() {
 			tabCycleMatches:    make([]string, 0, 10),
 
 			stack: make(MShellStack, 0),
+			lastLineOk: true,
 
 			context: ExecuteContext{
 				StandardInput:  nil, // These should be nil as that represents using a "default", not os.Stdin/os.Stdout
@@ -1066,6 +1067,21 @@ type TermState struct {
 	promptRow      int // Row where the prompt ends, 1-based
 	numPromptLines int // Number of lines the prompt takes up
 	promptText     SourceText // Text of the prompt on screen, repainted after a resize.
+	promptStyles   []promptStyle // Escape sequences within promptText.
+	// promptProblem is the last error the prompt quote gave, printed once.
+	promptProblem string
+	// What the prompt quote is told about the last line that was not empty
+	// (Prompt.go): whether it ran without an error, the exit code of the
+	// last process it ran, and how long it took.
+	lastLineOk       bool
+	lastLineExit     int
+	lastLineExitSet  bool
+	lastLineDuration time.Duration
+	lineStart        time.Time
+	lineRan          bool
+	// cursorShapeSet is whether the shell set the cursor shape, and owes
+	// the terminal a reset before a command runs.
+	cursorShapeSet bool
 	// Whether the terminal rejoins autowrapped rows on resize. Default true;
 	// MSHREFLOW=0 for terminals like xterm that keep the old rows.
 	resizeReflow   bool
@@ -3613,6 +3629,7 @@ func (state *TermState) InteractiveMode() error {
 	}
 
 	defer state.TrySaveHistory()
+	defer state.resetCursorShape()
 
 	// Backstop against a hang during the exit/cleanup sequence. Registered last
 	// so it runs first (defers are LIFO): the watchdog timer starts before
@@ -3897,6 +3914,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	// cursor stays after the prompt and ensurePromptNewline mistakes it for
 	// unterminated program output and prints the marker.
 	state.leaveRawMode()
+	state.resetCursorShape()
 	fmt.Fprintln(os.Stdout)
 
 	p := state.p
@@ -3904,6 +3922,14 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 
 	state.Logf("Executing Command: '%s'\n", currentCommandStr)
 	state.l.resetInput(currentCommandStr)
+
+	// An empty line leaves what the prompt is told about the last line.
+	state.lineRan = len(currentCommandStr) > 0
+	if state.lineRan {
+		state.lineStart = time.Now()
+		state.lastLineOk = false
+		state.evalState.clearLastExitCode()
+	}
 
 	var parsed *MShellFile
 	var err error
@@ -3960,6 +3986,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 ParseError:
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing input: %s\n", terminalSafeText(err.Error(), true))
+		state.finishLine()
 		// Reset before printPrompt, which can queue keys while querying the terminal.
 		state.index = 0
 		err = state.printPrompt()
@@ -4008,6 +4035,7 @@ ParseError:
 		state.evalState.AddCompletionDefinitions(parsed.Definitions)
 	}
 
+	state.lastLineOk = true
 	if len(parsed.Items) > 0 {
 		state.initCallStackItem.MShellParseItem = parsed.Items[0]
 		state.evalState.ReturnedAtTop = false
@@ -4022,6 +4050,7 @@ ParseError:
 		}
 
 		if !result.Success {
+			state.lastLineOk = false
 			fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
 			if state.checker != nil {
 				if dropped := state.checker.failed(&state.stack); dropped > 0 {
@@ -4042,6 +4071,7 @@ ParseError:
 	}
 
 PromptPrint:
+	state.finishLine()
 	// Reset before printPrompt, which can queue keys while querying the terminal.
 	state.index = 0
 	err = state.printPrompt()
@@ -4072,10 +4102,26 @@ func promptNewlineSequence(columns int) string {
 	return "\033[0m⏎" + strings.Repeat(" ", columns-1) + "\r⏎ \r\033[K"
 }
 
+// finishLine records how the line that just ran ended, for the prompt.
+func (state *TermState) finishLine() {
+	if !state.lineRan {
+		return
+	}
+	state.lineRan = false
+	state.lastLineDuration = time.Since(state.lineStart)
+	state.lastLineExit, state.lastLineExitSet = state.evalState.lastExitCode, state.evalState.ranProcess
+}
+
 func (state *TermState) printPrompt() error {
 	// Get out of raw mode
 	state.leaveRawMode()
 	state.ensurePromptNewline()
+	// The prompt quote runs first, so what it prints comes before the
+	// prompt, which again starts on a line of its own.
+	render, userPrompt := state.userPrompt()
+	if state.evalState.PromptQuote != nil {
+		state.ensurePromptNewline()
+	}
 
 	// Print PWD
 	cwd, err := os.Getwd()
@@ -4099,15 +4145,14 @@ func (state *TermState) printPrompt() error {
 		}
 	}
 
-	if len(state.homeDir) > 0 && strings.HasPrefix(cwd, state.homeDir) {
-		cwd = "~" + cwd[len(state.homeDir):]
+	if !userPrompt {
+		if len(state.homeDir) > 0 && strings.HasPrefix(cwd, state.homeDir) {
+			cwd = "~" + cwd[len(state.homeDir):]
+		}
+		render = defaultPrompt(cwd, err == nil, len(state.stack))
 	}
-
-	var promptText string
-	if err != nil {
-		promptText = "??? >"
-	} else {
-		promptText = fmt.Sprintf("%s (%d)> \n:: ", terminalSafeText(cwd, false), len(state.stack))
+	if render.HasTitle {
+		writeWindowTitle(render.Title)
 	}
 
 	if err = state.enterRawMode(); err != nil {
@@ -4116,7 +4161,12 @@ func (state *TermState) printPrompt() error {
 
 	state.UpdateSize()
 	read := func() (TerminalToken, error) { return state.InteractiveLexer(state.stdInState) }
-	return state.paintPrompt(os.Stdout, read, SourceText(promptText))
+	state.promptStyles = render.Styles
+	if err := state.paintPrompt(os.Stdout, read, render.Text); err != nil {
+		return err
+	}
+	state.applyCursorShape()
+	return nil
 }
 
 // Returns the current cursor position as (row, col)
