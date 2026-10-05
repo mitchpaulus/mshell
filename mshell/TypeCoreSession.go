@@ -743,7 +743,7 @@ func (s *CoreSession) compactOrigins() {
 func (s *CoreSession) compactLitLists() {
 	c := s.c
 	remap := make([]NameId, len(c.litLists))
-	var kept [][]NameId
+	var kept []litList
 	for _, st := range s.slotLists() {
 		for i := range st {
 			if st[i].lit&litListTag == 0 {

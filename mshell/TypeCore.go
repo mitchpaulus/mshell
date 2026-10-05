@@ -706,7 +706,7 @@ type coreChecker struct {
 	// parts holds the unit's partly new marks (TypeCorePartial.go).
 	parts []corePart
 	// litLists holds the unit's list literals of string literals.
-	litLists [][]NameId
+	litLists []litList
 
 	// The def being checked, the defs of the file its body calls, and for
 	// each of its outputs (bit i) whether every exit so far left a new
@@ -2344,6 +2344,9 @@ func (c *coreChecker) childIn(items []MShellParseItem, inList bool) (start int, 
 // when every element is fresh or immutable (ShapeLit), and otherwise a new
 // list of stored values (TypeCorePartial.go).
 func (c *coreChecker) listLiteral(l *MShellParseList) {
+	if c.stringListLiteral(l) {
+		return
+	}
 	start, outerFloor := c.childIn(l.Items, true)
 	c.floor = outerFloor
 	if c.diverged || c.abandoned {
@@ -2404,8 +2407,31 @@ func (c *coreChecker) literalNames(elems []coreSlot) (NameId, bool) {
 	if len(c.litLists) >= int(litListTag-1) {
 		return NameNone, false
 	}
-	c.litLists = append(c.litLists, names)
+	c.litLists = append(c.litLists, litList{names: names})
 	return litListTag | NameId(len(c.litLists)), true
+}
+
+// stringListLiteral types a list literal whose elements are all string
+// literals without walking them, and says whether it did: walking them
+// pushes a fresh str for each, which join to str, and records their names.
+// Here the names are interned only when a grid word reads them (litNames);
+// a long list of command options is never read that way.
+func (c *coreChecker) stringListLiteral(l *MShellParseList) bool {
+	if len(l.Items) == 0 || len(c.litLists) >= int(litListTag-1) {
+		return false
+	}
+	for _, item := range l.Items {
+		tok, ok := item.(*Token)
+		if !ok || (tok.Type != STRING && tok.Type != SINGLEQUOTESTRING) {
+			return false
+		}
+		if _, ok := tok.Value.(MShellString); !ok {
+			return false
+		}
+	}
+	c.litLists = append(c.litLists, litList{items: l.Items})
+	c.stack = append(c.stack, coreSlot{t: c.arena.MakeList(TidStr), fresh: true, lit: litListTag | NameId(len(c.litLists))})
+	return true
 }
 
 // dictLiteral types `{k: v, ...}`: a shape with exactly its keys, fresh
