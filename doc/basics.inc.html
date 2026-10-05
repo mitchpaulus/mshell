@@ -38,3 +38,8 @@ Unlike most shells, <code>mshell</code> is <i>strongly typed</i>. This provides 
 Most shells also focus the syntax on the construction of the <i>command line</i>. 
 In <code>mshell</code>, building up a command line is equivalent to building up a list of strings, because ultimately that is what is executed.
 </p>
+
+<p>
+<code>mshell</code> source code is UTF-8, as in Go.
+A byte in a source file that is not part of a valid UTF-8 character is an error, reported at its line and column.
+</p>

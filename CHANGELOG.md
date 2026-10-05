@@ -113,6 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Previously a misspelled type silently became a generic.
 - The type checker is about twice as fast, and checking a file again, as the language server does on every edit, allocates almost nothing.
   Deeply nested quotations no longer take quadratic time.
+- Source code must be UTF-8: a byte that is not part of a valid UTF-8 character is an error, reported at its line and column.
 
 ### Security
 
@@ -191,6 +192,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A pipe (`|`) has its own copy of its list of commands. Previously changing the list afterwards also changed the pipe.
 - `seq` and `leftPad` with an impossibly large count give an error instead of crashing.
 - `numFmt` with `sigFigs` above 17 gives an error. A float holds about 17 significant digits, so more gave wrong digits.
+- `else*` is recognized only as itself: any four-letter word starting with `el` and followed by `*`, such as `elxx*`, lexed as `else*`.
 
 ### Added
 

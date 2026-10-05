@@ -376,6 +376,10 @@ type Lexer struct {
 	line    int // One-based line number.
 	startLine int // One-based line number of the start of the token.
 	input   string
+	// bad is the byte offset of the first byte of input that is not part
+	// of a valid UTF-8 character, or -1. mshell source is UTF-8, so the
+	// token holding it is an error.
+	bad int
 	allowUnterminatedString bool
 	emitWhitespace bool // If true, will emit whitespace tokens.
 	emitComments bool // If true, will emit comments as tokens.
@@ -393,6 +397,7 @@ func (l *Lexer) DebugStr() {
 func NewLexer(input string, tokenFile *TokenFile) *Lexer {
 	return &Lexer{
 		input: input,
+		bad:   invalidUTF8At(input),
 		line:  1,
 		startLine: 1,
 		start: 0,
@@ -409,6 +414,7 @@ func NewLexer(input string, tokenFile *TokenFile) *Lexer {
 // Resets lexer with new input string.
 func (l *Lexer) resetInput(input string) {
 	l.input = input
+	l.bad = invalidUTF8At(input)
 	l.line = 1
 	l.startLine = 1
 	l.startCol = 0
@@ -838,9 +844,43 @@ func (l *Lexer) checkKeyword(start int, rest string, tokenType TokenType) TokenT
 	return LITERAL
 }
 
+// invalidUTF8At returns the byte offset of the first byte of s that is not
+// part of a valid UTF-8 character, or -1.
+func invalidUTF8At(s string) int {
+	if utf8.ValidString(s) {
+		return -1
+	}
+	for i, c := range s {
+		if c == utf8.RuneError {
+			if _, size := utf8.DecodeRuneInString(s[i:]); size == 1 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// invalidUTF8Token is the error for the token just scanned, which holds
+// the byte at l.bad.
+func (l *Lexer) invalidUTF8Token() Token {
+	line, col := l.startLine, l.startCol
+	for _, c := range l.input[l.start:l.bad] {
+		if c == '\n' {
+			line++
+			col = 0
+		} else {
+			col++
+		}
+	}
+	return l.makeErrorToken(fmt.Sprintf("%d:%d: Invalid UTF-8 encoding. mshell source must be UTF-8.", line, col+1))
+}
+
 func (l *Lexer) scanToken() Token {
 	for {
 		t := l.scanTokenAll()
+		if l.bad >= l.start && l.bad < l.current {
+			return l.invalidUTF8Token()
+		}
 
 		if t.Type != WHITESPACE && t.Type != LINECOMMENT {
 			return t

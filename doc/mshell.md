@@ -6,6 +6,8 @@
 - Brevity in syntax
 - Strong typing as opposed to stringly typed bash or fish
 
+Source code is UTF-8; a byte that is not part of a valid UTF-8 character is a lex error.
+
 ## Execution
 
 Execution of external commands or binaries is different in `mshell`.
