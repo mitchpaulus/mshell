@@ -417,3 +417,62 @@ func TestEnvWithoutStartupOverridesRemovesOnlyStartupVars(t *testing.T) {
 		t.Fatalf("filtered env missing KEEP_ME: %q", filteredJoined)
 	}
 }
+
+// TestLoadStartupDefinitionsChecksTopLevel: the startup files' top-level
+// code is checked as the first lines of the session the interactive shell
+// and the script continue. init.msh's top level runs only if it checks;
+// then the session has the stack and variables it left, with their types.
+func TestLoadStartupDefinitionsChecksTopLevel(t *testing.T) {
+	cases := []struct {
+		name     string
+		init     string
+		ran      bool
+		stackLen int
+		errPart  string
+		next     string // a line after the startup code
+		nextOk   bool
+	}{
+		{"checks", "5 n!\n\"x\"\n", true, 1, "", "@n 1 + wl wl", true},
+		{"stack type", "5 n!\n\"x\"\n", true, 1, "", "@n + wl", false},
+		{"error", "5 n!\n1 \"a\" +\n", false, 0, "init.msh: type error at line 2", "@n 1 + wl", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_DATA_HOME", dir)
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			stdPath := filepath.Join(dir, "std.msh")
+			initPath := filepath.Join(dir, "init.msh")
+			if err := os.WriteFile(stdPath, []byte("def double (int -- int) 2 * end\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(initPath, []byte(tc.init), 0644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("MSHSTDLIB", stdPath)
+			t.Setenv("MSHINIT", initPath)
+
+			stack, context, state := newStartupTestContext()
+			if _, err := loadStartupDefinitions(startupLoadOptions{version: "v9.9.9", allowEnvOverrides: true}, &stack, context, &state); err != nil {
+				t.Fatalf("loadStartupDefinitions() error = %v", err)
+			}
+			if _, ran := context.Variables["n"]; ran != tc.ran {
+				t.Errorf("init.msh ran = %v, want %v", ran, tc.ran)
+			}
+			if len(stack) != tc.stackLen || state.StartupSession.Len() != len(stack) {
+				t.Errorf("stack has %d values and the session %d, want %d", len(stack), state.StartupSession.Len(), tc.stackLen)
+			}
+			errs := strings.Join(state.StartupTypeErrors, "\n")
+			if (tc.errPart == "") != (errs == "") || !strings.Contains(errs, tc.errPart) {
+				t.Errorf("startup type errors %q, want %q", errs, tc.errPart)
+			}
+			next, err := parseMShellInput(tc.next, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := state.StartupSession.Check(next); ok != tc.nextOk {
+				t.Errorf("%q checks = %v, want %v", tc.next, ok, tc.nextOk)
+			}
+		})
+	}
+}

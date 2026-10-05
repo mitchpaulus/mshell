@@ -183,14 +183,14 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
 	// Convert stdin redirect: LITERAL becomes PATH, string-like types pass through
 	var stdinItem MShellParseItem
 	if pipeline.StdinRedirect != nil {
-		if t, ok := pipeline.StdinRedirect.(Token); ok {
+		if t, ok := pipeline.StdinRedirect.(*Token); ok {
 			switch t.Type {
 			case LITERAL:
-				stdinItem = Token{Type: PATH, Lexeme: "`" + t.Lexeme + "`", Line: t.Line, Column: t.Column, Start: t.Start}
+				stdinItem = &Token{Type: PATH, Lexeme: "`" + t.Lexeme + "`", Line: t.Line, Column: t.Column, Start: t.Start}
 			case STRING, SINGLEQUOTESTRING, PATH:
 				stdinItem = t
 			default:
-				return nil, &SimpleCliParseError{Message: "stdin redirect must be a string or path", Token: t}
+				return nil, &SimpleCliParseError{Message: "stdin redirect must be a string or path", Token: *t}
 			}
 		} else {
 			return nil, &SimpleCliParseError{Message: "stdin redirect must be a string or path", Token: pipeline.StdinRedirect.GetStartToken()}
@@ -200,14 +200,14 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
 	// Convert stdout redirect: LITERAL becomes SINGLEQUOTESTRING, string-like types pass through
 	var stdoutItem MShellParseItem
 	if pipeline.StdoutRedirect != nil {
-		if t, ok := pipeline.StdoutRedirect.(Token); ok {
+		if t, ok := pipeline.StdoutRedirect.(*Token); ok {
 			switch t.Type {
 			case LITERAL:
-				stdoutItem = Token{Type: SINGLEQUOTESTRING, Lexeme: "'" + t.Lexeme + "'", Line: t.Line, Column: t.Column, Start: t.Start}
+				stdoutItem = &Token{Type: SINGLEQUOTESTRING, Lexeme: "'" + t.Lexeme + "'", Line: t.Line, Column: t.Column, Start: t.Start}
 			case STRING, SINGLEQUOTESTRING, PATH:
 				stdoutItem = t
 			default:
-				return nil, &SimpleCliParseError{Message: "stdout redirect must be a string or path", Token: t}
+				return nil, &SimpleCliParseError{Message: "stdout redirect must be a string or path", Token: *t}
 			}
 		} else {
 			return nil, &SimpleCliParseError{Message: "stdout redirect must be a string or path", Token: pipeline.StdoutRedirect.GetStartToken()}
@@ -233,13 +233,13 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
 			// Stdin redirect goes after first command
 			if i == 0 && stdinItem != nil {
 				outerItems = append(outerItems, stdinItem)
-				outerItems = append(outerItems, Token{Type: LESSTHAN, Lexeme: "<"})
+				outerItems = append(outerItems, &Token{Type: LESSTHAN, Lexeme: "<"})
 			}
 
 			// Stdout redirect goes after last command
 			if i == len(pipeline.Commands)-1 && stdoutItem != nil {
 				outerItems = append(outerItems, stdoutItem)
-				outerItems = append(outerItems, Token{Type: GREATERTHAN, Lexeme: ">"})
+				outerItems = append(outerItems, &Token{Type: GREATERTHAN, Lexeme: ">"})
 			}
 		}
 
@@ -251,8 +251,8 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
 
 		items = []MShellParseItem{
 			outerList,
-			Token{Type: PIPE, Lexeme: "|"},
-			Token{Type: EXECUTE, Lexeme: ";"},
+			&Token{Type: PIPE, Lexeme: "|"},
+			&Token{Type: EXECUTE, Lexeme: ";"},
 		}
 	} else {
 		// Single command: [cmd items] redirect < redirect > ;
@@ -266,16 +266,16 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
 		// Add stdin redirect if present
 		if stdinItem != nil {
 			items = append(items, stdinItem)
-			items = append(items, Token{Type: LESSTHAN, Lexeme: "<"})
+			items = append(items, &Token{Type: LESSTHAN, Lexeme: "<"})
 		}
 
 		// Add stdout redirect if present
 		if stdoutItem != nil {
 			items = append(items, stdoutItem)
-			items = append(items, Token{Type: GREATERTHAN, Lexeme: ">"})
+			items = append(items, &Token{Type: GREATERTHAN, Lexeme: ">"})
 		}
 
-		items = append(items, Token{Type: EXECUTE, Lexeme: ";"})
+		items = append(items, &Token{Type: EXECUTE, Lexeme: ";"})
 	}
 
 	return &MShellFile{
@@ -312,9 +312,9 @@ func convertItemsForExecution(items []MShellParseItem) []MShellParseItem {
 // builtin/operator of the same name; other types are preserved as-is.
 func convertCommandNameForExecution(item MShellParseItem) MShellParseItem {
 	switch v := item.(type) {
-	case Token:
+	case *Token:
 		if v.Type == LITERAL {
-			return Token{
+			return &Token{
 				Type:   SINGLEQUOTESTRING,
 				Lexeme: "'" + v.Lexeme + "'",
 				Line:   v.Line,

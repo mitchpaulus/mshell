@@ -106,7 +106,7 @@ func TestAssertiveMatchInvariantPanicsOnMalformedAST(t *testing.T) {
 		Assertive: true,
 		Arms: []MShellParseMatchArm{{
 			Consume: false,
-			Pattern: []MShellParseItem{Token{Type: LITERAL, Lexeme: "value"}},
+			Pattern: []MShellParseItem{&Token{Type: LITERAL, Lexeme: "value"}},
 		}},
 	}
 	defer func() {

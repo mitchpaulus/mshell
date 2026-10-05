@@ -64,10 +64,6 @@ type coreSig struct {
 	// there: its body is not checked against it, and a call to it stops
 	// checking the unit, so the one mistake gives one error.
 	broken bool
-	// unchecked is set on a startup def of a lazy base (CoreBase.checkLazy)
-	// whose body is checked only once a check reaches it: a call to it
-	// records it in the checker's needed list.
-	unchecked bool
 }
 
 // litListTag marks a slot's lit as a list of literal names.
@@ -81,13 +77,29 @@ func (s coreSlot) key() NameId {
 	return s.lit
 }
 
+// litList is a list literal of string literals: the names of its
+// elements, or, for one stringListLiteral typed, its elements, string
+// literal tokens whose names are not interned yet.
+type litList struct {
+	names []NameId
+	items []MShellParseItem
+}
+
 // litNames returns the names of the list literal of string literals in
 // slot s; ok is false when s holds no such literal.
 func (c *coreChecker) litNames(s coreSlot) ([]NameId, bool) {
 	if s.lit&litListTag == 0 {
 		return nil, false
 	}
-	return c.litLists[s.lit&^litListTag-1], true
+	l := c.litLists[s.lit&^litListTag-1]
+	if l.items == nil {
+		return l.names, true
+	}
+	names := make([]NameId, len(l.items))
+	for i, item := range l.items {
+		names[i] = c.names.Intern(item.(*Token).Value.(MShellString).Content)
+	}
+	return names, true
 }
 
 func newCoreSig(ar *TypeArena, p coreSigParts) coreSig {
@@ -124,11 +136,6 @@ type coreTable struct {
 	// brokenWhy says, for a startup def whose signature or body has an
 	// error, why a call to it is refused.
 	brokenWhy map[NameId]string
-	// completionIds are, in a lazy base, the startup defs with `complete`
-	// metadata, which completionDefs (completionDefsId) gives as quotes:
-	// a check that uses it needs their bodies checked.
-	completionIds   []NameId
-	completionDefsId NameId
 	byToken [][]coreSig
 	// index is the indexer `:n:`; slice is `n:`, `:n` and `a:b`.
 	index, slice []coreSig

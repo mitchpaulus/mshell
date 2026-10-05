@@ -45,13 +45,6 @@ type CoreBase struct {
 	// refuse the code that calls those definitions (checkStartupBodies).
 	declErrs []TypeError
 	defErrs  []string
-	// A lazy base checks a startup def's body only once a check calls it
-	// (checkLazy): std holds the startup defs, owned the index in std of
-	// each one whose body is checked, by name, and done those checked.
-	lazy  bool
-	std   []MShellDefinition
-	owned map[NameId]int
-	done  map[NameId]bool
 	// pool holds checkers that finished a check, to start the next one
 	// with their storage (diagnose).
 	pool sync.Pool
@@ -108,13 +101,6 @@ func takeCoreBuiltins() *coreBuiltins {
 // declarations, decls, and the signatures of their defs, stdlibDefs, whose
 // bodies are checked too (checkStartupBodies).
 func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBase {
-	return newCoreBase(stdlibDefs, decls, false)
-}
-
-// newCoreBase is NewCoreBase; with lazy set, the startup defs' bodies are
-// checked only as checks reach them (checkLazy), which suits a base used
-// for one check: a script uses few of the standard library's defs.
-func newCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem, lazy bool) *CoreBase {
 	bi := takeCoreBuiltins()
 	arena, names, res, table := bi.arena, bi.names, bi.res, bi.table
 	b := &CoreBase{arena: arena, names: names, table: table}
@@ -159,27 +145,13 @@ func newCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem, lazy bo
 		sig := newCoreSig(arena, parts)
 		sig.freeOut = outputOnlyGeneric(arena, parts)
 		sig.broken = broken
-		sig.unchecked = lazy && !broken
 		table.setName(id, []coreSig{sig})
 		if e := completionSigError(arena, names, res.rel, table, def, &sig); e != nil {
 			e.Pos = withFile(e.Pos, def.File)
 			b.defErrs = append(b.defErrs, formatStartupError(*e, arena, names))
 		}
-		if lazy {
-			if cmds, err := completionMetadataNames(*def); err == nil && len(cmds) > 0 {
-				table.completionIds = append(table.completionIds, id)
-			}
-		}
 	}
 	b.aliases = res.aliases
-	if lazy {
-		b.lazy, b.std, b.owned, b.done = true, stdlibDefs, make(map[NameId]int, len(owned)), map[NameId]bool{}
-		for _, i := range owned {
-			b.owned[names.Intern(stdlibDefs[i].Name)] = i
-		}
-		table.completionDefsId, _ = names.Lookup("completionDefs")
-		return b
-	}
 	c := &coreChecker{arena: b.arena, names: b.names, rel: res.rel, table: b.table, res: *res,
 		defs: map[NameId]*coreSig{}, ctors: b.ctors, declared: b.declared}
 	c.uni = NewUnifier(c.arena, &c.subst, c.rel)
@@ -195,6 +167,11 @@ func newCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem, lazy bo
 func (b *CoreBase) checkStartupBodies(c *coreChecker, defs []MShellDefinition, owned []int) {
 	// One file at a time, so each error gets its file; a def's errors are
 	// at or after its name and before the next def's in the same file.
+	type fileDefs struct {
+		file *TokenFile
+		defs []MShellDefinition
+	}
+	var files []fileDefs
 	for start := 0; start < len(owned); {
 		file := defs[owned[start]].File
 		end := start
@@ -207,25 +184,29 @@ func (b *CoreBase) checkStartupBodies(c *coreChecker, defs []MShellDefinition, o
 		}
 		start = end
 		slices.SortFunc(group, func(x, y MShellDefinition) int { return tokenOrder(x.NameToken, y.NameToken) })
-		// A def that calls one found broken is broken too: it was checked
-		// trusting the other's signature. So check again until no def
-		// breaks; checkDefs skips the broken ones, so each error is
-		// reported once, and with no errors this is one pass.
-		for broke := true; broke; {
-			broke = false
+		files = append(files, fileDefs{file, group})
+	}
+	// A def that calls one found broken is broken too: it was checked
+	// trusting the other's signature. The other may be in a later file, so
+	// check every file again until no def breaks; checkDefs skips the
+	// broken ones, so each error is reported once, and with no errors this
+	// is one pass.
+	for broke := true; broke; {
+		broke = false
+		for _, f := range files {
 			nerr := len(c.errs)
-			c.checkDefs(group)
+			c.checkDefs(f.defs)
 			for _, e := range c.errs[nerr:] {
 				if e.Severity != SeverityError {
 					continue
 				}
 				var owner *MShellDefinition
-				for i := range group {
-					if tokenOrder(group[i].NameToken, e.Pos) <= 0 {
-						owner = &group[i]
+				for i := range f.defs {
+					if tokenOrder(f.defs[i].NameToken, e.Pos) <= 0 {
+						owner = &f.defs[i]
 					}
 				}
-				e.Pos = withFile(e.Pos, file)
+				e.Pos = withFile(e.Pos, f.file)
 				if owner == nil {
 					b.defErrs = append(b.defErrs, formatStartupError(e, c.arena, c.names))
 					continue
@@ -240,94 +221,6 @@ func (b *CoreBase) checkStartupBodies(c *coreChecker, defs []MShellDefinition, o
 	}
 }
 
-// checkLazy checks file with a lazy base: first trusting the signatures of
-// the startup defs it calls, then their bodies and those of every startup
-// def they reach (checkReached). A body found broken refuses its callers,
-// so then file is checked again; a call to a broken def is an error, as
-// with a base that checked every body first. The defs the file does not
-// reach are never run, so the verdict is the same.
-func (b *CoreBase) checkLazy(file *MShellFile) ([]string, bool) {
-	c := b.newChecker()
-	c.checkFile(file)
-	if b.checkReached(c.needed) {
-		c = b.newChecker()
-		c.checkFile(file)
-	}
-	return b.formatCheck(c.errs, c.arena, c.names)
-}
-
-// checkReached checks the bodies of the startup defs needed names and of
-// every startup def they call, once each, and says whether one of them is
-// broken. The calls are found by checking: a first pass checks each new
-// def on its own, trusting every signature, and adds the defs it calls;
-// then the whole set is checked together, as checkStartupBodies checks a
-// file, so defs that call each other decide their `new` marks together.
-// Each check runs in an overlay; the base keeps only the broken marks.
-func (b *CoreBase) checkReached(needed []NameId) bool {
-	var reach []int
-	seen := map[NameId]bool{}
-	probe := b.newChecker()
-	for queue := needed; len(queue) > 0; {
-		var batch []MShellDefinition
-		for _, id := range queue {
-			if seen[id] || b.done[id] {
-				continue
-			}
-			seen[id] = true
-			i := b.owned[id]
-			reach = append(reach, i)
-			batch = append(batch, b.std[i])
-			probe.defs[id] = &b.table.name(id)[0]
-		}
-		probe.needed = probe.needed[:0]
-		probe.checkDefs(batch)
-		queue = slices.Clone(probe.needed)
-	}
-	if len(reach) == 0 {
-		return false
-	}
-	// The startup files in load order, each def in place, as
-	// checkStartupBodies groups them.
-	slices.Sort(reach)
-	c := b.newChecker()
-	b.checkStartupBodies(c, b.std, reach)
-	for _, id := range c.needed {
-		if !seen[id] && !b.done[id] {
-			// The probe missed a call the full check made (it cannot: a
-			// broken callee only stops a body sooner): check every body,
-			// as a base that is not lazy does. The marks set so far are a
-			// part of the marks that check sets.
-			return b.checkAll()
-		}
-	}
-	broke := false
-	for id := range seen {
-		b.done[id] = true
-		broke = broke || b.table.name(id)[0].broken
-	}
-	return broke
-}
-
-// checkAll checks every startup body a lazy base has not checked yet, and
-// says whether one of them is broken.
-func (b *CoreBase) checkAll() bool {
-	var all []int
-	for id, i := range b.owned {
-		if !b.done[id] {
-			all = append(all, i)
-		}
-	}
-	slices.Sort(all)
-	b.checkStartupBodies(b.newChecker(), b.std, all)
-	broke := false
-	for id := range b.owned {
-		if !b.done[id] {
-			b.done[id] = true
-			broke = broke || b.table.name(id)[0].broken
-		}
-	}
-	return broke
-}
 // tokenOrder compares two positions in one file.
 func tokenOrder(a, b Token) int {
 	if a.Line != b.Line {
@@ -374,16 +267,13 @@ func completionSigError(arena *TypeArena, names *NameTable, rel *Relations, tabl
 // and declarations. It returns the formatted errors and `dbg` snapshots,
 // and whether there were no errors.
 func CoreTypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition, decls []MShellParseItem) ([]string, bool) {
-	return newCoreBase(stdlibDefs, decls, true).Check(file)
+	return NewCoreBase(stdlibDefs, decls).Check(file)
 }
 
 // Check checks file in a new overlay of the base, and formats its errors
 // and its `dbg` snapshots; ok is whether there were no errors. Errors in
 // the startup files' declarations come first, with their file.
 func (b *CoreBase) Check(file *MShellFile) (out []string, ok bool) {
-	if b.lazy {
-		return b.checkLazy(file)
-	}
 	b.diagnose(file, func(diags []TypeError, arena *TypeArena, names *NameTable) {
 		out, ok = b.formatCheck(diags, arena, names)
 	})
@@ -394,6 +284,13 @@ func (b *CoreBase) Check(file *MShellFile) (out []string, ok bool) {
 // file: the interactive shell prints them once when it starts.
 func (b *CoreBase) StartupErrors() []string {
 	return append(b.formatStartup(b.declErrs), b.defErrs...)
+}
+
+// DefinitionErrors are the errors in the startup files' definitions: a
+// call to a definition with one is refused, and the rest of the program
+// runs. A script prints them as warnings.
+func (b *CoreBase) DefinitionErrors() []string {
+	return b.defErrs
 }
 
 // DeclarationErrors are the errors in the startup files' declarations,
@@ -706,7 +603,7 @@ type coreChecker struct {
 	// parts holds the unit's partly new marks (TypeCorePartial.go).
 	parts []corePart
 	// litLists holds the unit's list literals of string literals.
-	litLists [][]NameId
+	litLists []litList
 
 	// The def being checked, the defs of the file its body calls, and for
 	// each of its outputs (bit i) whether every exit so far left a new
@@ -716,10 +613,6 @@ type coreChecker struct {
 	exitNew    uint64
 	exitShared []Token
 	exits      int
-
-	// needed are the startup defs of a lazy base this check called before
-	// their bodies were checked (CoreBase.checkLazy).
-	needed []NameId
 
 	// Definite assignment (TypeCoreAssign.go): the variables set on this
 	// path, in order; the loops being checked; how deep the walk is in
@@ -942,7 +835,7 @@ func (c *coreChecker) walk(items []MShellParseItem) {
 			return
 		}
 		if l, ok := items[i].(*MShellParseList); ok && i+1 < len(items) && isWord(items[i+1], "groupBy") &&
-			c.groupBySpecs(l, items[i+1].(Token)) {
+			c.groupBySpecs(l, *items[i+1].(*Token)) {
 			// A spec list written at a grid groupBy is checked against it
 			// spec by spec (TypeCoreGrid.go).
 			i++
@@ -957,14 +850,14 @@ func (c *coreChecker) walk(items []MShellParseItem) {
 
 // isWord reports whether item is the word name.
 func isWord(item MShellParseItem, name string) bool {
-	tok, ok := item.(Token)
+	tok, ok := item.(*Token)
 	return ok && tok.Type == LITERAL && tok.Lexeme == name
 }
 
 func (c *coreChecker) step(item MShellParseItem) {
 	switch it := item.(type) {
-	case Token:
-		c.token(it)
+	case *Token:
+		c.token(*it)
 	case MShellVarstoreList:
 		for i := len(it.VarStores) - 1; i >= 0; i-- {
 			tok := it.VarStores[i]
@@ -1003,11 +896,11 @@ func (c *coreChecker) step(item MShellParseItem) {
 		if len(it.Indexers) > 1 {
 			sigs = c.table.multiIndex
 			for _, ix := range it.Indexers {
-				if ix.(Token).Type != INDEXER {
+				if ix.(*Token).Type != INDEXER {
 					sigs = c.table.multi
 				}
 			}
-		} else if it.Indexers[0].(Token).Type == INDEXER {
+		} else if it.Indexers[0].(*Token).Type == INDEXER {
 			sigs = c.table.index
 		}
 		c.call(sigs, it.GetStartToken())
@@ -1141,14 +1034,6 @@ func (c *coreChecker) token(tok Token) {
 	}
 }
 
-// needBody records that this check calls the startup def id, whose body a
-// lazy base has not checked yet.
-func (c *coreChecker) needBody(id NameId) {
-	if !slices.Contains(c.needed, id) {
-		c.needed = append(c.needed, id)
-	}
-}
-
 // word checks a LITERAL token: return, a stack shuffle, a def, a builtin,
 // or a bare word in a list literal.
 func (c *coreChecker) word(tok Token) {
@@ -1175,9 +1060,6 @@ func (c *coreChecker) word(tok Token) {
 				}
 				c.abandoned = true
 				return
-			}
-			if sig.unchecked {
-				c.needBody(id)
 			}
 			if c.curDef != nil {
 				c.calls = append(c.calls, sig)
@@ -1210,13 +1092,6 @@ func (c *coreChecker) word(tok Token) {
 				c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok, Hint: c.table.brokenWhy[id]})
 				c.abandoned = true
 				return
-			}
-			if sigs[0].unchecked {
-				c.needBody(id)
-			} else if id == c.table.completionDefsId {
-				for _, d := range c.table.completionIds {
-					c.needBody(d)
-				}
 			}
 			c.call(sigs, tok)
 			return
@@ -2344,6 +2219,9 @@ func (c *coreChecker) childIn(items []MShellParseItem, inList bool) (start int, 
 // when every element is fresh or immutable (ShapeLit), and otherwise a new
 // list of stored values (TypeCorePartial.go).
 func (c *coreChecker) listLiteral(l *MShellParseList) {
+	if c.stringListLiteral(l) {
+		return
+	}
 	start, outerFloor := c.childIn(l.Items, true)
 	c.floor = outerFloor
 	if c.diverged || c.abandoned {
@@ -2404,8 +2282,31 @@ func (c *coreChecker) literalNames(elems []coreSlot) (NameId, bool) {
 	if len(c.litLists) >= int(litListTag-1) {
 		return NameNone, false
 	}
-	c.litLists = append(c.litLists, names)
+	c.litLists = append(c.litLists, litList{names: names})
 	return litListTag | NameId(len(c.litLists)), true
+}
+
+// stringListLiteral types a list literal whose elements are all string
+// literals without walking them, and says whether it did: walking them
+// pushes a fresh str for each, which join to str, and records their names.
+// Here the names are interned only when a grid word reads them (litNames);
+// a long list of command options is never read that way.
+func (c *coreChecker) stringListLiteral(l *MShellParseList) bool {
+	if len(l.Items) == 0 || len(c.litLists) >= int(litListTag-1) {
+		return false
+	}
+	for _, item := range l.Items {
+		tok, ok := item.(*Token)
+		if !ok || (tok.Type != STRING && tok.Type != SINGLEQUOTESTRING) {
+			return false
+		}
+		if _, ok := tok.Value.(MShellString); !ok {
+			return false
+		}
+	}
+	c.litLists = append(c.litLists, litList{items: l.Items})
+	c.stack = append(c.stack, coreSlot{t: c.arena.MakeList(TidStr), fresh: true, lit: litListTag | NameId(len(c.litLists))})
+	return true
 }
 
 // dictLiteral types `{k: v, ...}`: a shape with exactly its keys, fresh

@@ -1996,3 +1996,41 @@ func TestDiagnosticsStartupDefErrors(t *testing.T) {
 		t.Fatalf("the init file itself: %+v", diags)
 	}
 }
+
+// TestDiagnosticsAfterStartupTopLevel: a document is checked after the
+// startup files' top-level code, as the command line checks a script: it
+// may use the variables and the stack init.msh leaves. A startup file
+// whose top level does not check shows on every document, as the command
+// line then runs no script.
+func TestDiagnosticsAfterStartupTopLevel(t *testing.T) {
+	dir := t.TempDir()
+	initPath := filepath.Join(dir, "init.msh")
+	server := func(initText string) *lspServer {
+		parsed, err := parseMShellInput(initText, &TokenFile{initPath})
+		if err != nil {
+			t.Fatal(err)
+		}
+		files := []lspStartupFile{{path: initPath, defs: parsed.Definitions, decls: declarationItems(parsed.Items), top: startupTopLevel(parsed)}}
+		s := &lspServer{startupFiles: files}
+		s.stdlibDefs, s.startupDecls = joinStartupFiles(files)
+		return s
+	}
+	uri := protocol.DocumentURI("file://" + filepath.ToSlash(filepath.Join(dir, "other.msh")))
+
+	s := server("5 base!\n\"left\"\n")
+	if diags := s.computeDiagnostics(uri, "@base 1 + wl wl\n"); len(diags) != 0 {
+		t.Fatalf("a document using init.msh's variable and stack: %+v", diags)
+	}
+	if diags := s.computeDiagnostics(uri, "@base \"a\" + wl\n"); len(diags) != 1 {
+		t.Fatalf("a document misusing init.msh's variable: %+v", diags)
+	}
+
+	s = server("5 base!\n1 \"a\" +\n")
+	diags := s.computeDiagnostics(uri, "1 wl\n")
+	if len(diags) != 1 || !strings.Contains(diags[0].Message, "top-level code does not check") || !strings.Contains(diags[0].Message, initPath) {
+		t.Fatalf("init.msh's top level does not check: %+v", diags)
+	}
+	if diags := s.computeDiagnostics(uri, "@base wl\n"); len(diags) != 2 {
+		t.Fatalf("init.msh's top level did not run, so its variable is unset: %+v", diags)
+	}
+}

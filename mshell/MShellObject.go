@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // TruncateMiddle truncates a string to a maximum length, adding "..." in the middle if necessary.
@@ -1805,33 +1806,37 @@ func ParseRawString(inputString string) (string, error) {
 		return "", fmt.Errorf("input string should have a minimum length of 2 for surrounding double quotes.\n")
 	}
 
-	allRunes := []rune(inputString)
-
-	var b strings.Builder
-	index := 1
-	inEscape := false
-
-	for index < len(allRunes)-1 {
-		c := allRunes[index]
-
-		if inEscape {
-			escaped, ok := escapedRune(c)
-			if !ok {
-				return "", fmt.Errorf("invalid escape character '%c'", c)
-			}
-			b.WriteRune(escaped)
-			inEscape = false
-		} else {
-			if c == '\\' {
-				inEscape = true
-			} else {
-				b.WriteRune(rune(c))
-			}
-		}
-
-		index++
+	// The content is between the first and last characters.
+	_, first := utf8.DecodeRuneInString(inputString)
+	_, last := utf8.DecodeLastRuneInString(inputString)
+	if first+last > len(inputString) {
+		return "", nil
 	}
+	content := inputString[first : len(inputString)-last]
 
+	i := strings.IndexByte(content, '\\')
+	if i < 0 {
+		return content, nil
+	}
+	var b strings.Builder
+	b.Grow(len(content))
+	for i >= 0 {
+		b.WriteString(content[:i])
+		content = content[i+1:]
+		if content == "" {
+			// A backslash at the end escapes nothing, and is dropped.
+			break
+		}
+		c, size := utf8.DecodeRuneInString(content)
+		escaped, ok := escapedRune(c)
+		if !ok {
+			return "", fmt.Errorf("invalid escape character '%c'", c)
+		}
+		b.WriteRune(escaped)
+		content = content[size:]
+		i = strings.IndexByte(content, '\\')
+	}
+	b.WriteString(content)
 	return b.String(), nil
 }
 

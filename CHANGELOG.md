@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--type-check-only` checks and exits, as before.
   A script that the checker refuses must be fixed before it runs again; `msh --type-check-only` on your scripts shows what needs changing.
 - The type checker checks the standard library's and the startup file's definitions as well as the script's.
+  Every definition in them is checked on every run, whether or not the script calls it.
+  A script runs even when one of them has a type error, with a warning listing the errors; a call to such a definition is refused.
+- The startup files' top-level code is type-checked before it runs, and runs only if it checks.
+  A script, and the interactive shell, start from the stack and variables it leaves, with their types: a script can use a variable the startup file sets.
+  When it does not check, its errors are printed and it is not run; a script then does not run either, and the interactive shell starts without it.
+  `--type-check-only` checks it without running it.
   A definition there with a type error stays defined, but code that calls it is refused, with the error; code that does not call it is checked as before.
 - The match pattern for a date/time is `datetime`, the same as the type name: `datetime d : ...`. Previously it was `date`.
 - `return` at the top level of an interactive line exits the shell, as it ends a script. Previously it ended only the line.
@@ -113,6 +119,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Previously a misspelled type silently became a generic.
 - The type checker is about twice as fast, and checking a file again, as the language server does on every edit, allocates almost nothing.
   Deeply nested quotations no longer take quadratic time.
+- Source code must be UTF-8: a byte that is not part of a valid UTF-8 character is an error, reported at its line and column.
 
 ### Security
 
@@ -191,6 +198,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A pipe (`|`) has its own copy of its list of commands. Previously changing the list afterwards also changed the pipe.
 - `seq` and `leftPad` with an impossibly large count give an error instead of crashing.
 - `numFmt` with `sigFigs` above 17 gives an error. A float holds about 17 significant digits, so more gave wrong digits.
+- `else*` is recognized only as itself: any four-letter word starting with `el` and followed by `*`, such as `elxx*`, lexed as `else*`.
 
 ### Added
 

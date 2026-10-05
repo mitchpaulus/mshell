@@ -1,6 +1,8 @@
 package main
 
 import (
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +37,62 @@ func TestTypeCheckerKeywords(t *testing.T) {
 		}
 		if toks[0].Type != tc.want {
 			t.Errorf("%q: got %s, want %s", tc.input, toks[0].Type, tc.want)
+		}
+	}
+}
+
+// TestElseStar checks that only "else" followed by '*' is the else* keyword,
+// not every four-letter word starting with "el".
+func TestElseStar(t *testing.T) {
+	cases := []struct {
+		input string
+		want  []TokenType
+	}{
+		{"else*", []TokenType{ELSESTAR, EOF}},
+		{"else", []TokenType{ELSE, EOF}},
+		{"elxx*", []TokenType{LITERAL, ASTERISK, EOF}},
+		{"elsé*", []TokenType{LITERAL, ASTERISK, EOF}},
+		{"elsex*", []TokenType{LITERAL, ASTERISK, EOF}},
+	}
+	for _, tc := range cases {
+		toks, err := NewLexer(tc.input, nil).Tokenize()
+		if err != nil {
+			t.Errorf("%q: %v", tc.input, err)
+			continue
+		}
+		var got []TokenType
+		for _, tok := range toks {
+			got = append(got, tok.Type)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%q: got %v, want %v", tc.input, got, tc.want)
+		}
+	}
+}
+
+// TestInvalidUTF8 checks that a byte that is not part of a valid UTF-8
+// character is an error where it is, wherever it is.
+func TestInvalidUTF8(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string // the error, or "" for none
+	}{
+		{"1 2 +", ""},
+		{"'é' \uFFFD", ""},
+		{"ab\xffcd", "1:3: Invalid UTF-8 encoding."},
+		{"1\n  \"x\xe2\x82\"", "2:5: Invalid UTF-8 encoding."},
+		{"1 # é\xc3", "1:6: Invalid UTF-8 encoding."},
+		{"\xff", "1:1: Invalid UTF-8 encoding."},
+		{"'a\nb\xf0\x9f\x98'", "2:2: Invalid UTF-8 encoding."},
+		{"`p\xed\xa0\x80`", "1:3: Invalid UTF-8 encoding."},
+	}
+	for _, tc := range cases {
+		_, err := NewLexer(tc.input, nil).Tokenize()
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%q: unexpected error %v", tc.input, err)
+		case tc.want != "" && (err == nil || !strings.HasPrefix(err.Error(), tc.want)):
+			t.Errorf("%q: got error %v, want %q", tc.input, err, tc.want)
 		}
 	}
 }

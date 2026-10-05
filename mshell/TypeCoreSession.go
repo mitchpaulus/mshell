@@ -96,10 +96,11 @@ type sessionDecls struct {
 }
 
 // NewSession starts a session whose stack holds stackLen values of
-// unknown type, and whose variables vars are set to values of unknown type:
-// whatever the startup files left. Startup code is not checked, so the
-// checker cannot know more; and a variable must have a type that covers
-// its value even after a line that would have stored it stops early.
+// unknown type, and whose variables vars are set to values of unknown type,
+// for values the checker knows nothing about; a variable must have a type
+// that covers its value even after a line that would have stored it stops
+// early. The shell's session starts empty, and its first lines are the
+// startup files' top-level code (loadStartupDefinitions).
 func (b *CoreBase) NewSession(stackLen int, vars ...string) *CoreSession {
 	c := b.newChecker()
 	c.session = true
@@ -152,6 +153,9 @@ func (s *CoreSession) Check(file *MShellFile) (diags []TypeError, ok bool) {
 	s.decl, s.added = nil, s.added[:0]
 	s.declare(file)
 	if hasError(c.errs) {
+		// The line does not check. Its code is walked anyway, as a file's
+		// is after an error in a def, so every error in it is reported.
+		s.tryDepth(len(s.pre))
 		diags = slices.Clone(c.errs)
 		s.restore(s.line)
 		s.undoDecls()
@@ -743,7 +747,7 @@ func (s *CoreSession) compactOrigins() {
 func (s *CoreSession) compactLitLists() {
 	c := s.c
 	remap := make([]NameId, len(c.litLists))
-	var kept [][]NameId
+	var kept []litList
 	for _, st := range s.slotLists() {
 		for i := range st {
 			if st[i].lit&litListTag == 0 {
