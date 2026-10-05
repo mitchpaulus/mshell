@@ -2294,11 +2294,11 @@ func completionMetadataNames(def MShellDefinition) ([]string, error) {
 		}
 		names := make([]string, 0, len(list.Items))
 		for _, listItem := range list.Items {
-			token, ok := listItem.(Token)
+			token, ok := listItem.(*Token)
 			if !ok {
 				return nil, fmt.Errorf("metadata key 'complete' list items must be strings")
 			}
-			name, err := completionMetadataString(token)
+			name, err := completionMetadataString(*token)
 			if err != nil {
 				return nil, err
 			}
@@ -2420,7 +2420,7 @@ func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args [
 		// A def runs in a scope of its own, as a call to it would: the REPL's
 		// variables are not its to change.
 		completionContext.Variables = map[string]MShellObject{}
-		callStackItem := CallStackItem{MShellParseItem: def.NameToken, Name: def.Name, CallStackType: CALLSTACKDEF}
+		callStackItem := CallStackItem{MShellParseItem: &def.NameToken, Name: def.Name, CallStackType: CALLSTACKDEF}
 		result := state.evalState.Evaluate(def.Items, &completionStack, completionContext, state.stdLibDefs, callStackItem)
 		if !result.Success {
 			state.Logf("Completion definition '%s' failed to evaluate\n", def.Name)

@@ -346,21 +346,21 @@ func (t Token) String() string {
 	return fmt.Sprintf("Token{line: %d, column: %d, start: %d, lexeme: '%s', type: %s}", t.Line, t.Column, t.Start, t.Lexeme, t.Type)
 }
 
-func (t Token) ToJson() string {
+func (t *Token) ToJson() string {
 	escaped, _ := json.Marshal(t.Lexeme)
 	return fmt.Sprintf("{\"line\": %d, \"column\": %d, \"start\": %d, \"lexeme\": %s, \"type\": \"%s\"}", t.Line, t.Column, t.Start, string(escaped), t.Type)
 }
 
-func (t Token) DebugString() string {
+func (t *Token) DebugString() string {
 	return fmt.Sprintf("'%s'", t.Lexeme)
 }
 
-func (t Token) GetStartToken() Token {
-	return t
+func (t *Token) GetStartToken() Token {
+	return *t
 }
 
-func (t Token) GetEndToken() Token {
-	return t
+func (t *Token) GetEndToken() Token {
+	return *t
 }
 
 // The Lexer reads its input as a string, a byte at a time where it can, and

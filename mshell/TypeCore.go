@@ -942,7 +942,7 @@ func (c *coreChecker) walk(items []MShellParseItem) {
 			return
 		}
 		if l, ok := items[i].(*MShellParseList); ok && i+1 < len(items) && isWord(items[i+1], "groupBy") &&
-			c.groupBySpecs(l, items[i+1].(Token)) {
+			c.groupBySpecs(l, *items[i+1].(*Token)) {
 			// A spec list written at a grid groupBy is checked against it
 			// spec by spec (TypeCoreGrid.go).
 			i++
@@ -957,14 +957,14 @@ func (c *coreChecker) walk(items []MShellParseItem) {
 
 // isWord reports whether item is the word name.
 func isWord(item MShellParseItem, name string) bool {
-	tok, ok := item.(Token)
+	tok, ok := item.(*Token)
 	return ok && tok.Type == LITERAL && tok.Lexeme == name
 }
 
 func (c *coreChecker) step(item MShellParseItem) {
 	switch it := item.(type) {
-	case Token:
-		c.token(it)
+	case *Token:
+		c.token(*it)
 	case MShellVarstoreList:
 		for i := len(it.VarStores) - 1; i >= 0; i-- {
 			tok := it.VarStores[i]
@@ -1003,11 +1003,11 @@ func (c *coreChecker) step(item MShellParseItem) {
 		if len(it.Indexers) > 1 {
 			sigs = c.table.multiIndex
 			for _, ix := range it.Indexers {
-				if ix.(Token).Type != INDEXER {
+				if ix.(*Token).Type != INDEXER {
 					sigs = c.table.multi
 				}
 			}
-		} else if it.Indexers[0].(Token).Type == INDEXER {
+		} else if it.Indexers[0].(*Token).Type == INDEXER {
 			sigs = c.table.index
 		}
 		c.call(sigs, it.GetStartToken())

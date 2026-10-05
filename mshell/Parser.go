@@ -600,7 +600,7 @@ func checkReturnPlacement(items []MShellParseItem, allowed bool) error {
 	for _, item := range items {
 		var err error
 		switch it := item.(type) {
-		case Token:
+		case *Token:
 			if !allowed && it.Type == LITERAL && it.Lexeme == "return" {
 				return fmt.Errorf("%d:%d: 'return' can only be used directly in a definition, or in the body of an if or match there. To leave a loop early, use 'break'", it.Line, it.Column)
 			}
@@ -668,7 +668,7 @@ func checkInterpolationControlFlow(items []MShellParseItem) error {
 	for _, item := range items {
 		var err error
 		switch it := item.(type) {
-		case Token:
+		case *Token:
 			switch {
 			case it.Type == BREAK || it.Type == CONTINUE:
 				return fmt.Errorf("%d:%d: '%s' cannot leave a format string interpolation. Use it only in a loop inside the interpolation.", it.Line, it.Column, it.Lexeme)
@@ -744,7 +744,7 @@ func checkDictReturnPlacement(dict *MShellParseDict) error {
 func itemsMayUseVariables(items []MShellParseItem) bool {
 	for _, item := range items {
 		switch it := item.(type) {
-		case Token:
+		case *Token:
 			switch it.Type {
 			// A loop runs its quotation with the current variable map.
 			case VARSTORE, LOOP:
@@ -857,6 +857,20 @@ type MShellParser struct {
 	lexer *Lexer
 	curr  Token
 	initialized bool
+	// tokens is the block tokenItem takes its next token from.
+	tokens []Token
+}
+
+// tokenItem returns a copy of t to put in the parse tree. The copies are
+// taken from blocks of tokens, one allocation for many, so a parse item
+// holds a pointer and not a token boxed on its own.
+func (parser *MShellParser) tokenItem(t Token) *Token {
+	if len(parser.tokens) == cap(parser.tokens) {
+		// Small blocks for a short input, such as a line in the REPL.
+		parser.tokens = make([]Token, 0, min(max(2*cap(parser.tokens), 32), 512))
+	}
+	parser.tokens = append(parser.tokens, t)
+	return &parser.tokens[len(parser.tokens)-1]
 }
 
 type parserPanic struct {
@@ -1111,7 +1125,7 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 func (parser *MShellParser) ParseIndexer() *MShellIndexerList {
 	indexerList := &MShellIndexerList{}
 	indexerList.Indexers = []MShellParseItem{}
-	indexerList.Indexers = append(indexerList.Indexers, parser.curr)
+	indexerList.Indexers = append(indexerList.Indexers, parser.tokenItem(parser.curr))
 	parser.NextToken()
 
 	// A comma belongs to the indexer list only when another indexer follows it.
@@ -1119,7 +1133,7 @@ func (parser *MShellParser) ParseIndexer() *MShellIndexerList {
 	// dict entry). Anywhere else, ParseItem reports it as unexpected.
 	for parser.curr.Type == COMMA && isIndexerToken(parser.Peek().Type) {
 		parser.NextToken()
-		indexerList.Indexers = append(indexerList.Indexers, parser.curr)
+		indexerList.Indexers = append(indexerList.Indexers, parser.tokenItem(parser.curr))
 		parser.NextToken()
 	}
 
@@ -1459,7 +1473,7 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 	case FORMATSTRINGMID, FORMATSTRINGEND:
 		return nil, fmt.Errorf("%d:%d: Unexpected '}' ending a format string interpolation while a list, quotation, or other construct inside it is still open.", parser.curr.Line, parser.curr.Column)
 	default:
-		return parser.ParseSimple(), nil
+		return parser.tokenItem(parser.ParseSimple()), nil
 	}
 }
 
@@ -1512,7 +1526,7 @@ func (parser *MShellParser) ParseStaticItem() (MShellParseItem, error) {
 	case LEFT_CURLY:
 		return parser.ParseStaticDict()
 	case STRING, SINGLEQUOTESTRING, INTEGER, FLOAT, TRUE, FALSE:
-		return parser.ParseSimple(), nil
+		return parser.tokenItem(parser.ParseSimple()), nil
 	case FORMATSTRING, FORMATSTRINGSTART:
 		return nil, fmt.Errorf("Interpolated strings are not allowed in metadata at line %d, column %d.", parser.curr.Line, parser.curr.Column)
 	default:
@@ -2015,7 +2029,7 @@ func (parser *MShellParser) parseMatchOrLiterals() (MShellParseItem, error) {
 		parser.NextToken()
 	}
 	if len(tokens) == 1 {
-		return tokens[0], nil
+		return parser.tokenItem(tokens[0]), nil
 	}
 	return &MShellParseOrPattern{Tokens: tokens}, nil
 }
@@ -2149,12 +2163,12 @@ func (parser *MShellParser) ParseAssertiveMatch() (*MShellParseMatchBlock, error
 		}
 		arm.Pattern = append(arm.Pattern, dict)
 	case parser.curr.Type == LITERAL && parser.curr.Lexeme == "just":
-		arm.Pattern = append(arm.Pattern, parser.curr)
+		arm.Pattern = append(arm.Pattern, parser.tokenItem(parser.curr))
 		parser.NextToken()
 		if parser.curr.Type != LITERAL {
 			return matchBlock, fmt.Errorf("%d:%d: Expected a binding name after 'just' in an assertive destructuring pattern.", parser.curr.Line, parser.curr.Column)
 		}
-		arm.Pattern = append(arm.Pattern, parser.curr)
+		arm.Pattern = append(arm.Pattern, parser.tokenItem(parser.curr))
 		parser.NextToken()
 	default:
 		return matchBlock, fmt.Errorf("%d:%d: Expected a list, dictionary, or 'just <name>' pattern after '%s'.", parser.curr.Line, parser.curr.Column, operator.Lexeme)
@@ -2185,10 +2199,10 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 	}
 
 	if len(pattern) == 2 {
-		first, firstOK := pattern[0].(Token)
-		second, secondOK := pattern[1].(Token)
+		first, firstOK := pattern[0].(*Token)
+		second, secondOK := pattern[1].(*Token)
 		if firstOK && secondOK && first.Type == LITERAL && first.Lexeme == "just" && second.Type == LITERAL {
-			if err := addBinding(second, second.Lexeme); err != nil {
+			if err := addBinding(*second, second.Lexeme); err != nil {
 				return err
 			}
 			if requireBinding && len(bindings) == 0 {
@@ -2201,8 +2215,8 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 	if len(pattern) > 2 {
 		// An enum member and its payload bindings: `pair a b`.
 		for _, item := range pattern[1:] {
-			if tok, ok := item.(Token); ok && tok.Type == LITERAL {
-				if err := addBinding(tok, tok.Lexeme); err != nil {
+			if tok, ok := item.(*Token); ok && tok.Type == LITERAL {
+				if err := addBinding(*tok, tok.Lexeme); err != nil {
 					return err
 				}
 			}
@@ -2221,7 +2235,7 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 		}
 		spreadSeen := false
 		for _, item := range structural.Items {
-			tok, ok := item.(Token)
+			tok, ok := item.(*Token)
 			if !ok || tok.Type != LITERAL {
 				start := item.GetStartToken()
 				return fmt.Errorf("%d:%d: List destructuring patterns may contain only binding names, '_', and one '...rest' binding.", start.Line, start.Column)
@@ -2231,10 +2245,10 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 					return fmt.Errorf("%d:%d: A list destructuring pattern may contain one named spread binding such as '...rest'.", tok.Line, tok.Column)
 				}
 				spreadSeen = true
-				if err := addBinding(tok, tok.Lexeme[3:]); err != nil {
+				if err := addBinding(*tok, tok.Lexeme[3:]); err != nil {
 					return err
 				}
-			} else if err := addBinding(tok, tok.Lexeme); err != nil {
+			} else if err := addBinding(*tok, tok.Lexeme); err != nil {
 				return err
 			}
 		}
@@ -2246,7 +2260,7 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 			if len(kv.Value) != 1 {
 				return fmt.Errorf("%d:%d: Each dictionary destructuring value must be one binding name or '_'.", structural.StartToken.Line, structural.StartToken.Column)
 			}
-			tok, ok := kv.Value[0].(Token)
+			tok, ok := kv.Value[0].(*Token)
 			if !ok || tok.Type != LITERAL {
 				start := kv.Value[0].GetStartToken()
 				return fmt.Errorf("%d:%d: Each dictionary destructuring value must be one binding name or '_'.", start.Line, start.Column)
@@ -2254,7 +2268,7 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 			if strings.HasPrefix(tok.Lexeme, "...") {
 				return fmt.Errorf("%d:%d: Dictionary destructuring does not support spread patterns; use '_' to discard a named value.", tok.Line, tok.Column)
 			}
-			if err := addBinding(tok, tok.Lexeme); err != nil {
+			if err := addBinding(*tok, tok.Lexeme); err != nil {
 				return err
 			}
 		}
@@ -2286,7 +2300,7 @@ func formatPatternSnippet(items []MShellParseItem) string {
 
 func formatPatternItem(it MShellParseItem) string {
 	switch v := it.(type) {
-	case Token:
+	case *Token:
 		return v.Lexeme
 	case *MShellParseOrPattern:
 		return v.DebugString()

@@ -76,7 +76,7 @@ func TestParseAsThenTrailingTokens(t *testing.T) {
 	file := parseSourceForIntegration(t, "type Result = int  42 as Result wl")
 	// Should see: typeDecl, 42, asCast, wl.
 	tail := file.Items[len(file.Items)-1]
-	tok, ok := tail.(Token)
+	tok, ok := tail.(*Token)
 	if !ok {
 		t.Fatalf("last item should be a Token (the 'wl' literal), got %T", tail)
 	}

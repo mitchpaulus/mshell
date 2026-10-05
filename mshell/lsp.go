@@ -772,9 +772,9 @@ func collectListLiterals(list *MShellParseList) []Token {
 	collect = func(current *MShellParseList) {
 		for _, item := range current.Items {
 			switch v := item.(type) {
-			case Token:
+			case *Token:
 				if v.Type == LITERAL {
-					literals = append(literals, v)
+					literals = append(literals, *v)
 				}
 			case *MShellParseList:
 				collect(v)
@@ -1801,9 +1801,9 @@ func collectScopeTokens(items []MShellParseItem) []renameTok {
 func collectTokensFromItems(dst *[]renameTok, items []MShellParseItem) {
 	for _, item := range items {
 		switch v := item.(type) {
-		case Token:
+		case *Token:
 			if v.Type == VARSTORE || v.Type == VARRETRIEVE {
-				*dst = append(*dst, renameTok{Token: v})
+				*dst = append(*dst, renameTok{Token: *v})
 			}
 		case *MShellParseList:
 			collectTokensFromItems(dst, v.Items)
@@ -1854,9 +1854,9 @@ func collectTokensFromItems(dst *[]renameTok, items []MShellParseItem) {
 func collectPatternBindings(dst *[]renameTok, pattern []MShellParseItem) {
 	for _, item := range pattern {
 		switch v := item.(type) {
-		case Token:
+		case *Token:
 			if v.Type == LITERAL && !patternWords[v.Lexeme] && !strings.HasPrefix(v.Lexeme, "...") {
-				*dst = append(*dst, renameTok{Token: v, binding: true})
+				*dst = append(*dst, renameTok{Token: *v, binding: true})
 			}
 		case *MShellParseList:
 			collectPatternBindings(dst, v.Items)

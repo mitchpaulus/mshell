@@ -763,7 +763,7 @@ func (state *EvalState) constructEnum(t *Token, info EnumMemberInfo, stack *MShe
 // of that enum and binds the value. handled is false when the pattern's first
 // word is neither.
 func (state *EvalState) matchEnumPattern(pattern []MShellParseItem, subject MShellObject) (handled bool, matched bool, bindings map[string]MShellObject, result EvalResult) {
-	first, ok := pattern[0].(Token)
+	first, ok := pattern[0].(*Token)
 	if !ok || first.Type != LITERAL {
 		return false, false, nil, SimpleSuccess()
 	}
@@ -773,7 +773,7 @@ func (state *EvalState) matchEnumPattern(pattern []MShellParseItem, subject MShe
 	}
 	binds := pattern[1:]
 	for _, b := range binds {
-		bt, ok := b.(Token)
+		bt, ok := b.(*Token)
 		if !ok || bt.Type != LITERAL {
 			start := b.GetStartToken()
 			return true, false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: '%s' in a pattern is followed by names to bind, not '%s'.\n", start.Line, start.Column, first.Lexeme, start.Lexeme))
@@ -789,7 +789,7 @@ func (state *EvalState) matchEnumPattern(pattern []MShellParseItem, subject MShe
 		}
 		bindings = make(map[string]MShellObject, len(binds))
 		for i, b := range binds {
-			if name := b.(Token).Lexeme; name != "_" {
+			if name := b.(*Token).Lexeme; name != "_" {
 				bindings[name] = value.Payload[i]
 			}
 		}
@@ -803,7 +803,7 @@ func (state *EvalState) matchEnumPattern(pattern []MShellParseItem, subject MShe
 			return true, false, nil, SimpleSuccess()
 		}
 		if len(binds) == 1 {
-			if name := binds[0].(Token).Lexeme; name != "_" {
+			if name := binds[0].(*Token).Lexeme; name != "_" {
 				bindings = map[string]MShellObject{name: subject}
 			}
 		}
@@ -1505,16 +1505,16 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 	stack := frame.Stack
 
 	switch t := token.(type) {
-	case Token:
+	case *Token:
 		// Literals were decoded once at lex time.
 		if t.Value != nil {
 			stack.Push(t.Value)
 			return nil
 		}
-		if result, handled := state.evalSimpleToken(&t, stack, &frame.Context); handled {
+		if result, handled := state.evalSimpleToken(t, stack, &frame.Context); handled {
 			return result
 		}
-		return state.processTokenToken(token, &t, frame, base)
+		return state.processTokenToken(token, t, frame, base)
 
 	case *MShellParseList:
 		// The list's items run on their own stack, which becomes the list.
@@ -1829,8 +1829,8 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 	// Handle multi-token patterns (e.g., "just v" for maybe destructuring,
 	// or "<typekeyword> name" for type-test binding).
 	if len(pattern) == 2 {
-		first, firstOk := pattern[0].(Token)
-		second, secondOk := pattern[1].(Token)
+		first, firstOk := pattern[0].(*Token)
+		second, secondOk := pattern[1].(*Token)
 		if firstOk && secondOk && second.Type == LITERAL {
 			if first.Type == LITERAL && first.Lexeme == "just" {
 				// Maybe Just destructuring
@@ -1855,8 +1855,8 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 			}
 			// `<typekeyword> name`: match on the type, then bind the
 			// matched value to name.
-			if isTypeKeywordToken(first) {
-				matched, result := state.matchTokenPattern(first, subject)
+			if isTypeKeywordToken(*first) {
+				matched, result := state.matchTokenPattern(*first, subject)
 				if !result.Success {
 					return false, nil, result
 				}
@@ -1879,8 +1879,8 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 	patternItem := pattern[0]
 
 	switch p := patternItem.(type) {
-	case Token:
-		matched, result := state.matchTokenPattern(p, subject)
+	case *Token:
+		matched, result := state.matchTokenPattern(*p, subject)
 		return matched, nil, result
 	case *MShellParseOrPattern:
 		// OR alternatives: match if the subject equals any literal.
@@ -2064,7 +2064,7 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 	// Check for spread pattern
 	spreadIndex := -1
 	for i, item := range pattern.Items {
-		if tok, ok := item.(Token); ok && tok.Type == LITERAL && len(tok.Lexeme) > 3 && tok.Lexeme[:3] == "..." {
+		if tok, ok := item.(*Token); ok && tok.Type == LITERAL && len(tok.Lexeme) > 3 && tok.Lexeme[:3] == "..." {
 			spreadIndex = i
 			break
 		}
@@ -2083,7 +2083,7 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 		bindings := make(map[string]MShellObject, len(pattern.Items))
 		// Bind elements before spread
 		for i := range beforeCount {
-			tok, ok := pattern.Items[i].(Token)
+			tok, ok := pattern.Items[i].(*Token)
 			if !ok || tok.Type != LITERAL {
 				return false, nil, state.TypeMismatch("List pattern element must be a binding name, '_', or '...rest'.\n")
 			}
@@ -2095,7 +2095,7 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 		// Bind spread as a new list with its own storage, like `skip`:
 		// no two lists share a backing array, so setAt, del and append
 		// on the rest never change the source.
-		spreadTok := pattern.Items[spreadIndex].(Token)
+		spreadTok := pattern.Items[spreadIndex].(*Token)
 		spreadName := spreadTok.Lexeme[3:] // Remove "..."
 		if spreadName != "_" {
 			end := len(list.Items) - afterCount
@@ -2104,7 +2104,7 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 
 		// Bind elements after spread
 		for i := range afterCount {
-			tok, ok := pattern.Items[spreadIndex+1+i].(Token)
+			tok, ok := pattern.Items[spreadIndex+1+i].(*Token)
 			if !ok || tok.Type != LITERAL {
 				return false, nil, state.TypeMismatch("List pattern element must be a binding name, '_', or '...rest'.\n")
 			}
@@ -2123,7 +2123,7 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 
 	bindings := make(map[string]MShellObject, len(pattern.Items))
 	for i, item := range pattern.Items {
-		tok, ok := item.(Token)
+		tok, ok := item.(*Token)
 		if !ok || tok.Type != LITERAL {
 			return false, nil, state.TypeMismatch("List pattern element must be a binding name, '_', or '...rest'.\n")
 		}
@@ -2152,7 +2152,7 @@ func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShel
 		if len(kv.Value) != 1 {
 			return false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: Dict pattern value must be a single binding name.\n", startToken.Line, startToken.Column))
 		}
-		tok, ok := kv.Value[0].(Token)
+		tok, ok := kv.Value[0].(*Token)
 		if !ok || tok.Type != LITERAL {
 			return false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: Dict pattern value must be a literal binding name.\n", startToken.Line, startToken.Column))
 		}
@@ -2331,8 +2331,8 @@ func (state *EvalState) processIndexerList(indexerList *MShellIndexerList, frame
 			return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot do 'indexer' operation on an empty stack.\n", startToken.Line, startToken.Column))
 		}
 
-				if len(indexerList.Indexers) == 1 && indexerList.Indexers[0].(Token).Type == INDEXER {
-			t := indexerList.Indexers[0].(Token)
+				if len(indexerList.Indexers) == 1 && indexerList.Indexers[0].(*Token).Type == INDEXER {
+			t := indexerList.Indexers[0].(*Token)
 			// Indexer is a digit between ':' and ':'. Remove ends and parse the number
 			indexStr := t.Lexeme[1 : len(t.Lexeme)-1]
 			index, err := strconv.Atoi(indexStr)
@@ -2350,7 +2350,7 @@ func (state *EvalState) processIndexerList(indexerList *MShellIndexerList, frame
 			newObject = nil
 
 			for _, indexer := range indexerList.Indexers {
-				indexerToken := indexer.(Token)
+				indexerToken := indexer.(*Token)
 				switch indexerToken.Type {
 				case INDEXER:
 					indexStr := indexerToken.Lexeme[1 : len(indexerToken.Lexeme)-1]
@@ -6457,7 +6457,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 							// runs in its own scope and `return` leaves only it.
 							call := def.NameToken
 							call.Type, call.Lexeme = LITERAL, def.Name
-							quotations[i] = &MShellQuotation{Tokens: []MShellParseItem{call}, StdinBehavior: STDIN_NONE, Variables: make(map[string]MShellObject)}
+							quotations[i] = &MShellQuotation{Tokens: []MShellParseItem{&call}, StdinBehavior: STDIN_NONE, Variables: make(map[string]MShellObject)}
 						}
 						dict.Items[name] = &MShellList{Items: quotations}
 					}

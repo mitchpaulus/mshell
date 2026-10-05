@@ -281,7 +281,7 @@ func TestSimpleCliParser_ToMShellFile_SingleCommand(t *testing.T) {
 	}
 
 	// Second item should be EXECUTE
-	execToken, ok := file.Items[1].(Token)
+	execToken, ok := file.Items[1].(*Token)
 	if !ok || execToken.Type != EXECUTE {
 		t.Errorf("Expected EXECUTE token, got %T %v", file.Items[1], file.Items[1])
 	}
@@ -323,13 +323,13 @@ func TestSimpleCliParser_ToMShellFile_PipelineWithRedirect(t *testing.T) {
 	}
 
 	// Second item should be PIPE
-	pipeToken, ok := file.Items[1].(Token)
+	pipeToken, ok := file.Items[1].(*Token)
 	if !ok || pipeToken.Type != PIPE {
 		t.Errorf("Expected PIPE token, got %T %v", file.Items[1], file.Items[1])
 	}
 
 	// Third item should be EXECUTE
-	execToken, ok := file.Items[2].(Token)
+	execToken, ok := file.Items[2].(*Token)
 	if !ok || execToken.Type != EXECUTE {
 		t.Errorf("Expected EXECUTE token, got %T %v", file.Items[2], file.Items[2])
 	}
@@ -404,19 +404,19 @@ func TestSimpleCliParser_ToMShellFile_ArgLiteralsPreserved(t *testing.T) {
 	}
 
 	// Command name: bare literal becomes a single-quoted string.
-	cmdName, ok := cmdList.Items[0].(Token)
+	cmdName, ok := cmdList.Items[0].(*Token)
 	if !ok || cmdName.Type != SINGLEQUOTESTRING {
 		t.Errorf("Expected command name to be SINGLEQUOTESTRING, got %T %v", cmdList.Items[0], cmdList.Items[0])
 	}
 
 	// Already-quoted argument is preserved as-is.
-	starArg, ok := cmdList.Items[1].(Token)
+	starArg, ok := cmdList.Items[1].(*Token)
 	if !ok || starArg.Type != SINGLEQUOTESTRING {
 		t.Errorf("Expected '*' arg to be SINGLEQUOTESTRING, got %T %v", cmdList.Items[1], cmdList.Items[1])
 	}
 
 	// Bare literal argument (an operator) is preserved as a LITERAL, NOT quoted.
-	globArg, ok := cmdList.Items[2].(Token)
+	globArg, ok := cmdList.Items[2].(*Token)
 	if !ok || globArg.Type != LITERAL {
 		t.Errorf("Expected 'glob' arg to remain LITERAL, got %T %v", cmdList.Items[2], cmdList.Items[2])
 	}
@@ -444,8 +444,8 @@ func TestSimpleCliParser_ToMShellFile_StdinWordIsPath(t *testing.T) {
 		}
 		found := false
 		for i, it := range items {
-			if tok, ok := it.(Token); ok && tok.Type == LESSTHAN {
-				prev, ok := items[i-1].(Token)
+			if tok, ok := it.(*Token); ok && tok.Type == LESSTHAN {
+				prev, ok := items[i-1].(*Token)
 				if !ok || prev.Type != PATH || prev.Lexeme != "`input.txt`" {
 					t.Errorf("%q: expected the path `input.txt` before '<', got %v", input, items[i-1])
 				}

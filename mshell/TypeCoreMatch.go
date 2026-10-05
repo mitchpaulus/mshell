@@ -409,56 +409,56 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 		c.bind(&a, is.Binding, target)
 		return a, true
 	}
-	if first, ok := pattern[0].(Token); ok && first.Type == LITERAL {
+	if first, ok := pattern[0].(*Token); ok && first.Type == LITERAL {
 		if ct := c.ctorNamed(first.Lexeme); ct != nil {
-			return c.memberPattern(a, ct, first, pattern[1:])
+			return c.memberPattern(a, ct, *first, pattern[1:])
 		}
 	}
 	if len(pattern) == 2 {
-		first, ok1 := pattern[0].(Token)
-		second, ok2 := pattern[1].(Token)
+		first, ok1 := pattern[0].(*Token)
+		second, ok2 := pattern[1].(*Token)
 		if ok1 && ok2 && second.Type == LITERAL {
 			if first.Type == LITERAL && first.Lexeme == "just" {
 				a.maybe = 1
 				a.kind, a.kindOK = valueKind{code: kindEnum, enum: EnumMaybe}, false
-				payload := c.narrowKind(&a, valueKind{code: kindEnum, enum: EnumMaybe}, first)
+				payload := c.narrowKind(&a, valueKind{code: kindEnum, enum: EnumMaybe}, *first)
 				if payload != TidBottom {
 					payload = c.arena.enumArgs[c.arena.nodes[payload].Extra][0]
 				}
-				c.bind(&a, second, payload)
+				c.bind(&a, *second, payload)
 				return a, true
 			}
-			if k, ok := c.patternKind(first); ok {
+			if k, ok := c.patternKind(*first); ok {
 				a.kind, a.kindOK = k, true
-				c.bind(&a, second, c.narrowKind(&a, k, first))
+				c.bind(&a, *second, c.narrowKind(&a, k, *first))
 				return a, true
 			}
 		}
 	}
 	if len(pattern) != 1 {
-		if first, ok := pattern[0].(Token); ok && first.Type == LITERAL {
-			if _, isKind := c.patternKind(first); isKind {
-				return c.badPattern(first, "'"+first.Lexeme+"' is followed by one name, for the value")
+		if first, ok := pattern[0].(*Token); ok && first.Type == LITERAL {
+			if _, isKind := c.patternKind(*first); isKind {
+				return c.badPattern(*first, "'"+first.Lexeme+"' is followed by one name, for the value")
 			}
 			if hint, ok := notAKindHints[first.Lexeme]; ok {
-				return c.badPattern(first, "'"+first.Lexeme+"' is not a kind: "+hint)
+				return c.badPattern(*first, "'"+first.Lexeme+"' is not a kind: "+hint)
 			}
-			return c.badPattern(first, "'"+first.Lexeme+"' is not an enum member, an enum or a kind; "+
+			return c.badPattern(*first, "'"+first.Lexeme+"' is not an enum member, an enum or a kind; "+
 				"a pattern of several words is a member and its payloads (`circle r`), a kind and a name (`int n`, `Shape s`), or `just v`")
 		}
 		return c.badPattern(at, "")
 	}
 	switch p := pattern[0].(type) {
-	case Token:
+	case *Token:
 		switch {
 		case p.Type == LITERAL && p.Lexeme == "_":
 			a.all = true
 		case p.Type == LITERAL && p.Lexeme == "none":
 			a.maybe = 2
-			c.narrowKind(&a, valueKind{code: kindEnum, enum: EnumMaybe}, p)
+			c.narrowKind(&a, valueKind{code: kindEnum, enum: EnumMaybe}, *p)
 		case p.Type == LITERAL && p.Lexeme == "null":
 			a.kind, a.kindOK = valueKind{code: uint32(TidNull)}, true
-			c.narrowKind(&a, a.kind, p)
+			c.narrowKind(&a, a.kind, *p)
 		case p.Type == TRUE:
 			a.boolLit = 1
 		case p.Type == FALSE:
@@ -466,22 +466,22 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 		case p.Type == INTEGER, p.Type == FLOAT, p.Type == STRING, p.Type == SINGLEQUOTESTRING, p.Type == PATH:
 			// A value pattern tests equality; it narrows nothing.
 		default:
-			k, ok := c.patternKind(p)
+			k, ok := c.patternKind(*p)
 			if !ok {
 				if hint, ok := notAKindHints[p.Lexeme]; ok {
-					return c.badPattern(p, "'"+p.Lexeme+"' is not a kind: "+hint)
+					return c.badPattern(*p, "'"+p.Lexeme+"' is not a kind: "+hint)
 				}
-				return c.badPattern(p, "")
+				return c.badPattern(*p, "")
 			}
 			a.kind, a.kindOK = k, true
-			c.narrowKind(&a, k, p)
+			c.narrowKind(&a, k, *p)
 		}
 	case *MShellParseOrPattern:
 	case *MShellParseList:
 		elem := c.listElem(c.narrowKind(&a, valueKind{code: kindList}, p.StartToken))
 		a.listLen = len(p.Items)
 		for _, item := range p.Items {
-			tok, ok := item.(Token)
+			tok, ok := item.(*Token)
 			if !ok || tok.Type != LITERAL {
 				return c.badPattern(p.StartToken, "a list pattern holds names, `_` and one `...rest`")
 			}
@@ -492,7 +492,7 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 			case strings.HasPrefix(tok.Lexeme, "..."):
 				a.listRest, a.listLen = true, a.listLen-1
 				// The rest is a new list of the same elements.
-				rest := tok
+				rest := *tok
 				rest.Lexeme = tok.Lexeme[3:]
 				lt := TidBottom
 				if elem != TidBottom {
@@ -500,7 +500,7 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 				}
 				c.bind(&a, rest, lt)
 			default:
-				c.bind(&a, tok, elem)
+				c.bind(&a, *tok, elem)
 			}
 		}
 	case *MShellParseDict:
@@ -509,7 +509,7 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 			if len(kv.Value) != 1 {
 				return c.badPattern(p.StartToken, "a dict pattern's value is one name")
 			}
-			tok, ok := kv.Value[0].(Token)
+			tok, ok := kv.Value[0].(*Token)
 			if !ok || tok.Type != LITERAL {
 				return c.badPattern(p.StartToken, "a dict pattern's value is one name")
 			}
@@ -529,7 +529,7 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 					}
 				}
 			}
-			c.bind(&a, tok, ft)
+			c.bind(&a, *tok, ft)
 			if open && tok.Lexeme != "_" {
 				b := &a.binds[len(a.binds)-1]
 				b.open, b.rec, b.key = true, rec, c.names.Intern(kv.Key)
@@ -553,7 +553,7 @@ func (c *coreChecker) memberPattern(a coreArm, ct *coreCtor, tok Token, binds []
 	a.member, a.memberEnum = ct.idx+1, ct.enum
 	sub := c.narrowKind(&a, valueKind{code: kindEnum, enum: ct.enum}, tok)
 	for i, b := range binds {
-		bt, ok := b.(Token)
+		bt, ok := b.(*Token)
 		if !ok || bt.Type != LITERAL {
 			return c.badPattern(tok, "a member pattern names its payloads: '"+tok.Lexeme+"' and then a name or `_` for each")
 		}
@@ -561,7 +561,7 @@ func (c *coreChecker) memberPattern(a coreArm, ct *coreCtor, tok Token, binds []
 		if sub != TidBottom {
 			pt = c.rel.SubstParams(ctor.Payload[i], c.arena.enumArgs[c.arena.nodes[sub].Extra])
 		}
-		c.bind(&a, bt, pt)
+		c.bind(&a, *bt, pt)
 	}
 	return a, true
 }
