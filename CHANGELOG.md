@@ -47,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--type-check-only` checks and exits, as before.
   A script that the checker refuses must be fixed before it runs again; `msh --type-check-only` on your scripts shows what needs changing.
 - The type checker checks the standard library's and the startup file's definitions as well as the script's.
+  Every definition in them is checked on every run, whether or not the script calls it.
+  A script runs even when one of them has a type error, with a warning listing the errors; a call to such a definition is refused.
   A definition there with a type error stays defined, but code that calls it is refused, with the error; code that does not call it is checked as before.
 - The match pattern for a date/time is `datetime`, the same as the type name: `datetime d : ...`. Previously it was `date`.
 - `return` at the top level of an interactive line exits the shell, as it ends a script. Previously it ended only the line.

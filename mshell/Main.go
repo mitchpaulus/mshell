@@ -914,7 +914,14 @@ func main() {
 	state.AddCompletionDefinitions(file.Definitions)
 
 	// The program runs only if it type checks.
-	errs, ok := CoreTypeCheckProgram(file, startupDefinitions, state.StartupDecls)
+	base := NewCoreBase(startupDefinitions, state.StartupDecls)
+	if defErrs := base.DefinitionErrors(); len(defErrs) > 0 {
+		fmt.Fprintln(os.Stderr, "Warning: type errors in the startup files; code that calls a definition with one is refused:")
+		for _, e := range defErrs {
+			fmt.Fprintln(os.Stderr, e)
+		}
+	}
+	errs, ok := base.Check(file)
 	for _, e := range errs {
 		fmt.Fprintln(os.Stderr, e)
 	}

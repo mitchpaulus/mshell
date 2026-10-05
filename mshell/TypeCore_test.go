@@ -655,6 +655,73 @@ func TestCoreStartupBodies(t *testing.T) {
 	}
 }
 
+// TestCoreStartupBodiesAcrossFiles: a def is broken when its body calls a
+// broken def, through any chain of calls and in either startup file;
+// defs that call each other are checked together; a completion def's body
+// is checked like any other. Only code that calls a broken def is refused.
+func TestCoreStartupBodiesAcrossFiles(t *testing.T) {
+	parse := func(src, path string) []MShellDefinition {
+		f, err := NewMShellParser(NewLexer(src, &TokenFile{path})).ParseFile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f.Definitions
+	}
+	startup := append(parse(
+		"def double (int -- int) 2 * end\n"+
+			"def badBody (int -- int) \"oops\" end\n"+
+			"def useBad ( -- int) 5 badBody end\n"+
+			"def chain1 ( -- int) chain2 end\n"+
+			"def chain2 ( -- int) chain3 end\n"+
+			"def chain3 ( -- int) 5 useBad + end\n"+
+			"def evens (int -- new [int]) dup 0 = if drop [] else 1 - odds end end\n"+
+			"def odds (int -- new [int]) dup 0 = if drop [] else 1 - evens end end\n"+
+			"def comp { 'complete': ['foo'] } ([str] -- [str]) drop 5 end\n"+
+			"def comp2 { 'complete': ['bar'] } ([str] -- [str]) end\n"+
+			"def stdCallsInit ( -- int) 5 initBad end\n",
+		"std.msh"), parse(
+		"def fromInit (int -- int) double end\n"+
+			"def initBad (int -- int) badBody 1 + end\n"+
+			"def initGood ( -- int) 3 fromInit end\n",
+		"init.msh")...)
+	base := NewCoreBase(startup, nil)
+	cases := []struct {
+		src  string
+		ok   bool
+		want string
+	}{
+		{`5 double wl`, true, ""},
+		{`chain1 wl`, false, "'chain1', defined at std.msh:4:5"},
+		{`chain3 wl`, false, "'chain3', defined at std.msh:6:5"},
+		{`3 evens len wl`, true, ""},
+		{`3 odds len wl`, true, ""},
+		{`completionDefs len wl`, true, ""},
+		{`5 fromInit wl`, true, ""},
+		{`initGood wl`, true, ""},
+		{`5 initBad wl`, false, "'initBad', defined at init.msh:2:5"},
+		// A def of an earlier file that calls a broken def of a later one.
+		{`stdCallsInit wl`, false, "'stdCallsInit', defined at std.msh:11:5"},
+		{`def g ( -- int) initGood end g wl`, true, ""},
+		{`[1 2] (double) map len wl`, true, ""},
+	}
+	for _, tc := range cases {
+		errs, ok := coreCheck(t, base, tc.src)
+		if ok != tc.ok {
+			t.Errorf("%q: ok = %v, want %v; errors: %v", tc.src, ok, tc.ok, errs)
+			continue
+		}
+		if !ok && !strings.Contains(errs[0], tc.want) {
+			t.Errorf("%q: first error %q does not contain %q", tc.src, errs[0], tc.want)
+		}
+	}
+	all := strings.Join(base.StartupErrors(), "\n")
+	for _, want := range []string{"in std.msh: type error at line 2", "in std.msh: type error at line 9", "in init.msh: type error at line 2"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("startup errors %q do not contain %q", all, want)
+		}
+	}
+}
+
 // TestPrebuiltCoreBuiltins checks that a base made from builtins built on
 // another goroutine, while the standard library is parsed as the shell
 // does, checks every corpus program exactly as a base built in place, and
@@ -686,137 +753,14 @@ func TestPrebuiltCoreBuiltins(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, gotOk := newCoreBase(std.Definitions, nil, true).Check(file)
+		got, gotOk := NewCoreBase(std.Definitions, nil).Check(file)
 		if prebuilt.Load() != nil {
 			t.Fatal("a base did not take the prebuilt builtins")
 		}
-		want, wantOk := newCoreBase(std.Definitions, nil, true).Check(file)
+		want, wantOk := NewCoreBase(std.Definitions, nil).Check(file)
 		if gotOk != wantOk || !slices.Equal(got, want) {
 			t.Errorf("%s: prebuilt builtins give ok = %v, %q; built in place, ok = %v, %q", p, gotOk, got, wantOk, want)
 		}
-	}
-}
-
-// TestCoreLazyBaseMatchesEager checks that a lazy base, which checks a
-// startup def's body only once a check calls it (the base a script's check
-// uses), gives every program exactly the output of a base that checked
-// every body first: on the corpus with the standard library, and with
-// startup files whose defs are broken in each way.
-func TestCoreLazyBaseMatchesEager(t *testing.T) {
-	compare := func(name string, std []MShellDefinition, file *MShellFile) {
-		t.Helper()
-		want, wantOk := NewCoreBase(std, nil).Check(file)
-		got, gotOk := newCoreBase(std, nil, true).Check(file)
-		if gotOk != wantOk || !slices.EqualFunc(got, want, func(a, b string) bool { return sortRecordLabels(a) == sortRecordLabels(b) }) {
-			t.Errorf("%s: lazy base gives ok = %v, %q; eager gives ok = %v, %q", name, gotOk, got, wantOk, want)
-		}
-	}
-	std := benchStdlib(t)
-	var n int
-	for _, pattern := range []string{"../tests/success/*.msh", "../tests/typecheck_fail/*.msh", "../tests/msh-scripts/*"} {
-		paths, _ := filepath.Glob(pattern)
-		for _, p := range paths {
-			src, err := os.ReadFile(p)
-			if err != nil {
-				continue
-			}
-			file, err := NewMShellParser(NewLexer(string(src), nil)).ParseFile()
-			if err != nil {
-				continue
-			}
-			compare(p, std, file)
-			n++
-		}
-	}
-	if n < 400 {
-		t.Fatalf("only %d corpus files", n)
-	}
-
-	parse := func(src, path string) []MShellDefinition {
-		f, err := NewMShellParser(NewLexer(src, &TokenFile{path})).ParseFile()
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i := range f.Definitions {
-			f.Definitions[i].File = &TokenFile{path}
-		}
-		return f.Definitions
-	}
-	startup := append(parse(
-		"def double (int -- int) 2 * end\n"+
-			"def badBody (int -- int) \"oops\" end\n"+
-			"def shout (string -- str) \"!\" + end\n"+
-			"def useBad ( -- int) 5 badBody end\n"+
-			"def chain1 ( -- int) chain2 end\n"+
-			"def chain2 ( -- int) chain3 end\n"+
-			"def chain3 ( -- int) 5 useBad + end\n"+
-			"def evens (int -- new [int]) dup 0 = if drop [] else 1 - odds end end\n"+
-			"def odds (int -- new [int]) dup 0 = if drop [] else 1 - evens end end\n"+
-			"def mkList ( -- [int]) [1 2] end\n"+
-			"def comp { 'complete': ['foo'] } ([str] -- [str]) drop 5 end\n"+
-			"def comp2 { 'complete': ['bar'] } ([str] -- [str]) end\n",
-		"std.msh"), parse(
-		"def fromInit (int -- int) double end\n"+
-			"def initBad (int -- int) badBody 1 + end\n"+
-			"def initGood ( -- int) 3 fromInit end\n",
-		"init.msh")...)
-	for _, src := range []string{
-		`5 double wl`, `1 2 + wl`, `5 badBody wl`, `"hi" shout wl`, `useBad wl`,
-		`def f ( -- int) 5 badBody end`, `chain1 wl`, `chain3 wl`, `3 evens len wl`, `3 odds len wl`,
-		`mkList len wl`, `completionDefs len wl`, `comp2. end`, `5 fromInit wl`, `5 initBad wl`, `initGood wl`,
-		`5 double "x" +`, `def g ( -- int) initGood end g wl`, `(5 double) x wl`, `[1 2] (double) map len wl`,
-	} {
-		file, err := NewMShellParser(NewLexer(src, nil)).ParseFile()
-		if err != nil {
-			t.Fatal(err)
-		}
-		compare(src, startup, file)
-	}
-	// Only the bodies a check reaches are checked.
-	for _, tc := range []struct {
-		src     string
-		checked []string
-	}{
-		{`1 2 + wl`, nil},
-		{`5 double wl`, []string{"double"}},
-		{`chain1 wl`, []string{"badBody", "chain1", "chain2", "chain3", "useBad"}},
-		{`3 evens len wl`, []string{"evens", "odds"}},
-		{`initGood wl`, []string{"double", "fromInit", "initGood"}},
-		{`completionDefs len wl`, []string{"comp", "comp2"}},
-	} {
-		file, err := NewMShellParser(NewLexer(tc.src, nil)).ParseFile()
-		if err != nil {
-			t.Fatal(err)
-		}
-		b := newCoreBase(startup, nil, true)
-		b.Check(file)
-		var checked []string
-		for id := range b.done {
-			checked = append(checked, b.names.Name(id))
-		}
-		slices.Sort(checked)
-		if !slices.Equal(checked, tc.checked) {
-			t.Errorf("%s: checked the bodies of %q, want %q", tc.src, checked, tc.checked)
-		}
-	}
-}
-
-// sortRecordLabels sorts the labels of each record type printed in msg. A
-// record prints its labels in the order their names were first seen, which
-// depends on what else the checker read first.
-func sortRecordLabels(msg string) string {
-	for {
-		end := strings.IndexByte(msg, '}')
-		if end < 0 {
-			return msg
-		}
-		start := strings.LastIndexByte(msg[:end], '{')
-		if start < 0 {
-			return msg
-		}
-		parts := strings.Split(msg[start+1:end], ", ")
-		slices.Sort(parts)
-		msg = msg[:start] + "\x01" + strings.Join(parts, ", ") + "\x02" + msg[end+1:]
 	}
 }
 

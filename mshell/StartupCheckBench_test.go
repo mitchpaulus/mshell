@@ -61,12 +61,6 @@ func BenchmarkStartupCheck(b *testing.B) {
 			NewCoreBase(nil, nil)
 		}
 	})
-	b.Run("sigsOnly", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			newCoreBase(defs, decls, true)
-		}
-	})
 	b.Run("everyBody", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
