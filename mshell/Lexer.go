@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 
@@ -362,14 +363,19 @@ func (t Token) GetEndToken() Token {
 	return t
 }
 
+// The Lexer reads its input as a string, a byte at a time where it can, and
+// decodes UTF-8 only for bytes at or above utf8.RuneSelf. Positions within
+// the input are byte offsets; a token's Start and Column count runes.
 type Lexer struct {
-	start   int
-	current int
+	start   int // Byte offset of the start of the token.
+	current int // Byte offset of the next character.
+	runeStart   int // Rune offset of the start of the token (Token.Start).
+	runeCurrent int // Rune offset of the next character.
 	col     int // Zero-based column number.
 	startCol int // Zero-based column number of the start of the token.
 	line    int // One-based line number.
 	startLine int // One-based line number of the start of the token.
-	input   []rune
+	input   string
 	allowUnterminatedString bool
 	emitWhitespace bool // If true, will emit whitespace tokens.
 	emitComments bool // If true, will emit comments as tokens.
@@ -386,7 +392,7 @@ func (l *Lexer) DebugStr() {
 
 func NewLexer(input string, tokenFile *TokenFile) *Lexer {
 	return &Lexer{
-		input: []rune(input),
+		input: input,
 		line:  1,
 		startLine: 1,
 		start: 0,
@@ -402,13 +408,15 @@ func NewLexer(input string, tokenFile *TokenFile) *Lexer {
 
 // Resets lexer with new input string.
 func (l *Lexer) resetInput(input string) {
-	l.input = []rune(input)
+	l.input = input
 	l.line = 1
 	l.startLine = 1
 	l.startCol = 0
 	l.col = 0
 	l.start = 0
 	l.current = 0
+	l.runeStart = 0
+	l.runeCurrent = 0
 	l.formatDepths = l.formatDepths[:0]
 }
 
@@ -416,25 +424,26 @@ func (l *Lexer) atEnd() bool {
 	return l.current >= len(l.input)
 }
 
+// curLen is the length of the token so far, in runes.
 func (l *Lexer) curLen() int {
-	return l.current - l.start
+	return l.runeCurrent - l.runeStart
 }
 
 func (l *Lexer) curLexeme() string {
-	return string(l.input[l.start:l.current])
+	return l.input[l.start:l.current]
 }
 
 func (l *Lexer) makeToken(tokenType TokenType) Token {
 	lexeme := l.curLexeme()
 	if msg := numberLexemeError(tokenType, lexeme); msg != "" {
-		return Token{Line: l.startLine, Column: l.startCol + 1, Start: l.start, Type: ERROR,
+		return Token{Line: l.startLine, Column: l.startCol + 1, Start: l.runeStart, Type: ERROR,
 			Lexeme: fmt.Sprintf("%d:%d: %s", l.startLine, l.startCol+1, msg)}
 	}
 
 	return Token{
 		Line:   l.startLine,
 		Column: l.startCol + 1,
-		Start:  l.start,
+		Start:  l.runeStart,
 		Lexeme: lexeme,
 		Type:   tokenType,
 		Value:  literalValue(tokenType, lexeme),
@@ -513,31 +522,58 @@ func (l *Lexer) makeErrorToken(message string) Token {
 }
 
 func (l *Lexer) advance() rune {
-	c := l.input[l.current]
-	l.current++
 	l.col++
+	l.runeCurrent++
+	if b := l.input[l.current]; b < utf8.RuneSelf {
+		l.current++
+		return rune(b)
+	}
+	c, size := utf8.DecodeRuneInString(l.input[l.current:])
+	l.current += size
 	return c
 }
 
-func (l *Lexer) peek() rune {
-	if l.atEnd() {
-		return 0
+// skip advances over the next n bytes, which hold no newline.
+func (l *Lexer) skip(n int) {
+	runes := utf8.RuneCountInString(l.input[l.current : l.current+n])
+	l.current += n
+	l.col += runes
+	l.runeCurrent += runes
+}
+
+// runeAt decodes the character at byte offset i, and returns it and its
+// length in bytes. At the end of the input it returns 0 and 0.
+func (l *Lexer) runeAt(i int) (rune, int) {
+	if i >= len(l.input) {
+		return 0, 0
 	}
-	return l.input[l.current]
+	if b := l.input[i]; b < utf8.RuneSelf {
+		return rune(b), 1
+	}
+	return utf8.DecodeRuneInString(l.input[i:])
+}
+
+func (l *Lexer) peek() rune {
+	c, _ := l.runeAt(l.current)
+	return c
 }
 
 func (l *Lexer) peekNext() rune {
-	if l.current+1 >= len(l.input) {
-		return 0
-	}
-	return l.input[l.current+1]
+	return l.peekAt(1)
 }
 
+// peekAt returns the character offset characters after the next one.
 func (l *Lexer) peekAt(offset int) rune {
-	if l.current+offset >= len(l.input) {
-		return 0
+	i := l.current
+	for range offset {
+		_, size := l.runeAt(i)
+		if size == 0 {
+			return 0
+		}
+		i += size
 	}
-	return l.input[l.current+offset]
+	c, _ := l.runeAt(i)
+	return c
 }
 
 // Increments line, resets col. Make sure this is called after the newline has been consumed.
@@ -546,6 +582,15 @@ func (l *Lexer) handleNewline() {
 	l.line++
 	l.col = 0
 }
+
+// literalStop holds the ASCII characters that end a literal: spaces and
+// notAllowedLiteralChars.
+var literalStop = func() (stop [utf8.RuneSelf]bool) {
+	for c := range stop {
+		stop[c] = unicode.IsSpace(rune(c)) || notAllowedLiteralChars[rune(c)]
+	}
+	return stop
+}()
 
 var notAllowedLiteralChars = map[rune]bool{
 	'[': true,
@@ -599,25 +644,36 @@ func isBaseDigit(base int, r rune) bool {
 }
 
 func isAllowedLiteral(r rune) bool {
-	if unicode.IsSpace(r) {
-		return false
+	if r >= 0 && r < utf8.RuneSelf {
+		return !literalStop[r]
 	}
-	_, ok := notAllowedLiteralChars[r]
-	return !ok
+	return !unicode.IsSpace(r) && !notAllowedLiteralChars[r]
+}
+
+// scanLiteralChars advances over the characters a literal may hold.
+func (l *Lexer) scanLiteralChars() {
+	for l.current < len(l.input) {
+		if b := l.input[l.current]; b < utf8.RuneSelf {
+			if literalStop[b] {
+				return
+			}
+			l.current++
+			l.col++
+			l.runeCurrent++
+			continue
+		}
+		c, size := utf8.DecodeRuneInString(l.input[l.current:])
+		if !isAllowedLiteral(c) {
+			return
+		}
+		l.current += size
+		l.col++
+		l.runeCurrent++
+	}
 }
 
 func (l *Lexer) parseLiteralOrKeyword() Token {
-	for {
-		if l.atEnd() {
-			break
-		}
-		c := l.peek()
-		if isAllowedLiteral(c) {
-			l.advance()
-		} else {
-			break
-		}
-	}
+	l.scanLiteralChars()
 
 	// If the literal is immediately followed by '!', it's a variable store —
 	// regardless of whether the literal happens to match a keyword. This lets
@@ -767,8 +823,10 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 }
 
 func (l *Lexer) checkKeyword(start int, rest string, tokenType TokenType) TokenType {
-	lengthMatch := l.current-l.start == start+len(rest)
-	restMatch := string(l.input[l.start+start:l.current]) == rest
+	// rest is ASCII, so the token ends with it exactly when its last
+	// len(rest) runes are rest.
+	lengthMatch := l.curLen() == start+len(rest)
+	restMatch := strings.HasSuffix(l.curLexeme(), rest)
 	if lengthMatch && restMatch {
 		return tokenType
 	}
@@ -804,13 +862,13 @@ func (l *Lexer) scanToken() Token {
 // saving its length and top is enough to put it back. A pop only reslices,
 // so the popped entry is still in the backing array.
 func (l *Lexer) peekToken() Token {
-	current, line, col := l.current, l.line, l.col
+	current, runeCurrent, line, col := l.current, l.runeCurrent, l.line, l.col
 	depthLen, depthTop := len(l.formatDepths), 0
 	if depthLen > 0 {
 		depthTop = l.formatDepths[depthLen-1]
 	}
 	token := l.scanToken()
-	l.current, l.line, l.col = current, line, col
+	l.current, l.runeCurrent, l.line, l.col = current, runeCurrent, line, col
 	l.formatDepths = l.formatDepths[:depthLen]
 	if depthLen > 0 {
 		l.formatDepths[depthLen-1] = depthTop
@@ -820,6 +878,7 @@ func (l *Lexer) peekToken() Token {
 
 func (l *Lexer) scanTokenAll() Token {
 	l.start = l.current
+	l.runeStart = l.runeCurrent
 	l.startLine = l.line
 	l.startCol = l.col
 
@@ -856,9 +915,11 @@ func (l *Lexer) scanTokenAll() Token {
 	case '`':
 		return l.parsePath()
 	case '#':
-		for !l.atEnd() && l.peek() != '\n' {
-			l.advance()
+		n := strings.IndexByte(l.input[l.current:], '\n')
+		if n < 0 {
+			n = len(l.input) - l.current
 		}
+		l.skip(n)
 		return l.makeToken(LINECOMMENT)
 	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
 		return l.parseNumberOrStartIndexer()
@@ -961,17 +1022,7 @@ func (l *Lexer) scanTokenAll() Token {
 			return l.parseLiteralOrKeyword()
 		}
 	case '@':
-		for {
-			if l.atEnd() {
-				break
-			}
-			c := l.peek()
-			if isAllowedLiteral(c) {
-				l.advance()
-			} else {
-				break
-			}
-		}
+		l.scanLiteralChars()
 		// TODO: if empty at end, need better error.
 		return l.makeToken(VARRETRIEVE)
 	case '!':
@@ -1012,6 +1063,11 @@ func (l *Lexer) scanTokenAll() Token {
 func (l *Lexer) parseSingleQuoteString() Token {
 	// When this is called, we've already consumed a single quote.
 	for {
+		if n := strings.IndexAny(l.input[l.current:], "'\n"); n > 0 {
+			l.skip(n)
+		} else if n < 0 {
+			l.skip(len(l.input) - l.current)
+		}
 		if l.atEnd() {
 			if l.allowUnterminatedString {
 				return l.makeToken(UNFINISHEDSINGLEQUOTESTRING)
@@ -1032,17 +1088,7 @@ func (l *Lexer) parseSingleQuoteString() Token {
 }
 
 func (l *Lexer) consumeLiteral() Token {
-	for {
-		if l.atEnd() {
-			break
-		}
-		c := l.peek()
-		if isAllowedLiteral(c) {
-			l.advance()
-		} else {
-			break
-		}
-	}
+	l.scanLiteralChars()
 
 	if l.peek() == '!' {
 		l.advance()
@@ -1053,13 +1099,7 @@ func (l *Lexer) consumeLiteral() Token {
 }
 
 func (l *Lexer) parseEnvVar() Token {
-	for {
-		if isAllowedLiteral(l.peek()) {
-			l.advance()
-		} else {
-			break
-		}
-	}
+	l.scanLiteralChars()
 
 	c := l.peek()
 
@@ -1318,6 +1358,13 @@ func (l *Lexer) consumeString() error {
 	// When this is called, we've already consumed a single double quote.
 	inEscape := false
 	for {
+		if !inEscape {
+			if n := strings.IndexAny(l.input[l.current:], "\"\\\n"); n > 0 {
+				l.skip(n)
+			} else if n < 0 {
+				l.skip(len(l.input) - l.current)
+			}
+		}
 		if l.atEnd() {
 			return ConsumeStringErrorUnterminated{ErrorString: fmt.Sprintf("%d:%d: Unterminated string.", l.line, l.col)}
 		}
@@ -1385,9 +1432,10 @@ func (l *Lexer) scanFormatChunk(afterInterpolation bool) Token {
 			if l.atEnd() {
 				continue // Reported as unterminated.
 			}
-			escaped, ok := escapedRune(l.advance())
+			c := l.advance()
+			escaped, ok := escapedRune(c)
 			if !ok {
-				return l.makeErrorToken(invalidEscapeMessage(l.line, l.col, l.input[l.current-1]))
+				return l.makeErrorToken(invalidEscapeMessage(l.line, l.col, c))
 			}
 			b.WriteRune(escaped)
 		case '{':
@@ -1441,6 +1489,11 @@ func (l *Lexer) parseString() Token {
 
 func (l *Lexer) parsePath() Token {
 	for {
+		if n := strings.IndexAny(l.input[l.current:], "`\n"); n > 0 {
+			l.skip(n)
+		} else if n < 0 {
+			l.skip(len(l.input) - l.current)
+		}
 		if l.atEnd() {
 			if l.allowUnterminatedString {
 				return l.makeToken(UNFINISHEDPATH)
