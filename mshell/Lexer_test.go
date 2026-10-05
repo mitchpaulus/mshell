@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -35,6 +36,35 @@ func TestTypeCheckerKeywords(t *testing.T) {
 		}
 		if toks[0].Type != tc.want {
 			t.Errorf("%q: got %s, want %s", tc.input, toks[0].Type, tc.want)
+		}
+	}
+}
+
+// TestElseStar checks that only "else" followed by '*' is the else* keyword,
+// not every four-letter word starting with "el".
+func TestElseStar(t *testing.T) {
+	cases := []struct {
+		input string
+		want  []TokenType
+	}{
+		{"else*", []TokenType{ELSESTAR, EOF}},
+		{"else", []TokenType{ELSE, EOF}},
+		{"elxx*", []TokenType{LITERAL, ASTERISK, EOF}},
+		{"elsé*", []TokenType{LITERAL, ASTERISK, EOF}},
+		{"elsex*", []TokenType{LITERAL, ASTERISK, EOF}},
+	}
+	for _, tc := range cases {
+		toks, err := NewLexer(tc.input, nil).Tokenize()
+		if err != nil {
+			t.Errorf("%q: %v", tc.input, err)
+			continue
+		}
+		var got []TokenType
+		for _, tok := range toks {
+			got = append(got, tok.Type)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%q: got %v, want %v", tc.input, got, tc.want)
 		}
 	}
 }

@@ -722,9 +722,9 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 			c := l.input[l.start+1]
 			switch c {
 			case 'l':
-				if l.curLen() == 4 && l.peek() == '*' {
+				if l.curLexeme() == "else" && l.peek() == '*' {
 					l.advance()
-					return l.checkKeyword(5, "", ELSESTAR)
+					return ELSESTAR
 				}
 				return l.checkKeyword(2, "se", ELSE)
 			case 'n':
