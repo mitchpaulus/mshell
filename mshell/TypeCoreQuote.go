@@ -12,6 +12,8 @@ import "strconv"
 //   - a word that takes a quote checks the body against its parameter type,
 //     after its other arguments are known: `@xs (1 +) map` checks the body
 //     with an int input;
+//   - `as` with a quote type checks the body against that type:
+//     `(:a?) as ({a: int} -- int)` checks the body with a {a: int} input;
 //   - `x`, `iff` and `loop` given a literal run its body inline, on the
 //     current stack: this is the elaboration of a literal quote at those
 //     sites into `if` and `loop{...}`;
