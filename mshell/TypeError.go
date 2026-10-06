@@ -225,6 +225,9 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 	case TidUnknown:
 		return "unknown"
 	}
+	if name, ok := arena.DisplayName(id); ok {
+		return names.Name(name)
+	}
 	n := arena.Node(id)
 	switch n.Kind {
 	case TKList:

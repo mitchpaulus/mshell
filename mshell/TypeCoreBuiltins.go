@@ -79,13 +79,12 @@ func (b *coreTableBuilder) sigs(srcs []string) []coreSig {
 // alias declares a built-in type alias, written in type syntax: the
 // record types builtins take and give have names, so a program can type a
 // stored value where it is made (`{url: "x"} as HttpRequest req!`) and
-// errors print the name.
+// errors print the name. None refers to itself, so the name is its body.
 func (b *coreTableBuilder) alias(name, body string) {
 	t := b.typ(body)
 	id := b.res.names.Intern(name)
-	idx := b.res.arena.DeclareAlias(id)
-	b.res.arena.SetAliasBody(idx, t)
-	b.res.aliases[id] = b.res.arena.MakeAliasRef(idx)
+	b.res.arena.NameType(t, id)
+	b.res.aliases[id] = t
 }
 
 // builtinAliases declares the names of the record types the builtins take

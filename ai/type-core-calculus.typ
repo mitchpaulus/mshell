@@ -2590,8 +2590,11 @@ decision procedures for $<=$ and $subset.sq.eq$ on them.
 *What is not modeled*, and what each would need:
 
 - *Aliases as names.* The model writes a recursive alias as the recursive type it denotes (`TMu`,
-  with nested ones for aliases that refer to each other); the checker keeps names. Generic aliases
-  are not modeled (@sec-alias).
+  with nested ones for aliases that refer to each other), and an alias that does not refer to itself
+  as its body. Since 2026-10-06 the checker does the same for the second kind: it replaces such an
+  alias by its body when the declarations are read, and keeps the name only for messages; it keeps
+  names for recursive aliases (see `ai/type-completeness.typ`). Generic aliases are not modeled
+  (@sec-alias).
 - *Exhaustiveness.* A constructor with no arm is a checked error in the model; checking coverage
   statically is not a soundness question.
 - *Grids, grid views, commands*. The model covers them through their core form: records of

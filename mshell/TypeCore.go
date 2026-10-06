@@ -1479,9 +1479,8 @@ func (c *coreChecker) check(slot coreSlot, want TypeId) bool {
 // else is unified. Unions are never entered. The caller checks the solved
 // types in full when the unit is solved.
 func (c *coreChecker) matchSub(got, want TypeId, fresh bool) bool {
-	// An earlier label may have solved a variable this one mentions. An
-	// alias that is not recursive is its body.
-	got, want = c.plainAlias(c.subst.Apply(c.arena, got)), c.plainAlias(c.subst.Apply(c.arena, want))
+	// An earlier label may have solved a variable this one mentions.
+	got, want = c.subst.Apply(c.arena, got), c.subst.Apply(c.arena, want)
 	if got == want {
 		return true
 	}
@@ -1782,12 +1781,8 @@ func (c *coreChecker) distribute(sigs []coreSig, tok Token) bool {
 		if c.waiting(s) != nil {
 			continue
 		}
-		// An alias of a union is split as the union is (`type N = int |
-		// float`); a recursive one, such as Json, is not.
+		// A recursive alias, such as Json, is not split.
 		t := c.subst.Apply(c.arena, s.t)
-		if c.arena.nodes[t].Kind == TKAlias {
-			t = c.plainAlias(t)
-		}
 		if c.arena.nodes[t].Kind == TKUnion {
 			idx, u = len(c.stack)-len(top)+i, t
 			break

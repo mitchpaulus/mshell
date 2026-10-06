@@ -366,6 +366,11 @@ type progGen struct {
 	safeOK, safeNo, riskyOK, riskyNo int
 	// last is the most recent rendering.
 	last string
+	// lastErr is the first error of the most recent check that failed.
+	lastErr string
+	// refusedSafe records each safe statement the checker refused, with
+	// the program it was added to and the error, for MSH_GEN_SAFE_DIR.
+	refusedSafe []string
 }
 
 const genHeader = "enum Box[a] = box [a] | empty end\n"
@@ -397,8 +402,12 @@ func (p *progGen) ok() bool {
 		return false
 	}
 	errs, ok := p.base.Check(file)
-	if !ok && genDebug && len(errs) > 0 {
-		fmt.Printf("REFUSED %s\n", errs[0])
+	p.lastErr = ""
+	if !ok && len(errs) > 0 {
+		p.lastErr = errs[0]
+		if genDebug {
+			fmt.Printf("REFUSED %s\n", errs[0])
+		}
 	}
 	return ok
 }
@@ -422,12 +431,26 @@ func (p *progGen) try(blk *gblock, text string, risky bool, apply func()) bool {
 		p.count(risky, true)
 		return true
 	}
+	if !risky {
+		p.recordSafeRefusal(text)
+	}
 	blk.nodes = blk.nodes[:len(blk.nodes)-1]
 	p.count(risky, false)
 	if genDebug {
 		fmt.Printf("  STATEMENT %s\n", text)
 	}
 	return false
+}
+
+// genSafeDir, from MSH_GEN_SAFE_DIR, is a directory to write each refused
+// safe statement to, one file per seed, for triage.
+var genSafeDir = os.Getenv("MSH_GEN_SAFE_DIR")
+
+func (p *progGen) recordSafeRefusal(stmt string) {
+	if genSafeDir == "" {
+		return
+	}
+	p.refusedSafe = append(p.refusedSafe, "=== STATEMENT "+stmt+"\n=== ERROR "+p.lastErr+"\n=== PROGRAM\n"+p.last)
 }
 
 func (p *progGen) count(risky, ok bool) {
@@ -455,6 +478,7 @@ func (p *progGen) compound(blk *gblock, parts ...string) *gnode {
 		p.count(false, true)
 		return n
 	}
+	p.recordSafeRefusal(strings.Join(parts, " ... "))
 	blk.nodes = blk.nodes[:len(blk.nodes)-1]
 	p.count(false, false)
 	return nil
@@ -1666,6 +1690,9 @@ func TestGeneratedProgramsSound(t *testing.T) {
 				slot.begin(seed, genGenerating)
 				src := p.generate()
 				genTime := time.Since(start)
+				if genSafeDir != "" && len(p.refusedSafe) > 0 {
+					os.WriteFile(fmt.Sprintf("%s/seed%d.txt", genSafeDir, seed), []byte(strings.Join(p.refusedSafe, "\n")), 0o644)
+				}
 				res := result{genTime: genTime, seed: seed, checks: p.checks, safeOK: p.safeOK, safeNo: p.safeNo, riskyOK: p.riskyOK, riskyNo: p.riskyNo}
 				res.statements = strings.Count(src, "\n")
 				file, err := parseMShellInput(src, &TokenFile{"gen.msh"})

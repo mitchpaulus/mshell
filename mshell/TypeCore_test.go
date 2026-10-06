@@ -169,6 +169,19 @@ func TestCoreChecker(t *testing.T) {
 		{`type F = ( -- ) def f (bool F -- ) iff end true () f`, true, ""},
 		{`def f (int | [int] -- ) drop end (1) f`, false, "'f' takes int | [int] here, not the quote"},
 
+		// An alias that does not refer to itself is its body, wherever it
+		// is used; messages still print its name.
+		{`type N = null 1 as int | N one! null as int | N n! @one @n = str wl`, true, ""},
+		{`type P = {name: str, kids: [P]} type Q = P def mk (str [P] -- Q) ks! n! {name: @n, kids: @ks} end "a" [] mk drop`, true, ""},
+		{`type U = [str | int] [1] ([5] as U append drop) each`, true, ""},
+		{`type A = Maybe[int] type B = Maybe[float] 3 just as A a! 1.5 just as B b! true if @a else @b end drop`, true, ""},
+		{`type Cmds = [[str]] [["true"]] as Cmds cmds! @cmds | ;`, true, ""},
+		{`type B = A | float type A = int | str 1.5 as B drop "s" as B drop`, true, ""},
+		{`type R = {a: int, b: str} 5 as R drop`, false, "int is not below R"},
+		{`{url: 5} as HttpRequest drop`, false, "is not below HttpRequest"},
+		{`type F = int | ({a: int} -- int) [1] as F drop`, false, "is not below F"},
+		{`type L = [int] "a" as L drop`, false, "str is not below [int]"},
+
 		// An overloaded word on a union is a match per member.
 		{`true if 1 else 2.5 end toFloat 1.0 + str wl`, true, ""},
 		{`true if 1 else 2.5 end 1 + drop`, false, "the stack has (float int)"},

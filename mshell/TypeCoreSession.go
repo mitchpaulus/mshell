@@ -93,6 +93,8 @@ type sessionDecls struct {
 	aliases  map[NameId]TypeId
 	enums    map[NameId]uint32
 	ctors    map[NameId]*coreCtor
+	// displayNames are the arena's names of alias bodies (NameType).
+	displayNames map[TypeId]NameId
 }
 
 // NewSession starts a session whose stack holds stackLen values of
@@ -243,7 +245,7 @@ func (s *CoreSession) declare(file *MShellFile) {
 	c := s.c
 	if len(declarationItems(file.Items)) > 0 {
 		s.decl = &sessionDecls{declared: maps.Clone(c.declared), aliases: maps.Clone(c.res.aliases),
-			enums: maps.Clone(c.res.enums), ctors: maps.Clone(c.ctors)}
+			enums: maps.Clone(c.res.enums), ctors: maps.Clone(c.ctors), displayNames: maps.Clone(c.arena.displayNames)}
 	}
 	for _, def := range file.Definitions {
 		if _, ok := s.defNames[def.Name]; !ok {
@@ -295,6 +297,7 @@ func (s *CoreSession) undoDecls() {
 		refill(c.res.aliases, d.aliases)
 		refill(c.res.enums, d.enums)
 		refill(c.ctors, d.ctors)
+		c.arena.displayNames = d.displayNames
 		s.decl = nil
 	}
 }

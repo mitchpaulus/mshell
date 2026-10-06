@@ -119,7 +119,7 @@ func (c *coreChecker) markBelow(m coreMark, got, want TypeId) (ok, kept bool) {
 	// a new node holding stored children, `{name: @n, kids: @ks}`, is a
 	// Person. msub itself never unfolds one, so a partly new value is
 	// never kept at a recursive type.
-	if wn := c.arena.Node(want); wn.Kind == TKAlias && c.aliasRecursive(wn.A) {
+	if wn := c.arena.Node(want); wn.Kind == TKAlias {
 		body := c.unfold(want)
 		if c.msub(m, got, body) {
 			return true, false
@@ -131,16 +131,14 @@ func (c *coreChecker) markBelow(m coreMark, got, want TypeId) (ok, kept bool) {
 	return c.rel.Sub(got, want), false
 }
 
-// unionMemberOfKind finds the member of want, a union (or an alias that is
-// not recursive whose body is one), with the kind of got. Members have
-// distinct kinds, so there is at most one.
+// unionMemberOfKind finds the member of want, a union, with the kind of
+// got. Members have distinct kinds, so there is at most one.
 func (c *coreChecker) unionMemberOfKind(got, want TypeId) (TypeId, bool) {
-	want = c.plainAlias(want)
 	wn := c.arena.Node(want)
 	if wn.Kind != TKUnion {
 		return 0, false
 	}
-	k, ok := c.rel.kindOf(c.plainAlias(got))
+	k, ok := c.rel.kindOf(got)
 	if !ok {
 		return 0, false
 	}
@@ -165,7 +163,6 @@ func (c *coreChecker) msub(m coreMark, got, want TypeId) bool {
 	}
 	p := &c.parts[m-2]
 	ar := c.arena
-	got, want = c.plainAlias(got), c.plainAlias(want)
 	gn, wn := ar.Node(got), ar.Node(want)
 	if p.list {
 		return gn.Kind == TKList && wn.Kind == TKList && c.msub(p.elem, TypeId(gn.A), TypeId(wn.A))
@@ -233,7 +230,6 @@ func (c *coreChecker) storedBlockers(m coreMark, got, want TypeId, path string) 
 	}
 	p := &c.parts[m-2]
 	ar := c.arena
-	got, want = c.plainAlias(got), c.plainAlias(want)
 	gn, wn := ar.Node(got), ar.Node(want)
 	blocked := func(m coreMark, f, g RecordField, at string) []storedBlocker {
 		switch {
@@ -315,75 +311,4 @@ func (c *coreChecker) recordPart(d coreSlot, name NameId, m coreMark) uint16 {
 	}
 	p.labels = append(p.labels, coreLabelMark{name: name, m: m})
 	return c.newPart(p)
-}
-
-// plainAlias unfolds an alias that is not recursive: such an alias is its
-// body (HttpRequest is a record). A recursive alias is left as it is: the
-// proof's msub never unfolds one.
-func (c *coreChecker) plainAlias(t TypeId) TypeId {
-	for {
-		n := c.arena.Node(t)
-		if n.Kind != TKAlias || c.aliasRecursive(n.A) {
-			return t
-		}
-		t = c.arena.aliases[n.A].Body
-	}
-}
-
-// aliasRecursive reports whether the alias at idx refers to itself,
-// directly or through other aliases.
-func (c *coreChecker) aliasRecursive(idx uint32) bool {
-	seen := map[uint32]bool{}
-	var walk func(t TypeId) bool
-	walk = func(t TypeId) bool {
-		if t == TidNothing {
-			return false
-		}
-		ar := c.arena
-		n := ar.nodes[t]
-		switch n.Kind {
-		case TKAlias:
-			if n.A == idx {
-				return true
-			}
-			if seen[n.A] {
-				return false
-			}
-			seen[n.A] = true
-			return walk(ar.aliases[n.A].Body)
-		case TKList, TKCommand:
-			return walk(TypeId(n.A))
-		case TKRecord:
-			rec := ar.records[n.Extra]
-			for _, f := range rec.Fields {
-				if walk(f.Type) {
-					return true
-				}
-			}
-			return walk(rec.Rest.Type)
-		case TKUnion:
-			for _, m := range ar.unionMembers[n.Extra] {
-				if walk(m) {
-					return true
-				}
-			}
-		case TKQuote:
-			sig := ar.quoteSigs[n.Extra]
-			for _, x := range append(append([]TypeId(nil), sig.Inputs...), sig.Outputs...) {
-				if walk(x) {
-					return true
-				}
-			}
-		case TKEnum:
-			for _, x := range ar.enumArgs[n.Extra] {
-				if walk(x) {
-					return true
-				}
-			}
-		case TKGrid, TKGridView, TKGridRow:
-			return walk(TypeId(n.A))
-		}
-		return false
-	}
-	return walk(c.arena.aliases[idx].Body)
 }
