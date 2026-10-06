@@ -620,12 +620,17 @@ type EnumMemberInfo struct {
 	Ordinal  int
 }
 
-// patternWords are the words a match pattern gives a meaning of their own;
-// an enum member with one of these names could not be matched.
-var patternWords = map[string]bool{
-	"_": true, "just": true, "none": true, "null": true, "list": true, "dict": true,
-	"path": true, "datetime": true, "quotation": true, "maybe": true, "binary": true,
-	"Maybe": true, "Json": true, "HtmlNode": true, "is": true,
+// isPatternWord reports whether a match pattern gives word a meaning of its
+// own; an enum member with one of these names could not be matched. It is a
+// switch, not a map, so matchPattern can skip these words without hashing.
+func isPatternWord(word string) bool {
+	switch word {
+	case "_", "just", "none", "null", "list", "dict",
+		"path", "datetime", "quotation", "maybe", "binary",
+		"Maybe", "Json", "HtmlNode", "is":
+		return true
+	}
+	return false
 }
 
 // RegisterDeclarations records the `type` and `enum` declarations among
@@ -660,7 +665,7 @@ func (state *EvalState) RegisterDeclarations(items []MShellParseItem, defs []MSh
 		if _, ok := BuiltInList[name]; ok {
 			return fmt.Errorf("%s: '%s' is the name of a builtin.\n", tokenPosStr(tok), name)
 		}
-		if patternWords[name] {
+		if isPatternWord(name) {
 			return fmt.Errorf("%s: '%s' has a meaning of its own in match patterns.\n", tokenPosStr(tok), name)
 		}
 		names[name] = tok
@@ -1626,9 +1631,6 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		if def, ok := state.lookupDefinition(frame.Definitions, funcToken.Lexeme); ok {
 			return state.callDefinition(def, t, frame)
 		}
-		if info, ok := state.EnumMembers[funcToken.Lexeme]; ok {
-			return state.constructEnum(&funcToken, info, stack)
-		}
 		callStackItem := CallStackItem{MShellParseItem: nil, Name: "literal", CallStackType: frame.CallStackItem.CallStackType}
 		return nilIfNothingToDo(state.evaluateBuiltinToken(funcToken, stack, frame.Context, frame.Definitions, callStackItem))
 
@@ -1837,8 +1839,12 @@ func (state *EvalState) emptyMatchSubjectFailure(matchBlock *MShellParseMatchBlo
 // matchPattern checks if a subject matches a pattern (list of parse items).
 // Returns (matched bool, bindings map, result EvalResult).
 func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
-	if handled, matched, bindings, result := state.matchEnumPattern(pattern, subject); handled {
-		return matched, bindings, result
+	// Only a word that is not a pattern word can name an enum or a member.
+	// Checking first keeps other patterns from paying for the call.
+	if first, ok := pattern[0].(*Token); ok && first.Type == LITERAL && !isPatternWord(first.Lexeme) {
+		if handled, matched, bindings, result := state.matchEnumPattern(pattern, subject); handled {
+			return matched, bindings, result
+		}
 	}
 	if is, ok := pattern[0].(*MShellIsPattern); ok && len(pattern) == 1 {
 		conforms, err := state.validateValue(subject, is.Target, &is.resolved)
@@ -2206,9 +2212,6 @@ func (state *EvalState) processTokenToken(item MShellParseItem, t *Token, frame 
 		}
 		if def, ok := state.lookupDefinition(frame.Definitions, t.Lexeme); ok {
 			return state.callDefinition(def, item, frame)
-		}
-		if info, ok := state.EnumMembers[t.Lexeme]; ok {
-			return state.constructEnum(t, info, frame.Stack)
 		}
 		return nilIfNothingToDo(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem))
 
@@ -12096,6 +12099,16 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 
 				default: // last new function
+					// An enum member. It is looked up only after every
+					// builtin has missed, so builtins never pay for the
+					// lookup; no member can have a builtin's name
+					// (TestBuiltinSwitchCasesAreListed).
+					if info, ok := state.EnumMembers[t.Lexeme]; ok {
+						if r := state.constructEnum(&t, info, stack); r != nil {
+							return *r
+						}
+						return SimpleSuccess()
+					}
 					if strings.HasPrefix(t.Lexeme, "~/") {
 						return state.evalTildeToken(&t, stack)
 					}

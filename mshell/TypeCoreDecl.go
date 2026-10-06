@@ -75,7 +75,7 @@ func (c *coreChecker) declareAll(items []MShellParseItem, defNames map[string]To
 			declErr(tok, "'"+lex+"' is already declared at "+tokenPosStr(prev))
 		case reservedTypeNames[lex] || builtinAlias:
 			declErr(tok, "'"+lex+"' is a built-in type, so "+what+" cannot have that name")
-		case patternWords[lex]:
+		case isPatternWord(lex):
 			declErr(tok, "'"+lex+"' has a meaning of its own in match patterns, so "+what+" cannot have that name")
 		case c.hasStartupDef(lex):
 			prev, _ := c.startupDef(lex)
