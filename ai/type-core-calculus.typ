@@ -2148,6 +2148,11 @@ programs that checked and then stopped with a type mismatch for each:
   `=` types waiting literals before it joins its operands, and a literal fits a parameter only when that
   is a quote type or a bare generic: `(1) wl` and `(1) (2) +` checked, taking the literal for an `int`
   or for `[t]`.
+- *`as` checks a waiting literal against a quote type* (2026-10-06). It used to type the literal on its
+  own and then compare, so `(:a?) as ({a: int} -- int)` was rejected: on its own, `:a?` reads a field of
+  an input variable, and a variable has no fields to read. The *Quote* rule already allows the body to
+  be checked from `{a: int}`, so this changes only how the checker finds the derivation; the
+  mechanized rules are unchanged. The body has no break context, as for any stored quote.
 
 The result: the answer does not depend on the order constraints are visited, and
 `inputUnifyOrder`, first-arm union commitment and rollback-driven overload trials are unnecessary

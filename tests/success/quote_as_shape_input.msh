@@ -1,0 +1,5 @@
+# `as` with a quote type checks the literal's body against it,
+# so the body can read fields of the dict it takes.
+(:a? 1 +) as ({a: int} -- int) inc!
+{a: 2} @inc x wl
+{a: 10, b: "x"} @inc x wl

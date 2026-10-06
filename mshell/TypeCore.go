@@ -2130,6 +2130,17 @@ func (c *coreChecker) ascribe(a *MShellAsCast) {
 	if target == TidNothing || !c.need(1, a.AsToken) {
 		return
 	}
+	// A quote literal given a quote type is checked against it, as a word
+	// that takes a quote checks its argument: its inputs are known.
+	if p := c.waiting(c.stack[len(c.stack)-1]); p != nil {
+		if q := c.unfold(target); c.arena.nodes[q].Kind == TKQuote {
+			top := len(c.stack) - 1
+			c.checkPending(c.stack[top].pq, q, false, false, top, a.AsToken)
+			c.stack[top].pq = 0
+			c.stack[top].t = target
+			return
+		}
+	}
 	c.forceTop(1)
 	s := &c.stack[len(c.stack)-1]
 	var blockers []storedBlocker

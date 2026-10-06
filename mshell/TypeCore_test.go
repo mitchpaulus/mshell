@@ -150,6 +150,15 @@ func TestCoreChecker(t *testing.T) {
 		{`(1 +) q! 5 @q x wl`, true, ""},
 		{`(dup *) q! 3 @q x wl`, true, ""},
 
+		// `as` with a quote type checks a literal's body against it, so the
+		// body sees its inputs' types: a field read needs a known dict.
+		{`(:a?) as ({a: int} -- int) q! {a: 2} @q x wl`, true, ""},
+		{`(:a? 1 +) as ({a: int} -- int) drop`, true, ""},
+		{`(:a?) q!`, false, "'get' reads a value whose type is not known here"},
+		{`(:a?) as ({a: str} -- int) drop`, false, "'as' wants a quote ({a: str} -- int), but this one leaves (str)"},
+		{`(:a? 1) as ({a: int} -- int) drop`, false, "but this one leaves 2 value(s)"},
+		{`[0] (drop (break) as (--) drop) each`, false, "'break' is allowed only in a loop body"},
+
 		// An overloaded word on a union is a match per member.
 		{`true if 1 else 2.5 end toFloat 1.0 + str wl`, true, ""},
 		{`true if 1 else 2.5 end 1 + drop`, false, "the stack has (float int)"},

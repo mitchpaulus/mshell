@@ -597,6 +597,16 @@ An overloaded word inside it, such as <code><span class="mshellPLUS">+</span></c
 </pre>
 
 <p>
+A quotation literal followed by <code><span class="mshellAS">as</span></code> and a quotation type is checked against that type, the same way a word that takes a quotation checks it.
+Use this when the body needs to know what its inputs are, such as reading a field of a dictionary it takes:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">a</span><span class="mshellQUESTION">?</span> <span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellAS">as</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellVARSTORE">inc!</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">2</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellVARRETRIEVE">@inc</span> <span class="mshellINTERPRET">x</span> <span class="mshellLITERAL">wl</span>    <span class="mshellLINECOMMENT"># 3</span><span class="mshellEOF"></span></code>
+</pre>
+
+<p>
 <code><span class="mshellINTERPRET">x</span></code> needs to know how many values a quotation takes and leaves.
 Quotation parameters of definitions have written types, so this is only a question for a quotation whose type cannot be worked out.
 </p>
