@@ -158,6 +158,16 @@ func TestCoreChecker(t *testing.T) {
 		{`(:a?) as ({a: str} -- int) drop`, false, "'as' wants a quote ({a: str} -- int), but this one leaves (str)"},
 		{`(:a? 1) as ({a: int} -- int) drop`, false, "but this one leaves 2 value(s)"},
 		{`[0] (drop (break) as (--) drop) each`, false, "'break' is allowed only in a loop body"},
+		// So does a union's quote member, and a quote alias, as a
+		// parameter or with `as`.
+		{`def f (int | ({a: int} -- int) -- ) drop end (:a?) f`, true, ""},
+		{`def f (int | ({a: int} -- int) -- ) drop end (:a? "x") f`, false, "'f' wants a quote ({a: int} -- int), but this one leaves 2 value(s)"},
+		{`(:a?) as int | ({a: int} -- int) drop`, true, ""},
+		{`type F = int | ({a: int} -- int) (:a?) as F drop`, true, ""},
+		{`type F = ({a: int} -- int) def f (F -- int) {a: 1} swap x end (:a?) f wl`, true, ""},
+		{`type F = ( -- int) def f (F -- int) x end (1) f wl`, true, ""},
+		{`type F = ( -- ) def f (bool F -- ) iff end true () f`, true, ""},
+		{`def f (int | [int] -- ) drop end (1) f`, false, "'f' takes int | [int] here, not the quote"},
 
 		// An overloaded word on a union is a match per member.
 		{`true if 1 else 2.5 end toFloat 1.0 + str wl`, true, ""},

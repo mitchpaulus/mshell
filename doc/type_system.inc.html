@@ -607,6 +607,11 @@ Use this when the body needs to know what its inputs are, such as reading a fiel
 </pre>
 
 <p>
+A union type with a quotation member works the same way, as a definition's parameter or after <code><span class="mshellAS">as</span></code>: the literal is checked against that member.
+A quotation literal given to an <code><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_PAREN">)</span></code> parameter is checked with a <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span></code> input.
+</p>
+
+<p>
 <code><span class="mshellINTERPRET">x</span></code> needs to know how many values a quotation takes and leaves.
 Quotation parameters of definitions have written types, so this is only a question for a quotation whose type cannot be worked out.
 </p>

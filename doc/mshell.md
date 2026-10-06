@@ -796,6 +796,7 @@ A grid's type includes each column's type, worked out from literals and grid wor
 A quotation literal given to a word (`map`, `filter`, `each`, a def's quotation parameter) is checked against what the word passes it.
 A stored quotation is typed on its own; an overloaded word in it is decided by its later use, or needs an annotation.
 A literal followed by `as` and a quotation type is checked against that type, so its body knows its inputs: `(:a?) as ({a: int} -- int)`.
+A union with a quotation member, as a parameter or after `as`, checks a literal against that member: `(:a?)` given to an `int | ({a: int} -- int)` parameter.
 `x` needs the quotation's arity known.
 `break` and `continue` are allowed only in a `loop` body and in quotation literals given to `each`, `map` and similar words inside one.
 `map` on a Maybe, `bind` and `map2` run the quotation on the current stack, so a `break` there leaves the loop with what the quotation pushed so far, which must match the loop's stack.

@@ -1933,12 +1933,12 @@ func (c *coreChecker) argsFit(sig *coreSig) bool {
 			return
 		}
 		if c.waiting(c.stack[base+i]) != nil {
-			// A quote literal fits a quote parameter, or a bare generic;
-			// its body is checked once a candidate is chosen. A parameter
-			// that only mentions a generic ([t], Maybe[a]) is not a quote.
+			// A quote literal fits a quote parameter, a union with one
+			// quote member, or a bare generic; its body is checked once a
+			// candidate is chosen. A parameter that only mentions a
+			// generic ([t], Maybe[a]) is not a quote.
 			w := c.subst.Apply(c.arena, want)
-			k := c.arena.nodes[w].Kind
-			ok = k == TKQuote || k == TKVar
+			ok = c.arena.nodes[w].Kind == TKVar || c.literalQuote(w) != TidNothing
 			return
 		}
 		ok = c.check(c.stack[base+i], want)
@@ -2130,10 +2130,11 @@ func (c *coreChecker) ascribe(a *MShellAsCast) {
 	if target == TidNothing || !c.need(1, a.AsToken) {
 		return
 	}
-	// A quote literal given a quote type is checked against it, as a word
-	// that takes a quote checks its argument: its inputs are known.
+	// A quote literal given a quote type, or a union with one quote member,
+	// is checked against it, as a word that takes a quote checks its
+	// argument: its inputs are known.
 	if p := c.waiting(c.stack[len(c.stack)-1]); p != nil {
-		if q := c.unfold(target); c.arena.nodes[q].Kind == TKQuote {
+		if q := c.literalQuote(target); q != TidNothing {
 			top := len(c.stack) - 1
 			c.checkPending(c.stack[top].pq, q, false, false, top, a.AsToken)
 			c.stack[top].pq = 0

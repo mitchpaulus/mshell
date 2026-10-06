@@ -2153,6 +2153,12 @@ programs that checked and then stopped with a type mismatch for each:
   an input variable, and a variable has no fields to read. The *Quote* rule already allows the body to
   be checked from `{a: int}`, so this changes only how the checker finds the derivation; the
   mechanized rules are unchanged. The body has no break context, as for any stored quote.
+- *A union's quote member, and a quote alias, check a waiting literal* (2026-10-06). A literal given to an
+  `int | ({a: int} -- int)` parameter, or to `as` with that type, was typed on its own, so `(:a?)` was
+  rejected as above; a parameter typed by an alias of a quote type was too. A union has at most one quote
+  member, and a literal can only be that member, so the body is checked against it; the *Quote* and
+  subsumption rules already give this derivation. `x`, `iff` and a stored `loop` body also look through
+  an alias to the quote type.
 
 The result: the answer does not depend on the order constraints are visited, and
 `inputUnifyOrder`, first-arm union commitment and rollback-driven overload trials are unnecessary
