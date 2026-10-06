@@ -203,10 +203,17 @@ type promptRender struct {
 	HasTitle bool
 }
 
+// The tables below give each member of a built-in enum its escape
+// sequence parameter. TestPromptTablesCoverBuiltinEnums keeps them in step
+// with builtinDeclSource.
+
 var base16Index = map[string]int{
 	"baseBlack": 0, "baseRed": 1, "baseGreen": 2, "baseYellow": 3,
 	"baseBlue": 4, "baseMagenta": 5, "baseCyan": 6, "baseWhite": 7,
 }
+
+// baseBrightOffset moves a base color to its bright version.
+var baseBrightOffset = map[string]int{"baseNormal": 0, "baseBright": 60}
 
 // SGR parameters to turn each attribute on, and off. Bold and faint are
 // both turned off by 22.
@@ -227,10 +234,12 @@ var cursorShapeParam = map[string]int{
 }
 
 // cursorShapeSequence is the escape sequence that sets a cursor shape.
-// The shape "" is the terminal's default.
 func cursorShapeSequence(shape string) string {
 	return "\033[" + strconv.Itoa(cursorShapeParam[shape]) + " q"
 }
+
+// cursorShapeReset gives the terminal back its default cursor shape.
+const cursorShapeReset = "\033[0 q"
 
 func sgr(params ...int) string {
 	parts := make([]string, len(params))
@@ -299,10 +308,12 @@ func renderPrompt(obj MShellObject) (promptRender, error) {
 			if !ok1 || !ok2 {
 				return promptRender{}, bad("takes a Base16Color and a BaseBrightness")
 			}
-			n := base16Index[color]
-			if bright == "baseBright" {
-				n += 60
+			n, ok1 := base16Index[color]
+			offset, ok2 := baseBrightOffset[bright]
+			if !ok1 || !ok2 {
+				return promptRender{}, bad("no escape sequence for %s %s", color, bright)
 			}
+			n += offset
 			if e.Member == "setFgColorBase16" {
 				style(sgr(30+n), bgKeep)
 			} else {
@@ -317,11 +328,15 @@ func renderPrompt(obj MShellObject) (promptRender, error) {
 			if !ok {
 				return promptRender{}, bad("takes a TextAttribute")
 			}
+			table := textAttrOff
 			if e.Member == "setTextAttr" {
-				style(sgr(textAttrOn[attr]), bgKeep)
-			} else {
-				style(sgr(textAttrOff[attr]), bgKeep)
+				table = textAttrOn
 			}
+			n, ok := table[attr]
+			if !ok {
+				return promptRender{}, bad("no escape sequence for %s", attr)
+			}
+			style(sgr(n), bgKeep)
 		case "resetStyle":
 			style(sgr(0), bgClear)
 		case "setWindowTitle":
@@ -528,7 +543,7 @@ func (state *TermState) applyCursorShape() {
 // command runs or the shell exits, so other programs do not inherit it.
 func (state *TermState) resetCursorShape() {
 	if state.cursorShapeSet {
-		fmt.Fprint(os.Stdout, cursorShapeSequence(""))
+		fmt.Fprint(os.Stdout, cursorShapeReset)
 		state.cursorShapeSet = false
 	}
 }
