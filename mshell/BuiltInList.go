@@ -84,6 +84,8 @@ var BuiltInList = map[string]struct{}{
 	"groupBy": {},
 	"hardLink": {},
 	"hostname": {},
+	"setCursorShape": {},
+	"setPrompt": {},
 	"hour": {},
 	"httpGet": {},
 	"httpPost": {},

@@ -1,0 +1,38 @@
+# A prompt definition, run on a hand-built PromptInfo, as a test of it.
+def myPrompt (PromptInfo -- new [PromptItem])
+    info!
+    @info :lastExitCode? match
+        just c : $" [{@c}]",
+        none : "",
+    end code!
+    [
+        "msh" setWindowTitle
+        baseBlue baseBright setFgColorBase16
+        "~/repos" promptText
+        resetStyle
+        $" ({@info :stackDepth?}){@code}" promptText
+        attrBold setTextAttr
+        "https://example.com" "link" promptHyperlink
+        attrBold clearTextAttr
+        promptNewline
+        30 40 50 setBgColorRgb
+        200 setFgColor256
+        ":: " promptText
+        setFgDefault
+        setBgDefault
+    ]
+end
+
+{stackDepth: 2, stackTypes: ["int" "str"], lastLineOk: true, lastExitCode: 1 just, lastDurationMs: 12} as PromptInfo
+myPrompt (str) map unlines w
+
+# Built-in enums match like declared ones.
+[baseRed baseCyan] (
+    match
+        baseRed : "red",
+        Base16Color c : $"other {@c str}",
+    end wl
+) each
+
+(myPrompt) setPrompt
+steadyBar setCursorShape

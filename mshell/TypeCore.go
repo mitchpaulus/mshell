@@ -51,14 +51,18 @@ type CoreBase struct {
 }
 
 // coreBuiltins is the part of a base that depends only on the binary: an
-// arena and name table holding the built-in aliases, and the builtin table.
-// A base adds the startup files' declarations and signatures to the same
-// arena, so each coreBuiltins is used by one base.
+// arena and name table holding the built-in aliases and enums, and the
+// builtin table. A base adds the startup files' declarations and
+// signatures to the same arena, so each coreBuiltins is used by one base.
 type coreBuiltins struct {
 	arena *TypeArena
 	names *NameTable
 	res   *coreResolver
 	table *coreTable
+	// The built-in enums' constructors and the names the built-in
+	// declarations take (Prompt.go).
+	ctors    map[NameId]*coreCtor
+	declared map[NameId]Token
 }
 
 func newCoreBuiltins() *coreBuiltins {
@@ -66,10 +70,14 @@ func newCoreBuiltins() *coreBuiltins {
 	res := &coreResolver{arena: arena, names: names, rel: NewRelations(arena), aliases: map[NameId]TypeId{}, self: -1}
 	res.declareJson()
 	res.declareHtmlNode()
+	// Before the table, whose signatures name them.
+	c := &coreChecker{arena: arena, names: names, rel: res.rel, table: &coreTable{}, res: *res, defs: map[NameId]*coreSig{}}
+	c.declareBuiltins()
+	res.aliases, res.enums = c.res.aliases, c.res.enums
 	res.builtin = true
 	table := buildCoreTable(res)
 	res.builtin = false
-	return &coreBuiltins{arena: arena, names: names, res: res, table: table}
+	return &coreBuiltins{arena: arena, names: names, res: res, table: table, ctors: c.ctors, declared: c.declared}
 }
 
 // prebuilt receives the builtins PrebuildCoreBuiltins is building, for
@@ -103,7 +111,7 @@ func takeCoreBuiltins() *coreBuiltins {
 func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBase {
 	bi := takeCoreBuiltins()
 	arena, names, res, table := bi.arena, bi.names, bi.res, bi.table
-	b := &CoreBase{arena: arena, names: names, table: table}
+	b := &CoreBase{arena: arena, names: names, table: table, enums: res.enums, ctors: bi.ctors, declared: bi.declared}
 	if len(decls) > 0 {
 		// Declared in the base itself, so every check sees them, and before
 		// the startup files' signatures, which may name them.
@@ -113,7 +121,8 @@ func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBa
 				defNames[stdlibDefs[i].Name] = withFile(stdlibDefs[i].NameToken, stdlibDefs[i].File)
 			}
 		}
-		c := &coreChecker{arena: arena, names: names, rel: res.rel, table: table, res: *res, defs: map[NameId]*coreSig{}}
+		c := &coreChecker{arena: arena, names: names, rel: res.rel, table: table, res: *res, defs: map[NameId]*coreSig{},
+			ctors: b.ctors, declared: b.declared}
 		c.declareAll(decls, defNames)
 		res.aliases, res.enums = c.res.aliases, c.res.enums
 		b.enums, b.ctors, b.declared, b.declErrs = c.res.enums, c.ctors, c.declared, c.errs

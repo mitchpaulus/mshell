@@ -68,6 +68,99 @@ An example installer script is available at
 <a href="https://github.com/mitchpaulus/mshell/blob/main/install.sh" target="_blank" rel="noopener noreferrer">install.sh</a>.
 </p>
 
+<h1 id="getting-started-prompt">Customizing the Prompt <a class="section-link" href="#getting-started-prompt" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
+
+<p>
+The interactive shell's prompt is set in <code>init.msh</code> with <code>setPrompt</code>.
+It takes a quotation that is given a <code>PromptInfo</code> and returns a list of <code>PromptItem</code> values.
+</p>
+
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">myPrompt</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">PromptInfo</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">new</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">PromptItem</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellVARSTORE">info!</span>
+    <span class="mshellVARRETRIEVE">@info</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">lastLineOk</span><span class="mshellQUESTION">?</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">baseGreen</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">baseRed</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellIFF">iff</span> <span class="mshellVARSTORE">status!</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span>
+        <span class="mshellLITERAL">pwd</span> <span class="mshellLITERAL">setWindowTitle</span>
+        <span class="mshellLITERAL">baseBlue</span> <span class="mshellLITERAL">baseBright</span> <span class="mshellLITERAL">setFgColorBase16</span>
+        <span class="mshellLITERAL">pwd</span> <span class="mshellLITERAL">promptText</span>
+        <span class="mshellLITERAL">resetStyle</span>
+        <span class="mshellFORMATSTRINGSTART">$&#34; ({</span><span class="mshellVARRETRIEVE">@info</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">stackDepth</span><span class="mshellQUESTION">?</span><span class="mshellFORMATSTRINGEND">})&#34;</span> <span class="mshellLITERAL">promptText</span>
+        <span class="mshellLITERAL">promptNewline</span>
+        <span class="mshellVARRETRIEVE">@status</span> <span class="mshellLITERAL">baseNormal</span> <span class="mshellLITERAL">setFgColorBase16</span>
+        <span class="mshellSTRING">&#34;:: &#34;</span> <span class="mshellLITERAL">promptText</span>
+        <span class="mshellLITERAL">resetStyle</span>
+    <span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+<span class="mshellEND">end</span>
+
+<span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">myPrompt</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">setPrompt</span>
+<span class="mshellLITERAL">steadyBar</span> <span class="mshellLITERAL">setCursorShape</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+The shell runs the quotation before every prompt.
+Text is shown as written, except that control characters, including newlines, are shown visibly (<code>^[</code>, <code>^J</code>).
+Start a new line with <code>promptNewline</code>.
+Each color or attribute lasts until it is changed, and everything is reset before the command.
+</p>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>PromptItem</th> <th>Description</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>promptText str</code></td> <td>Prompt text with control characters sanitized.</td> </tr>
+        <tr> <td><code>promptNewline</code></td> <td>Start a new line.</td> </tr>
+        <tr> <td><code>setFgColorBase16 Base16Color BaseBrightness</code></td> <td>Text color from the terminal's 16 colors: <code>baseBlack</code>, <code>baseRed</code>, <code>baseGreen</code>, <code>baseYellow</code>, <code>baseBlue</code>, <code>baseMagenta</code>, <code>baseCyan</code> or <code>baseWhite</code>, and <code>baseNormal</code> or <code>baseBright</code>.</td> </tr>
+        <tr> <td><code>setFgColor256 int</code></td> <td>Text color from the 256 color palette, 0 to 255.</td> </tr>
+        <tr> <td><code>setFgColorRgb int int int</code></td> <td>Text color as red, green and blue, each 0 to 255.</td> </tr>
+        <tr> <td><code>setFgDefault</code></td> <td>The terminal's default text color.</td> </tr>
+        <tr> <td><code>setBgColorBase16</code>, <code>setBgColor256</code>, <code>setBgColorRgb</code>, <code>setBgDefault</code></td> <td>The same, for the background color.</td> </tr>
+        <tr> <td><code>setTextAttr TextAttribute</code></td> <td>Turn on <code>attrBold</code>, <code>attrFaint</code>, <code>attrItalic</code>, <code>attrUnderline</code>, <code>attrBlinking</code>, <code>attrReverse</code>, <code>attrHidden</code> or <code>attrStrikethrough</code>.</td> </tr>
+        <tr> <td><code>clearTextAttr TextAttribute</code></td> <td>Turn an attribute off. Bold and faint are turned off together.</td> </tr>
+        <tr> <td><code>resetStyle</code></td> <td>Turn off every color and attribute.</td> </tr>
+        <tr> <td><code>setWindowTitle str</code></td> <td>Set the terminal's window title.</td> </tr>
+        <tr> <td><code>promptHyperlink str str</code></td> <td>A URL and the text that links to it, in terminals that support links. Characters other than printable ASCII, and spaces, must be percent-encoded in the URL.</td> </tr>
+    </tbody>
+</table>
+
+<p>
+<code>PromptInfo</code> tells the prompt about the session:
+</p>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Key</th> <th>Type</th> <th>Description</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>stackDepth</code></td> <td><code>int</code></td> <td>How many values are on the stack.</td> </tr>
+        <tr> <td><code>stackTypes</code></td> <td><code>[str]</code></td> <td>The type of each value on the stack, bottom first, such as <code>[<span class="mshellSTRING">"int"</span> <span class="mshellSTRING">"[str]"</span>]</code>.</td> </tr>
+        <tr> <td><code>lastLineOk</code></td> <td><code>bool</code></td> <td>Whether the last line ran without an error. A line that does not parse or type check counts as an error.</td> </tr>
+        <tr> <td><code>lastExitCode</code></td> <td><code>Maybe[int]</code></td> <td>The exit code of the last command the last line ran, or <code>none</code> if it ran none.</td> </tr>
+        <tr> <td><code>lastDurationMs</code></td> <td><code>int</code></td> <td>How long the last line took, in milliseconds.</td> </tr>
+    </tbody>
+</table>
+
+<p>
+The prompt runs on its own stack, so it cannot change the values on yours.
+</p>
+
+<p>
+If the prompt fails, takes longer than 3 seconds, or is interrupted with Ctrl-C, the shell stops it and shows the built-in prompt.
+A command the prompt is running is stopped too.
+The error is printed once, not again while the prompt keeps failing the same way.
+</p>
+
+<p>
+<code>setCursorShape</code> sets the cursor's shape while the shell reads a command:
+<code>blinkingBlock</code>, <code>steadyBlock</code>, <code>blinkingUnderline</code>, <code>steadyUnderline</code>, <code>blinkingBar</code> or <code>steadyBar</code>.
+The terminal's own cursor is put back before each command runs, and when the shell exits.
+</p>
+
+<p>
+These types and their members are built in, so their names cannot be used for your own types, members or definitions.
+</p>
+
 <h1 id="getting-started-github-actions">GitHub Actions <a class="section-link" href="#getting-started-github-actions" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
 
 <p>

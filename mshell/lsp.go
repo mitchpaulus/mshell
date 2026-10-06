@@ -1932,7 +1932,7 @@ func collectPatternBindings(dst *[]renameTok, pattern []MShellParseItem) {
 	for _, item := range pattern {
 		switch v := item.(type) {
 		case *Token:
-			if v.Type == LITERAL && !patternWords[v.Lexeme] && !strings.HasPrefix(v.Lexeme, "...") {
+			if v.Type == LITERAL && !isPatternWord(v.Lexeme) && !strings.HasPrefix(v.Lexeme, "...") {
 				*dst = append(*dst, renameTok{Token: *v, binding: true})
 			}
 		case *MShellParseList:

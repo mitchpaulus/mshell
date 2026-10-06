@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The interactive prompt is set in `init.msh` with `setPrompt`, from a quotation that returns a list of `PromptItem` values:
+  text, line breaks, colors (16, 256 or RGB), text attributes, the window title and hyperlinks.
+  It is given a `PromptInfo` with the stack's depth and types, and whether the last line succeeded, its exit code and how long it took.
+  A prompt that fails, takes longer than 3 seconds, or is interrupted with Ctrl-C is stopped, and the built-in prompt is shown.
+- `setCursorShape` sets the cursor's shape while the interactive shell reads a command.
 - Enums: `enum Shape = circle float | rect float float | dot end` declares a type whose values are one of its members.
   A member's name makes a value from its payload (`2.0 circle`), and a `match` arm takes it apart (`circle r : ...`).
   The enum's name is a match pattern for any of its members (`Shape s : ...`).

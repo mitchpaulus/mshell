@@ -1,0 +1,16 @@
+setWindowTitle(msh)
+setFgColorBase16(baseBlue baseBright)
+promptText(~/repos)
+resetStyle
+promptText( (2) [1])
+setTextAttr(attrBold)
+promptHyperlink(https://example.com link)
+clearTextAttr(attrBold)
+promptNewline
+setBgColorRgb(30 40 50)
+setFgColor256(200)
+promptText(:: )
+setFgDefault
+setBgDefault
+red
+other baseCyan

@@ -520,6 +520,20 @@ type EvalState struct {
 
 	// FailureKind is the kind of the last runtime failure, or NoFailure.
 	FailureKind FailureKind
+
+	// PromptQuote is the quote setPrompt registered, run before each
+	// interactive prompt (Prompt.go), and CursorShape the CursorShape
+	// member setCursorShape chose, or "".
+	PromptQuote *MShellQuotation
+	CursorShape string
+	// lastExitCode is the exit code of the last process to finish, when
+	// ranProcess is set.
+	lastExitCode int
+	ranProcess   bool
+	// cancel, when set, stops the evaluation from another goroutine, and
+	// failOut takes the messages Fail would print to stderr.
+	cancel  *evalCancel
+	failOut io.Writer
 }
 
 // FailureKind says whether a checked program may stop with a runtime
@@ -606,12 +620,17 @@ type EnumMemberInfo struct {
 	Ordinal  int
 }
 
-// patternWords are the words a match pattern gives a meaning of their own;
-// an enum member with one of these names could not be matched.
-var patternWords = map[string]bool{
-	"_": true, "just": true, "none": true, "null": true, "list": true, "dict": true,
-	"path": true, "datetime": true, "quotation": true, "maybe": true, "binary": true,
-	"Maybe": true, "Json": true, "HtmlNode": true, "is": true,
+// isPatternWord reports whether a match pattern gives word a meaning of its
+// own; an enum member with one of these names could not be matched. It is a
+// switch, not a map, so matchPattern can skip these words without hashing.
+func isPatternWord(word string) bool {
+	switch word {
+	case "_", "just", "none", "null", "list", "dict",
+		"path", "datetime", "quotation", "maybe", "binary",
+		"Maybe", "Json", "HtmlNode", "is":
+		return true
+	}
+	return false
 }
 
 // RegisterDeclarations records the `type` and `enum` declarations among
@@ -622,6 +641,7 @@ var patternWords = map[string]bool{
 // names an unknown type, refers to itself with nothing in between, or has a
 // union of two members of one kind; then nothing from items is recorded.
 func (state *EvalState) RegisterDeclarations(items []MShellParseItem, defs []MShellDefinition) error {
+	state.ensureBuiltinEnums()
 	names := make(map[string]Token)
 	for i := range defs {
 		if _, ok := names[defs[i].Name]; !ok {
@@ -645,7 +665,7 @@ func (state *EvalState) RegisterDeclarations(items []MShellParseItem, defs []MSh
 		if _, ok := BuiltInList[name]; ok {
 			return fmt.Errorf("%s: '%s' is the name of a builtin.\n", tokenPosStr(tok), name)
 		}
-		if patternWords[name] {
+		if isPatternWord(name) {
 			return fmt.Errorf("%s: '%s' has a meaning of its own in match patterns.\n", tokenPosStr(tok), name)
 		}
 		names[name] = tok
@@ -682,10 +702,6 @@ func (state *EvalState) RegisterDeclarations(items []MShellParseItem, defs []MSh
 	for _, item := range items {
 		switch d := item.(type) {
 		case *MShellEnumDecl:
-			if state.EnumMembers == nil {
-				state.EnumMembers = make(map[string]EnumMemberInfo)
-				state.EnumNames = make(map[string]bool)
-			}
 			state.EnumNames[d.Name] = true
 			for i, m := range d.Members {
 				state.EnumMembers[m] = EnumMemberInfo{EnumName: d.Name, Arity: len(d.MemberPayloads[i]), Ordinal: i}
@@ -707,6 +723,7 @@ func (state *EvalState) RegisterDeclarations(items []MShellParseItem, defs []MSh
 // "Names"); without this a later definition would be silently ignored, since
 // the first one with a name is the one that runs.
 func (state *EvalState) CheckDefinitionNames(existing, added []MShellDefinition) error {
+	state.ensureBuiltinEnums()
 	seen := make(map[string]Token, len(existing)+len(added))
 	for i := range existing {
 		if _, ok := seen[existing[i].Name]; !ok {
@@ -1093,20 +1110,24 @@ func (state *EvalState) failErrPtr(err error, message string) *EvalResult {
 // Fail prints message with the call stack and returns a failed result.
 func (state *EvalState) Fail(kind FailureKind, message string) EvalResult {
 	state.FailureKind = kind
+	var out io.Writer = os.Stderr
+	if state.failOut != nil {
+		out = state.failOut
+	}
 	if reportFailureKind {
 		sep := ""
 		if !strings.HasSuffix(message, "\n") {
 			sep = "\n"
 		}
-		defer fmt.Fprintf(os.Stderr, "%smsh error kind: %s\n", sep, kind)
+		defer fmt.Fprintf(out, "%smsh error kind: %s\n", sep, kind)
 	}
 	// Messages quote user input and file names, which may hold bytes a
 	// terminal would execute. Print them visibly instead.
 	message = terminalSafeText(message, true)
 	// Log message to stderr
 	if state.CallStack == nil {
-		fmt.Fprintf(os.Stderr, "No call stack available.\n")
-		fmt.Fprint(os.Stderr, message)
+		fmt.Fprintf(out, "No call stack available.\n")
+		fmt.Fprint(out, message)
 		return EvalResult{false, false, -1, 1, false}
 	}
 
@@ -1116,18 +1137,18 @@ func (state *EvalState) Fail(kind FailureKind, message string) EvalResult {
 
 		name := terminalSafeText(callStackItem.Name, false)
 		if parseItem == nil {
-			fmt.Fprintf(os.Stderr, "%s\n", name)
+			fmt.Fprintf(out, "%s\n", name)
 		} else {
 			startToken := parseItem.GetStartToken()
 			if startToken.TokenFile != nil {
-				fmt.Fprintf(os.Stderr, "%s:%d:%d %s\n", terminalSafeText(startToken.TokenFile.Path, false), startToken.Line, startToken.Column, name)
+				fmt.Fprintf(out, "%s:%d:%d %s\n", terminalSafeText(startToken.TokenFile.Path, false), startToken.Line, startToken.Column, name)
 			} else {
-				fmt.Fprintf(os.Stderr, "%d:%d %s\n", startToken.Line, startToken.Column, name)
+				fmt.Fprintf(out, "%d:%d %s\n", startToken.Line, startToken.Column, name)
 			}
 		}
 	}
 
-	fmt.Fprint(os.Stderr, message)
+	fmt.Fprint(out, message)
 	return EvalResult{false, false, -1, 1, false}
 }
 
@@ -1203,6 +1224,7 @@ func (state *EvalState) EvaluateQuote(quotation *MShellQuotation, stack *MShellS
 // pushEvaluateFrame pushes the bottom frame of an Evaluate call. The caller
 // sets its Context.
 func (state *EvalState) pushEvaluateFrame(objects []MShellParseItem, stack *MShellStack, definitions []MShellDefinition, callStackItem CallStackItem) *EvaluationFrame {
+	state.ensureBuiltinEnums()
 	if callStackItem.MShellParseItem != nil {
 		state.CallStack.Push(callStackItem)
 	}
@@ -1267,6 +1289,10 @@ func (state *EvalState) run(base int) EvalResult {
 				return *result
 			}
 			continue
+		}
+
+		if state.cancel != nil && state.cancel.requested.Load() {
+			return cancelledResult()
 		}
 
 		token := frame.Objects[frame.Index]
@@ -1605,9 +1631,6 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		if def, ok := state.lookupDefinition(frame.Definitions, funcToken.Lexeme); ok {
 			return state.callDefinition(def, t, frame)
 		}
-		if info, ok := state.EnumMembers[funcToken.Lexeme]; ok {
-			return state.constructEnum(&funcToken, info, stack)
-		}
 		callStackItem := CallStackItem{MShellParseItem: nil, Name: "literal", CallStackType: frame.CallStackItem.CallStackType}
 		return nilIfNothingToDo(state.evaluateBuiltinToken(funcToken, stack, frame.Context, frame.Definitions, callStackItem))
 
@@ -1816,7 +1839,9 @@ func (state *EvalState) emptyMatchSubjectFailure(matchBlock *MShellParseMatchBlo
 // matchPattern checks if a subject matches a pattern (list of parse items).
 // Returns (matched bool, bindings map, result EvalResult).
 func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
-	if state.EnumMembers != nil {
+	// Only a word that is not a pattern word can name an enum or a member.
+	// Checking first keeps other patterns from paying for the call.
+	if first, ok := pattern[0].(*Token); ok && first.Type == LITERAL && !isPatternWord(first.Lexeme) {
 		if handled, matched, bindings, result := state.matchEnumPattern(pattern, subject); handled {
 			return matched, bindings, result
 		}
@@ -2187,9 +2212,6 @@ func (state *EvalState) processTokenToken(item MShellParseItem, t *Token, frame 
 		}
 		if def, ok := state.lookupDefinition(frame.Definitions, t.Lexeme); ok {
 			return state.callDefinition(def, item, frame)
-		}
-		if info, ok := state.EnumMembers[t.Lexeme]; ok {
-			return state.constructEnum(t, info, frame.Stack)
 		}
 		return nilIfNothingToDo(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem))
 
@@ -4391,7 +4413,9 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 				context.PipelineGroup.waitAllStagesLaunched()
 			}
 
+			stopWatch := state.killOnCancel(cmd.Process)
 			waitErr := cmd.Wait()
+			stopWatch()
 
 			// Reclaim the terminal before evaluation can resume shell input.  A
 			// reclaim failure is shell bookkeeping and must not override the
@@ -4414,6 +4438,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			} else {
 				exitCode = cmd.ProcessState.ExitCode()
 			}
+			state.cancelOnInterrupt(exitCode)
 		}
 	}
 
@@ -11456,6 +11481,26 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: The second parameter in 'skip' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
+				case "setPrompt":
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'setPrompt' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					quote, ok := obj.(*MShellQuotation)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: 'setPrompt' takes a quotation, found a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+					state.PromptQuote = quote
+				case "setCursorShape":
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'setCursorShape' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					shape, ok := obj.(*MShellEnum)
+					if !ok || shape.EnumName != "CursorShape" {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: 'setCursorShape' takes a CursorShape, found a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+					state.CursorShape = shape.Member
 				case "hostname":
 					host, err := os.Hostname()
 					if err != nil {
@@ -11860,7 +11905,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						// Ignore
 					} else {
 						// Sleep for the specified number of seconds
-						time.Sleep(time.Duration(secs * float64(time.Second)))
+						state.sleepUnlessCancelled(time.Duration(secs * float64(time.Second)))
 					}
 				case "parseLinkHeader":
 					// Parse a string in the form of https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Link#specifications
@@ -12054,6 +12099,16 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 
 				default: // last new function
+					// An enum member. It is looked up only after every
+					// builtin has missed, so builtins never pay for the
+					// lookup; no member can have a builtin's name
+					// (TestBuiltinSwitchCasesAreListed).
+					if info, ok := state.EnumMembers[t.Lexeme]; ok {
+						if r := state.constructEnum(&t, info, stack); r != nil {
+							return *r
+						}
+						return SimpleSuccess()
+					}
 					if strings.HasPrefix(t.Lexeme, "~/") {
 						return state.evalTildeToken(&t, stack)
 					}
@@ -12258,6 +12313,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				default:
 					return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot execute a non-list object. Found %s %s\n", t.Line, t.Column, top.TypeName(), top.DebugString()))
 				}
+
+				state.lastExitCode, state.ranProcess = exitCode, true
 
 				if (state.StopOnError || (t.Type == BANG)) && exitCode != 0 {
 					// Exit completely, with that exit code, don't need to print a different message. Usually the command itself will have printed an error.

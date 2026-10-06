@@ -1,0 +1,2 @@
+# A built-in enum member cannot be declared again.
+enum Mine = resetStyle | other end
