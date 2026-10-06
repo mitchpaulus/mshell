@@ -707,7 +707,8 @@ func (a *TypeArena) NameType(t TypeId, name NameId) {
 		return
 	}
 	if a.displayNames == nil {
-		a.displayNames = map[TypeId]NameId{}
+		// Sized for the built-in names, so registering them grows nothing.
+		a.displayNames = make(map[TypeId]NameId, 32)
 	}
 	a.displayNames[t] = name
 }

@@ -304,20 +304,39 @@ func (c *coreChecker) checkPending(pq uint32, want TypeId, child, current bool, 
 // input. It returns TidNothing when t has no quote member, or a member
 // that is not known yet.
 func (c *coreChecker) literalQuote(t TypeId) TypeId {
-	var ms []TypeId
-	if !c.members(t, &ms) {
-		return TidNothing
-	}
-	q := TidNothing
-	for _, m := range ms {
-		switch c.arena.nodes[m].Kind {
-		case TKQuote:
-			q = m
-		case TKVar, TKParam:
-			return TidNothing
-		}
-	}
+	q, _ := c.quoteMember(t)
 	return q
+}
+
+// quoteMember finds the quote member of t, through aliases and unions,
+// with no allocation: literalQuote runs for every literal given to a word.
+// ok is false when a member is not known yet, so t may hold a quote of
+// another type.
+func (c *coreChecker) quoteMember(t TypeId) (q TypeId, ok bool) {
+	t = c.unfold(t)
+	if c.unknownContents(t) {
+		return TidNothing, false
+	}
+	n := c.arena.nodes[t]
+	switch n.Kind {
+	case TKQuote:
+		return t, true
+	case TKVar, TKParam:
+		return TidNothing, false
+	case TKUnion:
+		q = TidNothing
+		for _, m := range c.arena.unionMembers[n.Extra] {
+			mq, ok := c.quoteMember(m)
+			if !ok {
+				return TidNothing, false
+			}
+			if mq != TidNothing {
+				q = mq
+			}
+		}
+		return q, true
+	}
+	return TidNothing, true
 }
 
 // bodyLoopCtx is the break or continue context of a literal quote a word
