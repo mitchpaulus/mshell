@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Declarations in the core checker: `type` aliases and enums
 // (ai/type-core-calculus.typ, "Aliases and recursive types", "Enums",
@@ -13,9 +16,10 @@ import "strings"
 //     dict, shape, quote or enum instance. Without that the assumption rule
 //     that compares recursive types is unsound, not only slow (H13,
 //     `unguarded_*` in formal-ver/Recursive.v). Then the unions written in
-//     the declarations are checked for two members of one kind, each enum
-//     parameter's variance and the enums' other properties are computed,
-//     and each member gets its constructor.
+//     the declarations are checked for two members of one kind, each alias
+//     that does not refer to itself is replaced by its body (eraseAliases),
+//     each enum parameter's variance and the enums' other properties are
+//     computed, and each member gets its constructor.
 
 // coreCtor is an enum member: its enum, its position in the declaration, and
 // its constructor's signature, payloads to the enum.
@@ -184,6 +188,7 @@ func (c *coreChecker) declareAll(items []MShellParseItem, defNames map[string]To
 		}
 	}
 	c.res.unions = c.res.unions[:0]
+	c.eraseAliases(aliases, enumIdxs)
 	if len(enumIdxs) > 0 {
 		c.rel.AnalyzeEnums(enumIdxs)
 	}
@@ -318,6 +323,205 @@ func (c *coreChecker) checkGuarded(aliases []coreAliasDecl) bool {
 		}
 	}
 	return ok
+}
+
+// eraseAliases makes each declared alias that does not refer to itself its
+// body: its name resolves to the body, and every reference to it, in the
+// other aliases' bodies and the enums' payloads, is replaced by the body.
+// Only recursive aliases are left as alias types, as in the model, where
+// such an alias is the recursive type it denotes; so nothing in the checker
+// sees an alias it would have to look through to find a record, a list or a
+// quote that is not recursive. The body keeps the name for messages.
+func (c *coreChecker) eraseAliases(aliases []coreAliasDecl, enumIdxs []uint32) {
+	if len(aliases) == 0 {
+		return
+	}
+	ar := c.arena
+	plain := make(map[uint32]bool, len(aliases))
+	seen := make([]bool, len(ar.aliases))
+	for _, a := range aliases {
+		if ar.aliases[a.idx].Body != TidNothing && !c.aliasRecursive(a.idx, seen) {
+			plain[a.idx] = true
+		}
+	}
+	if len(plain) == 0 {
+		return
+	}
+	// erase gives t with each plain alias replaced; a type with none in it
+	// is returned as it is, so most types make nothing new.
+	done := map[TypeId]TypeId{}
+	var erase func(t TypeId) TypeId
+	eraseSpan := func(span []TypeId) ([]TypeId, bool) {
+		var out []TypeId
+		for i, x := range span {
+			if e := erase(x); e != x && out == nil {
+				out = slices.Clone(span)
+				out[i] = e
+			} else if out != nil {
+				out[i] = e
+			}
+		}
+		return out, out != nil
+	}
+	erase = func(t TypeId) TypeId {
+		if t == TidNothing {
+			return t
+		}
+		if e, ok := done[t]; ok {
+			return e
+		}
+		e := t
+		n := ar.nodes[t]
+		switch n.Kind {
+		case TKAlias:
+			if plain[n.A] {
+				e = erase(ar.aliases[n.A].Body)
+			}
+		case TKList:
+			if x := erase(TypeId(n.A)); x != TypeId(n.A) {
+				e = ar.MakeList(x)
+			}
+		case TKCommand:
+			if x := erase(TypeId(n.A)); x != TypeId(n.A) {
+				e = ar.MakeCommand(x, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
+			}
+		case TKRecord:
+			rec := ar.records[n.Extra]
+			var fields []RecordField
+			for i, f := range rec.Fields {
+				if x := erase(f.Type); x != f.Type && fields == nil {
+					fields = slices.Clone(rec.Fields)
+					fields[i].Type = x
+				} else if fields != nil {
+					fields[i].Type = x
+				}
+			}
+			rest := rec.Rest
+			rest.Type = erase(rest.Type)
+			if fields != nil || rest.Type != rec.Rest.Type {
+				if fields == nil {
+					fields = rec.Fields
+				}
+				e = ar.MakeRecord(fields, rest)
+			}
+		case TKUnion:
+			if members, changed := eraseSpan(ar.unionMembers[n.Extra]); changed {
+				e = ar.MakeUnion(members)
+			}
+		case TKQuote:
+			sig := ar.quoteSigs[n.Extra]
+			ins, inChanged := eraseSpan(sig.Inputs)
+			outs, outChanged := eraseSpan(sig.Outputs)
+			if inChanged || outChanged {
+				if !inChanged {
+					ins = sig.Inputs
+				}
+				if !outChanged {
+					outs = sig.Outputs
+				}
+				e = ar.MakeQuote(QuoteSig{Inputs: ins, Outputs: outs, Diverges: sig.Diverges})
+			}
+		case TKEnum:
+			if args, changed := eraseSpan(ar.enumArgs[n.Extra]); changed {
+				e = ar.MakeEnum(n.A, args)
+			}
+		case TKGrid, TKGridView, TKGridRow:
+			if n.A != 0 {
+				if x := erase(TypeId(n.A)); x != TypeId(n.A) {
+					e = ar.MakeGridOf(n.Kind, x)
+				}
+			}
+		}
+		done[t] = e
+		return e
+	}
+	for _, a := range aliases {
+		decl := &ar.aliases[a.idx]
+		body := erase(decl.Body)
+		if plain[a.idx] {
+			c.res.aliases[decl.Name] = body
+			ar.NameType(body, decl.Name)
+		} else if body != decl.Body {
+			ar.SetAliasBody(a.idx, body)
+		}
+	}
+	for _, idx := range enumIdxs {
+		ctors := ar.EnumDecl(idx).Ctors
+		for j := range ctors {
+			for k, t := range ctors[j].Payload {
+				ctors[j].Payload[k] = erase(t)
+			}
+		}
+	}
+}
+
+// aliasRecursive reports whether the alias at idx refers to itself,
+// directly or through other aliases. seen has one entry per alias in the
+// arena, all false; it is cleared again before the result is returned, so
+// one slice serves every alias of a declaration list.
+func (c *coreChecker) aliasRecursive(idx uint32, seen []bool) bool {
+	r := c.reachesAlias(c.arena.aliases[idx].Body, idx, seen)
+	clear(seen)
+	return r
+}
+
+// reachesAlias reports whether t refers to the alias at idx, looking
+// through the bodies of the aliases it refers to; seen marks the ones
+// already looked through.
+func (c *coreChecker) reachesAlias(t TypeId, idx uint32, seen []bool) bool {
+	if t == TidNothing {
+		return false
+	}
+	ar := c.arena
+	n := ar.nodes[t]
+	switch n.Kind {
+	case TKAlias:
+		if n.A == idx {
+			return true
+		}
+		if seen[n.A] {
+			return false
+		}
+		seen[n.A] = true
+		return c.reachesAlias(ar.aliases[n.A].Body, idx, seen)
+	case TKList, TKCommand:
+		return c.reachesAlias(TypeId(n.A), idx, seen)
+	case TKRecord:
+		rec := ar.records[n.Extra]
+		for _, f := range rec.Fields {
+			if c.reachesAlias(f.Type, idx, seen) {
+				return true
+			}
+		}
+		return c.reachesAlias(rec.Rest.Type, idx, seen)
+	case TKUnion:
+		for _, m := range ar.unionMembers[n.Extra] {
+			if c.reachesAlias(m, idx, seen) {
+				return true
+			}
+		}
+	case TKQuote:
+		sig := ar.quoteSigs[n.Extra]
+		for _, x := range sig.Inputs {
+			if c.reachesAlias(x, idx, seen) {
+				return true
+			}
+		}
+		for _, x := range sig.Outputs {
+			if c.reachesAlias(x, idx, seen) {
+				return true
+			}
+		}
+	case TKEnum:
+		for _, x := range ar.enumArgs[n.Extra] {
+			if c.reachesAlias(x, idx, seen) {
+				return true
+			}
+		}
+	case TKGrid, TKGridView, TKGridRow:
+		return c.reachesAlias(TypeId(n.A), idx, seen)
+	}
+	return false
 }
 
 // unguardedRefs appends the aliases t refers to without passing a type

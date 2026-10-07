@@ -1479,9 +1479,8 @@ func (c *coreChecker) check(slot coreSlot, want TypeId) bool {
 // else is unified. Unions are never entered. The caller checks the solved
 // types in full when the unit is solved.
 func (c *coreChecker) matchSub(got, want TypeId, fresh bool) bool {
-	// An earlier label may have solved a variable this one mentions. An
-	// alias that is not recursive is its body.
-	got, want = c.plainAlias(c.subst.Apply(c.arena, got)), c.plainAlias(c.subst.Apply(c.arena, want))
+	// An earlier label may have solved a variable this one mentions.
+	got, want = c.subst.Apply(c.arena, got), c.subst.Apply(c.arena, want)
 	if got == want {
 		return true
 	}
@@ -1782,12 +1781,8 @@ func (c *coreChecker) distribute(sigs []coreSig, tok Token) bool {
 		if c.waiting(s) != nil {
 			continue
 		}
-		// An alias of a union is split as the union is (`type N = int |
-		// float`); a recursive one, such as Json, is not.
+		// A recursive alias, such as Json, is not split.
 		t := c.subst.Apply(c.arena, s.t)
-		if c.arena.nodes[t].Kind == TKAlias {
-			t = c.plainAlias(t)
-		}
 		if c.arena.nodes[t].Kind == TKUnion {
 			idx, u = len(c.stack)-len(top)+i, t
 			break
@@ -1933,12 +1928,12 @@ func (c *coreChecker) argsFit(sig *coreSig) bool {
 			return
 		}
 		if c.waiting(c.stack[base+i]) != nil {
-			// A quote literal fits a quote parameter, or a bare generic;
-			// its body is checked once a candidate is chosen. A parameter
-			// that only mentions a generic ([t], Maybe[a]) is not a quote.
+			// A quote literal fits a quote parameter, a union with one
+			// quote member, or a bare generic; its body is checked once a
+			// candidate is chosen. A parameter that only mentions a
+			// generic ([t], Maybe[a]) is not a quote.
 			w := c.subst.Apply(c.arena, want)
-			k := c.arena.nodes[w].Kind
-			ok = k == TKQuote || k == TKVar
+			ok = c.arena.nodes[w].Kind == TKVar || c.literalQuote(w) != TidNothing
 			return
 		}
 		ok = c.check(c.stack[base+i], want)
@@ -2130,10 +2125,11 @@ func (c *coreChecker) ascribe(a *MShellAsCast) {
 	if target == TidNothing || !c.need(1, a.AsToken) {
 		return
 	}
-	// A quote literal given a quote type is checked against it, as a word
-	// that takes a quote checks its argument: its inputs are known.
+	// A quote literal given a quote type, or a union with one quote member,
+	// is checked against it, as a word that takes a quote checks its
+	// argument: its inputs are known.
 	if p := c.waiting(c.stack[len(c.stack)-1]); p != nil {
-		if q := c.unfold(target); c.arena.nodes[q].Kind == TKQuote {
+		if q := c.literalQuote(target); q != TidNothing {
 			top := len(c.stack) - 1
 			c.checkPending(c.stack[top].pq, q, false, false, top, a.AsToken)
 			c.stack[top].pq = 0

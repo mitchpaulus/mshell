@@ -217,7 +217,8 @@ func (c *coreChecker) inferQuote(items []MShellParseItem, tok Token) TypeId {
 func (c *coreChecker) checkPending(pq uint32, want TypeId, child, current bool, outerBase int, tok Token) bool {
 	p := &c.pending[pq-1]
 	want = c.subst.Apply(c.arena, want)
-	if c.arena.nodes[want].Kind != TKQuote {
+	q := c.literalQuote(want)
+	if q == TidNothing {
 		placeholder, qtok := p.t, p.tok
 		c.inferPending(pq)
 		if !c.check(coreSlot{t: placeholder}, want) {
@@ -228,6 +229,7 @@ func (c *coreChecker) checkPending(pq uint32, want TypeId, child, current bool, 
 		}
 		return true
 	}
+	want = q
 	p.done = true
 	sig := c.arena.quoteSigs[c.arena.nodes[want].Extra]
 	items, placeholder := p.items, p.t
@@ -295,6 +297,48 @@ func (c *coreChecker) checkPending(pq uint32, want TypeId, child, current bool, 
 	return ok
 }
 
+// literalQuote returns the quote type a waiting literal is checked against
+// where t is wanted: t itself, through aliases, or the quote member of a
+// union (a union has at most one), so `(:a?)` given to an
+// `int | ({a: int} -- int)` parameter checks its body with a {a: int}
+// input. It returns TidNothing when t has no quote member, or a member
+// that is not known yet.
+func (c *coreChecker) literalQuote(t TypeId) TypeId {
+	q, _ := c.quoteMember(t)
+	return q
+}
+
+// quoteMember finds the quote member of t, through aliases and unions,
+// with no allocation: literalQuote runs for every literal given to a word.
+// ok is false when a member is not known yet, so t may hold a quote of
+// another type.
+func (c *coreChecker) quoteMember(t TypeId) (q TypeId, ok bool) {
+	t = c.unfold(t)
+	if c.unknownContents(t) {
+		return TidNothing, false
+	}
+	n := c.arena.nodes[t]
+	switch n.Kind {
+	case TKQuote:
+		return t, true
+	case TKVar, TKParam:
+		return TidNothing, false
+	case TKUnion:
+		q = TidNothing
+		for _, m := range c.arena.unionMembers[n.Extra] {
+			mq, ok := c.quoteMember(m)
+			if !ok {
+				return TidNothing, false
+			}
+			if mq != TidNothing {
+				q = mq
+			}
+		}
+		return q, true
+	}
+	return TidNothing, true
+}
+
 // bodyLoopCtx is the break or continue context of a literal quote a word
 // runs (the Each and Bind rules): the enclosing one, with the stack under
 // the word's arguments (its first outerBase slots) added to below. child
@@ -357,7 +401,7 @@ func (c *coreChecker) interpret(tok Token) {
 // literal, as `x` does: its type must be a known quote type.
 func (c *coreChecker) runQuoteValue(s coreSlot, tok Token) {
 	t := c.subst.Apply(c.arena, s.t)
-	n := c.arena.nodes[t]
+	n := c.arena.nodes[c.unfold(t)]
 	if n.Kind != TKQuote {
 		if c.hasVars(t) {
 			c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
@@ -521,7 +565,7 @@ func (c *coreChecker) isQuoteSlot(s coreSlot) bool {
 	if c.waiting(s) != nil {
 		return true
 	}
-	return c.arena.nodes[c.subst.Apply(c.arena, s.t)].Kind == TKQuote
+	return c.arena.nodes[c.unfold(c.subst.Apply(c.arena, s.t))].Kind == TKQuote
 }
 
 // saveArm saves the stack an arm left, and whether it diverged, and resets
@@ -548,7 +592,7 @@ func (c *coreChecker) loop(tok Token) {
 	if p == nil {
 		// A stored quote cannot break: the loop never ends.
 		t := c.subst.Apply(c.arena, top.t)
-		n := c.arena.nodes[t]
+		n := c.arena.nodes[c.unfold(t)]
 		if n.Kind != TKQuote || len(c.arena.quoteSigs[n.Extra].Inputs) != 0 ||
 			(!c.arena.quoteSigs[n.Extra].Diverges && len(c.arena.quoteSigs[n.Extra].Outputs) != 0) {
 			c.mismatch(tok, 0, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{}, Outputs: []TypeId{}}), t)

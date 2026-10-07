@@ -1,0 +1,11 @@
+# A quote literal given where a union with a quote member is wanted is
+# checked against that member, so the body can read fields of the dict
+# it takes.
+def run (int | ({a: int} -- int) -- ) match int n: @n wl, quotation f: {a: 5} @f x wl end end
+(:a? 1 +) run
+3 run
+type F = ({a: int} -- int)
+def runF (F -- ) {a: 7} swap x wl end
+(:a? 2 *) runF
+type G = int | ({a: int} -- int)
+(:a? 3 *) as G run

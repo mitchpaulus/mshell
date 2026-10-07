@@ -2153,6 +2153,12 @@ programs that checked and then stopped with a type mismatch for each:
   an input variable, and a variable has no fields to read. The *Quote* rule already allows the body to
   be checked from `{a: int}`, so this changes only how the checker finds the derivation; the
   mechanized rules are unchanged. The body has no break context, as for any stored quote.
+- *A union's quote member, and a quote alias, check a waiting literal* (2026-10-06). A literal given to an
+  `int | ({a: int} -- int)` parameter, or to `as` with that type, was typed on its own, so `(:a?)` was
+  rejected as above; a parameter typed by an alias of a quote type was too. A union has at most one quote
+  member, and a literal can only be that member, so the body is checked against it; the *Quote* and
+  subsumption rules already give this derivation. `x`, `iff` and a stored `loop` body also look through
+  an alias to the quote type.
 
 The result: the answer does not depend on the order constraints are visited, and
 `inputUnifyOrder`, first-arm union commitment and rollback-driven overload trials are unnecessary
@@ -2584,8 +2590,11 @@ decision procedures for $<=$ and $subset.sq.eq$ on them.
 *What is not modeled*, and what each would need:
 
 - *Aliases as names.* The model writes a recursive alias as the recursive type it denotes (`TMu`,
-  with nested ones for aliases that refer to each other); the checker keeps names. Generic aliases
-  are not modeled (@sec-alias).
+  with nested ones for aliases that refer to each other), and an alias that does not refer to itself
+  as its body. Since 2026-10-06 the checker does the same for the second kind: it replaces such an
+  alias by its body when the declarations are read, and keeps the name only for messages; it keeps
+  names for recursive aliases (see `ai/type-completeness.typ`). Generic aliases are not modeled
+  (@sec-alias).
 - *Exhaustiveness.* A constructor with no arm is a checked error in the model; checking coverage
   statically is not a soundness question.
 - *Grids, grid views, commands*. The model covers them through their core form: records of

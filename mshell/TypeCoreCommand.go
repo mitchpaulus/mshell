@@ -105,7 +105,7 @@ func (c *coreChecker) operand(i int) (t TypeId, quote, ok bool) {
 	if c.waiting(s) != nil {
 		return TidNothing, true, true
 	}
-	// An alias is its body (`type Cmd = [str]`).
+	// A recursive alias is looked through to its body.
 	t = c.unfold(c.subst.Apply(c.arena, s.t))
 	if c.arena.nodes[t].Kind == TKQuote {
 		return t, true, true
@@ -374,11 +374,11 @@ func (c *coreChecker) run(tok Token) bool {
 // names a redirect's target: a str or path, or binary for '<' (input).
 func (c *coreChecker) redirectTarget(t TypeId, input bool) bool {
 	var ms []TypeId
-	if !c.members(c.plainAlias(t), &ms) {
+	if !c.members(t, &ms) {
 		return false
 	}
 	for _, m := range ms {
-		switch c.plainAlias(m) {
+		switch m {
 		case TidStr, TidPath:
 		case TidBytes:
 			if !input {

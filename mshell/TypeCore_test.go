@@ -158,6 +158,29 @@ func TestCoreChecker(t *testing.T) {
 		{`(:a?) as ({a: str} -- int) drop`, false, "'as' wants a quote ({a: str} -- int), but this one leaves (str)"},
 		{`(:a? 1) as ({a: int} -- int) drop`, false, "but this one leaves 2 value(s)"},
 		{`[0] (drop (break) as (--) drop) each`, false, "'break' is allowed only in a loop body"},
+		// So does a union's quote member, and a quote alias, as a
+		// parameter or with `as`.
+		{`def f (int | ({a: int} -- int) -- ) drop end (:a?) f`, true, ""},
+		{`def f (int | ({a: int} -- int) -- ) drop end (:a? "x") f`, false, "'f' wants a quote ({a: int} -- int), but this one leaves 2 value(s)"},
+		{`(:a?) as int | ({a: int} -- int) drop`, true, ""},
+		{`type F = int | ({a: int} -- int) (:a?) as F drop`, true, ""},
+		{`type F = ({a: int} -- int) def f (F -- int) {a: 1} swap x end (:a?) f wl`, true, ""},
+		{`type F = ( -- int) def f (F -- int) x end (1) f wl`, true, ""},
+		{`type F = ( -- ) def f (bool F -- ) iff end true () f`, true, ""},
+		{`def f (int | [int] -- ) drop end (1) f`, false, "'f' takes int | [int] here, not the quote"},
+
+		// An alias that does not refer to itself is its body, wherever it
+		// is used; messages still print its name.
+		{`type N = null 1 as int | N one! null as int | N n! @one @n = str wl`, true, ""},
+		{`type P = {name: str, kids: [P]} type Q = P def mk (str [P] -- Q) ks! n! {name: @n, kids: @ks} end "a" [] mk drop`, true, ""},
+		{`type U = [str | int] [1] ([5] as U append drop) each`, true, ""},
+		{`type A = Maybe[int] type B = Maybe[float] 3 just as A a! 1.5 just as B b! true if @a else @b end drop`, true, ""},
+		{`type Cmds = [[str]] [["true"]] as Cmds cmds! @cmds | ;`, true, ""},
+		{`type B = A | float type A = int | str 1.5 as B drop "s" as B drop`, true, ""},
+		{`type R = {a: int, b: str} 5 as R drop`, false, "int is not below R"},
+		{`{url: 5} as HttpRequest drop`, false, "is not below HttpRequest"},
+		{`type F = int | ({a: int} -- int) [1] as F drop`, false, "is not below F"},
+		{`type L = [int] "a" as L drop`, false, "str is not below [int]"},
 
 		// An overloaded word on a union is a match per member.
 		{`true if 1 else 2.5 end toFloat 1.0 + str wl`, true, ""},

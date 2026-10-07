@@ -79,10 +79,13 @@ func TestCoreSession(t *testing.T) {
 			L(`def isRed (Color -- bool) match red : true, green : false end end`), L(`green isRed str wl`),
 			L(`def mkGreen ( -- Color) green end`), Bad(`def Color ( -- int) 1 end`, "already declared"),
 			L(`type Pt = {a: int, b: int}`), L(`{a: 1, b: 2} as Pt :a? wl`),
+			Bad(`5 as Pt`, "int is not below Pt"),
 		}},
 		{"a refused line's definitions and declarations are taken back", []line{
 			Bad(`def g (int -- int) 1 + end  "a" g`, ""), L(`def g (str -- str) end`), L(`"a" g wl`),
 			Bad(`type T = int  "a" as T`, ""), L(`type T = str`), L(`"a" as T wl`),
+			Bad(`type Z1 = {z: int}  5 as Z1`, "int is not below Z1"), L(`type Z2 = {z: int}`),
+			Bad(`5 as Z2`, "int is not below Z2"),
 			Bad(`enum E = e1 | e2 end  e1 1 +`, ""), L(`enum E = e1 | e3 end`), L(`e3 drop`),
 		}},
 		{"return at the top of a line ends the session, as it ends a script", []line{

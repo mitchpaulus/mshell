@@ -297,6 +297,11 @@ type TypeArena struct {
 	// variable id and by element id (MakeVar, MakeList).
 	varIds []TypeId
 	listOf []TypeId
+	// displayNames maps a type to the name of the first alias
+	// declared with it as its body, for messages: an alias that does not
+	// refer to itself is its body, so the type keeps no name of its own
+	// (see NameType).
+	displayNames map[TypeId]NameId
 }
 
 // Overlay returns an arena that starts with every type in a and grows on
@@ -352,6 +357,7 @@ func (a *TypeArena) resetOverlay() {
 	a.varIds = a.varIds[:0]
 	clear(a.listOf)
 	a.listOf = a.listOf[:0]
+	clear(a.displayNames)
 }
 
 // NewTypeArena constructs an arena pre-populated with the primitive ids
@@ -680,6 +686,41 @@ func (a *TypeArena) AliasBody(id TypeId) TypeId {
 		panic("TypeArena.AliasBody: not an alias")
 	}
 	return a.aliases[n.A].Body
+}
+
+// NameType records name as the name messages print for t, the body of a
+// `type` alias that does not refer to itself. Only a record with labels, a
+// union or a quote type gets one: a name on `int`, `[int]` or `{str: int}`
+// would print for every such type, where the program never wrote it. The
+// first name given to a type stays.
+func (a *TypeArena) NameType(t TypeId, name NameId) {
+	switch n := a.Node(t); n.Kind {
+	case TKRecord:
+		if len(a.records[n.Extra].Fields) == 0 {
+			return
+		}
+	case TKUnion, TKQuote:
+	default:
+		return
+	}
+	if _, ok := a.DisplayName(t); ok {
+		return
+	}
+	if a.displayNames == nil {
+		// Sized for the built-in names, so registering them grows nothing.
+		a.displayNames = make(map[TypeId]NameId, 32)
+	}
+	a.displayNames[t] = name
+}
+
+// DisplayName returns the alias name messages print for t, if it has one.
+func (a *TypeArena) DisplayName(t TypeId) (NameId, bool) {
+	for p := a; p != nil; p = p.parent {
+		if name, ok := p.displayNames[t]; ok {
+			return name, true
+		}
+	}
+	return 0, false
 }
 
 // MakeAbstract returns a new abstract type, equal only to itself.
