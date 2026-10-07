@@ -52,6 +52,8 @@ Environment variables are accessed with <code><span class="mshellVARRETRIEVE">$N
 They are always strings.
 Use <code><span class="mshellVARSTORE">$NAME!</span></code> to set them and <code><span class="mshellVARRETRIEVE">$NAME</span><span class="mshellQUESTION">?</span></code> to check for existence.
 Reading a missing environment variable with <code><span class="mshellVARRETRIEVE">$NAME</span></code> is an error.
+To read one that may be missing, or whose name is not known statically, use the <code>getEnv</code> built-in.
+It takes the name as a string, and gives a <code>Maybe</code>: <code>just</code> the value, or <code>none</code> when the variable is not set.
 Environment variables are always exported to subprocesses, so setting them affects subsequent command executions.
 Remove one with the <code>unsetenv</code> built-in, which takes the name as a string.
 Unsetting a variable that does not exist is not an error.
@@ -81,7 +83,9 @@ Only the latest 256 events per variable are retained, older events are discarded
     <span class="mshellVARRETRIEVE">$EDITOR</span> <span class="mshellLITERAL">wl</span>
 <span class="mshellELSE">else</span>
     <span class="mshellSTRING">"vim"</span> <span class="mshellLITERAL">wl</span>
-<span class="mshellEND">end</span></code>
+<span class="mshellEND">end</span>
+
+<span class="mshellSTRING">"EDITOR"</span> <span class="mshellLITERAL">getEnv</span> <span class="mshellSTRING">"vim"</span> <span class="mshellLITERAL">maybe</span> <span class="mshellLITERAL">wl</span></code>
 </pre>
 
 <p>

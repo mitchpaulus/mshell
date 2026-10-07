@@ -6526,6 +6526,23 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						}}
 					}
 					stack.Push(result)
+				case "getEnv":
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'getEnv' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					name, err := obj.CastString()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable name.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					value, found := os.LookupEnv(name)
+					if found {
+						stack.Push(&Maybe{obj: MShellString{Content: value}})
+					} else {
+						stack.Push(&Maybe{obj: nil})
+					}
 				case "dup":
 					top, err := stack.Peek()
 					if err != nil {

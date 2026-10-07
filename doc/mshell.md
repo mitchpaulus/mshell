@@ -339,6 +339,10 @@ Environment variables are always "exported" to subprocesses.
 
 The presence of an environment variable can be checked using the `?` suffix.
 
+Reading a missing environment variable with `$NAME` is an error.
+The `getEnv` built-in takes the name as a string and gives `Maybe[str]`:
+`just` the value, or `none` when the variable is not set.
+
 An environment variable can be removed with the `unsetenv` built-in,
 which takes the variable name as a string.
 Unsetting a variable that does not exist is not an error.
@@ -363,6 +367,9 @@ $HOME cd
 
 # Checking for variable existence
 $MY_ENV_VAR? if "MY_ENV_VAR exists" else "MY_ENV_VAR does not exist" end wl
+
+# Reading a variable that may be missing
+"EDITOR" getEnv "vim" maybe wl
 
 # Removing an environment variable
 "MSHELL_VAR" unsetenv
@@ -1250,6 +1257,7 @@ end wl # Output: 11
 - `env`: Write all environment variables to stderr in sorted order (--)
 - `envInspect`: Get the session-local change history for an environment variable, oldest to newest. Each event contains `dt`, `kind`, `source`, and `changed`. Only the latest 256 events per variable are retained, and values are never included. `(str -- [{dt: datetime, kind: str, source: str, changed: bool}])`
 - `completionDefs`: Push a dictionary of completion definitions. Keys are command names, values are lists of quotations. `( -- dict)`
+- `getEnv`: Get an environment variable by name, or `none` when it is not set. `(str -- Maybe[str])`
 - `setenv`: Set an environment variable by name: the name, then the value. Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
 - `unsetenv`: Remove an environment variable by name. Unsetting a variable that does not exist is not an error. `(str -- )`
 - `dup`: Duplicate (a -- a a)

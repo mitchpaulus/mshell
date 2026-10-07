@@ -312,6 +312,8 @@ func TestCoreChecker(t *testing.T) {
 		{`{path: "x.tgz", compress: true} as TarDest d! (["a"] @d tarPack) drop`, true, ""},
 		{`("a.zip" zipList (:name? wl) each) drop`, true, ""},
 		{`"HOME" envInspect (:kind? wl) each`, true, ""},
+		{`"HOME" getEnv "" maybe wl`, true, ""},
+		{`"HOME" getEnv wl`, false, ""},
 		{`"<a>; rel=next" parseLinkHeader (:url? wl) each`, true, ""},
 		// A label whose type mentions a variable solved by an earlier label.
 		{`{a: []} as {a?: [int]} drop`, true, ""},
