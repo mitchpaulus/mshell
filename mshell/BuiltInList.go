@@ -9,6 +9,7 @@ var BuiltInList = map[string]struct{}{
 	"defs": {},
 	"env": {},
 	"envInspect": {},
+	"getEnv": {},
 	"stack": {},
 	"abs": {},
 	"absPath": {},

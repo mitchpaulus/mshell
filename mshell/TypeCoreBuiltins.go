@@ -515,6 +515,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("setenv", "(str | path str | path -- )")
 	b.reg("unsetenv", "(str | path -- )")
 	b.reg("envInspect", "(str | path -- new [EnvEvent])")
+	b.reg("getEnv", "(str -- Maybe[str])")
 	// A quote per completion definition, built from its body; each def's
 	// signature is checked below the quote type (checkCompletionSig).
 	// soe: stop the script at the first failed command.

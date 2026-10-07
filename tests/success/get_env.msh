@@ -1,0 +1,15 @@
+# getEnv gives just the value when the variable is set, and none when it is not.
+"MSH_GETENV_TEST" unsetenv
+"MSH_GETENV_TEST" getEnv str wl
+"MSH_GETENV_TEST" getEnv "default" maybe wl
+
+"hello" $MSH_GETENV_TEST!
+"MSH_GETENV_TEST" getEnv str wl
+"MSH_GETENV_TEST" getEnv "default" maybe wl
+
+# An empty value is still set.
+"" $MSH_GETENV_TEST!
+"MSH_GETENV_TEST" getEnv str wl
+
+"MSH_GETENV_TEST" unsetenv
+"MSH_GETENV_TEST" getEnv isNone str wl
