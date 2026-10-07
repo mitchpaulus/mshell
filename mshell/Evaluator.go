@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	// "golang.org/x/term"
 	"crypto/md5"
@@ -8724,6 +8725,94 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						modTime := fileInfo.ModTime()
 						stack.Push(&Maybe{obj: &MShellDateTime{Time: modTime, OriginalString: modTime.Format(time.RFC3339)}})
 					}
+				case "evalSymLinks":
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'evalSymLinks' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					path, err := obj1.CastString()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot evaluate the symlinks of a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					resolved, err := filepath.EvalSymlinks(path)
+					if err != nil {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						stack.Push(&Maybe{obj: MShellPath{Path: resolved}})
+					}
+				case "linkCount":
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'linkCount' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					path, err := obj1.CastString()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot get the link count of a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					count, err := fileLinkCount(path)
+					if err != nil {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						stack.Push(&Maybe{obj: MShellInt{count}})
+					}
+				case "sameFile":
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.TypeMismatch(err.Error())
+					}
+
+					path2, err := obj1.CastString()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'sameFile' on a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+					path1, err := obj2.CastString()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'sameFile' on a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					// A path that does not exist is not the same file as anything.
+					// Any other error means we can't tell, so fail.
+					same := true
+					var infos [2]os.FileInfo
+					for i, p := range []string{path1, path2} {
+						infos[i], err = os.Stat(p)
+						if err != nil {
+							if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+								same = false
+								break
+							}
+							return state.CheckedFailure(fmt.Sprintf("%d:%d: Error in 'sameFile' reading %s: %s\n", t.Line, t.Column, p, err.Error()))
+						}
+					}
+					if same {
+						same = os.SameFile(infos[0], infos[1])
+					}
+					stack.Push(MShellBool{same})
+				case "hardLinks":
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'hardLinks' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					path, err := obj1.CastString()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot get the hard links of a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					names, err := fileHardLinks(path)
+					if err != nil {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: Error in 'hardLinks' for %s: %s\n", t.Line, t.Column, path, err.Error()))
+					}
+
+					list := NewList(len(names))
+					for i, name := range names {
+						list.Items[i] = MShellPath{Path: name}
+					}
+					stack.Push(list)
 				case "lsDir":
 					obj1, err := stack.Pop()
 					if err != nil {

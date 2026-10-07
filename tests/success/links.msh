@@ -1,0 +1,29 @@
+# evalSymLinks, linkCount and sameFile on a temp file with a hard link and symlinks.
+tempFile f!
+@f str "-hard" + toPath h!
+@f str "-sym" + toPath s!
+@f str "-broken" + toPath b!
+@f @h hardLink
+['ln' -s @f @s];
+['ln' -s "nowhere-msh-links-test" @b];
+
+"linkCount" wl
+@f linkCount ? str wl
+@s linkCount ? str wl
+"missing-msh-links-test" linkCount isNone str wl
+
+"sameFile" wl
+@f @h sameFile str wl
+@f @s sameFile str wl
+@f @f sameFile str wl
+@f "missing-msh-links-test" sameFile str wl
+@b @b sameFile str wl
+@f `links.msh` sameFile str wl
+
+"evalSymLinks" wl
+@s evalSymLinks ? str @f evalSymLinks ? str = str wl
+@h evalSymLinks ? str @h str = str wl
+@b evalSymLinks isNone str wl
+"missing-msh-links-test" evalSymLinks isNone str wl
+
+[@f @h @s @b] (rm) each

@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The match pattern `is T name` does the same check in a match arm, and binds the value.
 - `del` removes a key from a dictionary: `{a: 1, b: 2} "a" del`. Nothing happens when the key is absent.
 - `getEnv` gets an environment variable by name, giving `none` when it is not set: `"EDITOR" getEnv "vim" maybe`.
+- Functions for symlinks and hard links
+  - `evalSymLinks` follows every symlink in a path, giving `none` for a missing path or broken symlink.
+  - `linkCount` gives the number of hard links to a file.
+  - `sameFile` tests whether two paths are the same file.
+  - `hardLinks` lists every name of a file. Windows only.
 - `deepCopy` copies a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original.
 - The interactive shell type checks each line before it runs it, keeping types across lines.
   A line that does not check is not run and changes nothing.

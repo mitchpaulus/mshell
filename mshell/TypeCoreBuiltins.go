@@ -493,6 +493,10 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	}
 	b.reg("fileSize", "(str | path -- Maybe[int])")
 	b.reg("modTime", "(str | path -- Maybe[datetime])")
+	b.reg("evalSymLinks", "(str | path -- Maybe[path])")
+	b.reg("linkCount", "(str | path -- Maybe[int])")
+	b.reg("sameFile", "(str | path str | path -- bool)")
+	b.reg("hardLinks", "(str | path -- new [path])")
 	b.reg("glob", "(str | path -- new [path])")
 	b.reg("lsDir", "(str | path -- new [path])")
 	b.reg("files", "( -- new [path])")

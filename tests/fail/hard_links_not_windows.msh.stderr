@@ -1,0 +1,1 @@
+1:13: Error in 'hardLinks' for links.msh: hardLinks is only supported on Windows. On other systems, compare linkCount with a directory search using sameFile
