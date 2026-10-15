@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `and`, `or` and the new `xor` work bitwise on two ints, and on two binaries of the same length.
   - `toBinary` makes binary data from a list of byte values, and `byteList` gives the bytes as ints.
   - `hexDecode` decodes a hexadecimal string into binary data.
-  - `cryptoRandomBytes` gives secure random bytes, for keys and nonces.
+  - `cryptoRandom` gives secure random bytes, for keys and nonces.
   - `encrypt` and `decrypt` encrypt data with a key and a `Cipher`: `cipherAesGcm`, `cipherChaCha20Poly1305` or `cipherXChaCha20Poly1305`.
     `encrypt` gives the nonce, ciphertext and tag in a dictionary; `decrypt` gives `none` when the key is wrong or the data was changed.
 - `deepCopy` copies a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original.

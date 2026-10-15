@@ -1,1 +1,1 @@
-{nonce: 8 cryptoRandomBytes, ciphertext: "" utf8Bytes, tag: 16 cryptoRandomBytes} 32 cryptoRandomBytes cipherAesGcm decrypt
+{nonce: 8 cryptoRandom, ciphertext: "" utf8Bytes, tag: 16 cryptoRandom} 32 cryptoRandom cipherAesGcm decrypt

@@ -313,7 +313,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// Each int must be 0 to 255.
 	b.reg("toBinary", "([int] -- binary)")
 	b.reg("byteList", "(binary -- new [int])")
-	b.reg("cryptoRandomBytes", "(int -- binary)")
+	b.reg("cryptoRandom", "(int -- binary)")
 	// Data, key, cipher. encrypt makes a random nonce; decrypt gives none
 	// for a wrong key or changed data.
 	b.reg("encrypt", "(binary binary Cipher -- new Encrypted)")

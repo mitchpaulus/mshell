@@ -1456,7 +1456,7 @@ Joining onto a binary in a loop (`@acc @chunk + acc!`) does not copy the bytes s
 - `toBinary`: Make binary from byte values, each 0 to 255. `([int] -- binary)`
 - `byteList`: Each byte as an int from 0 to 255. `(binary -- [int])`
 - `hexDecode`: Decode a hexadecimal string (two digits per byte, either case) into binary; any other character or an odd digit count is an error. `(str -- binary)`
-- `cryptoRandomBytes`: Secure random bytes from the operating system, for keys and nonces. `(int -- binary)`
+- `cryptoRandom`: Secure random bytes from the operating system, for keys and nonces. `(int -- binary)`
 - `encrypt`: Encrypt data with a key and a `Cipher`, using a new random nonce. `(binary:data binary:key Cipher -- Encrypted)`
 - `decrypt`: Decrypt with the key and `Cipher` used to encrypt; `none` when the key is wrong or any part was changed. A nonce or tag of the wrong length is an error. `(Encrypted binary:key Cipher -- Maybe[binary])`
 
@@ -1468,7 +1468,7 @@ Joining onto a binary in a loop (`@acc @chunk + acc!`) does not copy the bytes s
 - `cipherXChaCha20Poly1305`: key 32; nonce 24.
 
 ```mshell
-32 cryptoRandomBytes key!
+32 cryptoRandom key!
 "attack at dawn" utf8Bytes @key cipherAesGcm encrypt e!
 @e toJson wl   # each field as base64
 @e @key cipherAesGcm decrypt ? utf8Str wl
