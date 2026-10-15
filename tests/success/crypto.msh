@@ -1,7 +1,7 @@
-16 cryptoRandomBytes len wl
-0 cryptoRandomBytes len wl
+16 cryptoRandom len wl
+0 cryptoRandom len wl
 
-32 cryptoRandomBytes key!
+32 cryptoRandom key!
 [cipherAesGcm cipherChaCha20Poly1305 cipherXChaCha20Poly1305] (c!
     "attack at dawn" utf8Bytes @key @c encrypt e!
     [(@e :nonce? len) (@e :ciphertext? len) (@e :tag? len)] (x str) map " " join wl
@@ -10,7 +10,7 @@
         none : "none" wl
     end
     # A changed tag is refused.
-    {nonce: @e :nonce?, ciphertext: @e :ciphertext?, tag: 16 cryptoRandomBytes} @key @c decrypt match
+    {nonce: @e :nonce?, ciphertext: @e :ciphertext?, tag: 16 cryptoRandom} @key @c decrypt match
         just v : @v utf8Str wl,
         none : "none" wl
     end

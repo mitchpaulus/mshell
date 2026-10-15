@@ -16,7 +16,7 @@ var BuiltInList = map[string]struct{}{
 	"addDays": {},
 	"and": {},
 	"byteList": {},
-	"cryptoRandomBytes": {},
+	"cryptoRandom": {},
 	"decrypt": {},
 	"encrypt": {},
 	"hexDecode": {},

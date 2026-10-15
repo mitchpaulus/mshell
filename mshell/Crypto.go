@@ -13,7 +13,7 @@ import (
 )
 
 // Byte and encryption builtins: the bitwise words on int and binary,
-// cryptoRandomBytes, and encrypt/decrypt with a Cipher.
+// cryptoRandom, and encrypt/decrypt with a Cipher.
 
 // bitwiseInt applies and, or or xor to two ints.
 func bitwiseInt(op string, a, b int) int {
@@ -241,22 +241,22 @@ func (state *EvalState) evalByteList(t *Token, stack *MShellStack) *EvalResult {
 	return nil
 }
 
-// evalCryptoRandomBytes runs cryptoRandomBytes: n bytes from crypto/rand.
-func (state *EvalState) evalCryptoRandomBytes(t *Token, stack *MShellStack) *EvalResult {
+// evalCryptoRandom runs cryptoRandom: n bytes from crypto/rand.
+func (state *EvalState) evalCryptoRandom(t *Token, stack *MShellStack) *EvalResult {
 	obj, err := stack.Pop()
 	if err != nil {
-		return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot do 'cryptoRandomBytes' operation on an empty stack.\n", t.Line, t.Column))
+		return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot do 'cryptoRandom' operation on an empty stack.\n", t.Line, t.Column))
 	}
 	n, ok := obj.(MShellInt)
 	if !ok {
-		return state.mismatchPtr(fmt.Sprintf("%d:%d: 'cryptoRandomBytes' expected an int, found a %s (%s).\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+		return state.mismatchPtr(fmt.Sprintf("%d:%d: 'cryptoRandom' expected an int, found a %s (%s).\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 	}
 	if n.Value < 0 {
-		return state.checkedPtr(fmt.Sprintf("%d:%d: 'cryptoRandomBytes' needs a count of 0 or more, got %d.\n", t.Line, t.Column, n.Value))
+		return state.checkedPtr(fmt.Sprintf("%d:%d: 'cryptoRandom' needs a count of 0 or more, got %d.\n", t.Line, t.Column, n.Value))
 	}
 	out := make([]byte, n.Value)
 	if _, err := rand.Read(out); err != nil {
-		return state.checkedPtr(fmt.Sprintf("%d:%d: 'cryptoRandomBytes' could not read random bytes: %s\n", t.Line, t.Column, err.Error()))
+		return state.checkedPtr(fmt.Sprintf("%d:%d: 'cryptoRandom' could not read random bytes: %s\n", t.Line, t.Column, err.Error()))
 	}
 	stack.Push(newBinary(out))
 	return nil

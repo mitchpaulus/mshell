@@ -12269,8 +12269,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if r := state.evalByteList(&t, stack); r != nil {
 						return *r
 					}
-				case "cryptoRandomBytes":
-					if r := state.evalCryptoRandomBytes(&t, stack); r != nil {
+				case "cryptoRandom":
+					if r := state.evalCryptoRandom(&t, stack); r != nil {
 						return *r
 					}
 				case "encrypt":
