@@ -273,6 +273,8 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// String below, delimiter on top.
 	b.reg("split", "(str | path str | path -- new [str])")
+	// Gives [before after] at the first delimiter.
+	b.reg("splitOnce", "(str | path str | path -- new Maybe[[str]])")
 	b.reg("wsplit", "(str | path -- new [str])")
 	b.reg("lines", "(str -- new [str])")
 	// The grid form (two grids and a key quote for each) is in

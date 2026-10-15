@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Every element, dictionary value and enum payload is checked, in place, with no copy.
   The match pattern `is T name` does the same check in a match arm, and binds the value.
 - `del` removes a key from a dictionary: `{a: 1, b: 2} "a" del`. Nothing happens when the key is absent.
+- `splitOnce` splits a string at the first occurrence of a delimiter, giving `just [before after]`, or `none` when the delimiter is not found.
 - `getEnv` gets an environment variable by name, giving `none` when it is not set: `"EDITOR" getEnv "vim" maybe`.
 - Functions for symlinks and hard links
   - `evalSymLinks` follows every symlink in a path, giving `none` for a missing path or broken symlink.

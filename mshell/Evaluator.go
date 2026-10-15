@@ -6859,6 +6859,31 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						newList.Items[i] = MShellString{item}
 					}
 					stack.Push(newList)
+				case "splitOnce":
+					delimiter, strLiteral, err := stack.Pop2(t)
+					if err != nil {
+						return state.TypeMismatch(err.Error())
+					}
+
+					delimiterStr, err := delimiter.CastString()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot split with a %s (%s).\n", t.Line, t.Column, delimiter.TypeName(), delimiter.DebugString()))
+					}
+
+					strToSplit, err := strLiteral.CastString()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot split a %s (%s).\n", t.Line, t.Column, strLiteral.TypeName(), strLiteral.DebugString()))
+					}
+
+					before, after, found := cutOnce(strToSplit, delimiterStr)
+					if !found {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						newList := NewList(2)
+						newList.Items[0] = MShellString{before}
+						newList.Items[1] = MShellString{after}
+						stack.Push(&Maybe{obj: newList})
+					}
 				case "wsplit":
 					// Split on whitespace
 					obj, err := stack.Pop()
@@ -13594,4 +13619,19 @@ func readAllBounded(r io.Reader, limit int64) ([]byte, error) {
 		return nil, errReadLimitExceeded{limit}
 	}
 	return buffer.Bytes(), nil
+}
+
+// cutOnce splits s at the first sep, as strings.SplitN(s, sep, 2) does,
+// but without allocating a slice for the two parts. An empty sep splits
+// after the first character, as 'split' does; SplitN would count every
+// character of s to do that.
+func cutOnce(s, sep string) (before, after string, found bool) {
+	if sep == "" {
+		_, size := utf8.DecodeRuneInString(s)
+		if size == 0 || size == len(s) {
+			return "", "", false
+		}
+		return s[:size], s[size:], true
+	}
+	return strings.Cut(s, sep)
 }

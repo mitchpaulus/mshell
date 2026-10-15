@@ -1409,6 +1409,7 @@ end wl # Output: 11
 - `leftPad`: Pad the left side of a string to reach the requested length, counted in code points. `(str str int -- str)`
 - `lines`: Split string into list of string lines
 - `split`: Split string into list of strings by delimiter. (str delimiter -- [str])
+- `splitOnce`: Split string at the first occurrence of delimiter into `[before after]`, or `none` when the delimiter is not in the string. An empty delimiter splits after the first character, as `split` does. Unwrap and destructure: `just parts : @parts => [before after] ...`. `(str delimiter -- Maybe[[str]])`
 - `wsplit`: Split string into list of strings by runs of whitespace. (str -- [str])
 - `join`: Join list of strings into a single string, (list delimiter -- str)
 - `unlines`: Join list of strings into a single string using `\n` line endings. `([str] -- str)`
