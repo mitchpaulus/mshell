@@ -24,12 +24,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Every element, dictionary value and enum payload is checked, in place, with no copy.
   The match pattern `is T name` does the same check in a match arm, and binds the value.
 - `del` removes a key from a dictionary: `{a: 1, b: 2} "a" del`. Nothing happens when the key is absent.
+- `splitOnce` splits a string at the first occurrence of a delimiter, giving `just [before after]`, or `none` when the delimiter is not found.
 - `getEnv` gets an environment variable by name, giving `none` when it is not set: `"EDITOR" getEnv "vim" maybe`.
 - Functions for symlinks and hard links
   - `evalSymLinks` follows every symlink in a path, giving `none` for a missing path or broken symlink.
   - `linkCount` gives the number of hard links to a file.
   - `sameFile` tests whether two paths are the same file.
   - `hardLinks` lists every name of a file. Windows only.
+- Functions for binary data and encryption
+  - `and`, `or` and the new `xor` work bitwise on two ints, and on two binaries of the same length.
+  - `toBinary` makes binary data from a list of byte values, and `byteList` gives the bytes as ints.
+  - `hexDecode` decodes a hexadecimal string into binary data.
+  - `cryptoRandomBytes` gives secure random bytes, for keys and nonces.
+  - `encrypt` and `decrypt` encrypt data with a key and a `Cipher`: `cipherAesGcm`, `cipherChaCha20Poly1305` or `cipherXChaCha20Poly1305`.
+    `encrypt` gives the nonce, ciphertext and tag in a dictionary; `decrypt` gives `none` when the key is wrong or the data was changed.
 - `deepCopy` copies a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original.
 - The interactive shell type checks each line before it runs it, keeping types across lines.
   A line that does not check is not run and changes nothing.
@@ -144,6 +152,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Binary data works with `len` and `+`, and takes negative indexes and slices (`-16:`) as strings do.
 - Pressing TAB to complete a command's arguments no longer changes the interactive shell's variables: completion definitions run in a scope of their own.
 - Running or type checking a startup file itself (the init file, or the standard library through `MSHSTDLIB`) no longer also loads it as a startup file first, which defined everything in it twice.
 

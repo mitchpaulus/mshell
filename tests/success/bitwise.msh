@@ -1,0 +1,12 @@
+12 10 and wl
+12 10 or wl
+12 10 xor wl
+-1 255 and wl
+true false xor str wl
+true true xor str wl
+true false and str wl
+true false or str wl
+"0f0f" hexDecode "ff00" hexDecode and str wl
+"0f0f" hexDecode "ff00" hexDecode or str wl
+"0f0f" hexDecode "ff00" hexDecode xor str wl
+"" hexDecode "" hexDecode xor len wl

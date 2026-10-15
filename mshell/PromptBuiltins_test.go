@@ -96,6 +96,8 @@ func TestPromptTablesCoverBuiltinEnums(t *testing.T) {
 		// Its members are the cases of renderPrompt's switch, which
 		// TestRenderPromptHandlesEveryItem checks.
 		"PromptItem": nil,
+		// Not a prompt enum; TestCipherNewCoversCipher checks it.
+		"Cipher": nil,
 	}
 	enums := builtinEnums(t)
 	for name, d := range enums {
@@ -186,9 +188,14 @@ func TestPromptInfoMatchesType(t *testing.T) {
 
 // TestPromptBuiltinsDocumented checks that the user docs describe every
 // built-in enum member and PromptInfo field, and that the agent docs name
-// every built-in enum.
+// every built-in enum. The prompt's enums are described with the prompt,
+// Cipher with the functions that take it.
 func TestPromptBuiltinsDocumented(t *testing.T) {
 	userDoc, err := os.ReadFile("../doc/getting-started.inc.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	funcDoc, err := os.ReadFile("../doc/functions.inc.html")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,16 +203,21 @@ func TestPromptBuiltinsDocumented(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inCode := func(name string) bool {
-		return regexp.MustCompile(`<code>` + regexp.QuoteMeta(name) + `[ <]`).Match(userDoc)
+	inCodeOf := func(doc []byte, name string) bool {
+		return regexp.MustCompile(`<code>` + regexp.QuoteMeta(name) + `[ <]`).Match(doc)
 	}
+	inCode := func(name string) bool { return inCodeOf(userDoc, name) }
 	for name, d := range builtinEnums(t) {
 		if !strings.Contains(string(agentDoc), "`"+name+"`") {
 			t.Errorf("doc/mshell.md does not name the built-in enum %s", name)
 		}
+		doc, docName := userDoc, "doc/getting-started.inc.html"
+		if name == "Cipher" {
+			doc, docName = funcDoc, "doc/functions.inc.html"
+		}
 		for _, m := range d.Members {
-			if !inCode(m) {
-				t.Errorf("doc/getting-started.inc.html does not describe %s, a member of %s", m, name)
+			if !inCodeOf(doc, m) {
+				t.Errorf("%s does not describe %s, a member of %s", docName, m, name)
 			}
 		}
 	}

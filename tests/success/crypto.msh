@@ -1,0 +1,27 @@
+16 cryptoRandomBytes len wl
+0 cryptoRandomBytes len wl
+
+32 cryptoRandomBytes key!
+[cipherAesGcm cipherChaCha20Poly1305 cipherXChaCha20Poly1305] (c!
+    "attack at dawn" utf8Bytes @key @c encrypt e!
+    [(@e :nonce? len) (@e :ciphertext? len) (@e :tag? len)] (x str) map " " join wl
+    @e @key @c decrypt match
+        just v : @v utf8Str wl,
+        none : "none" wl
+    end
+    # A changed tag is refused.
+    {nonce: @e :nonce?, ciphertext: @e :ciphertext?, tag: 16 cryptoRandomBytes} @key @c decrypt match
+        just v : @v utf8Str wl,
+        none : "none" wl
+    end
+) each
+
+# AES-128-GCM test case 2 from the GCM specification (McGrew and Viega).
+{
+    nonce: "000000000000000000000000" hexDecode,
+    ciphertext: "0388dace60b6a392f328c2b971b2fe78" hexDecode,
+    tag: "ab6e47d42cec13bdf53a67b21257bddf" hexDecode,
+} "00000000000000000000000000000000" hexDecode cipherAesGcm decrypt match
+    just v : @v str wl,
+    none : "none" wl
+end

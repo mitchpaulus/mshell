@@ -18,7 +18,8 @@ import (
 // Text items are sanitized and style items take no cells, so the shell
 // lays the prompt out exactly, as it does command text.
 
-// builtinDeclSource declares the types of the prompt builtins. They are
+// builtinDeclSource declares the types of the prompt builtins, and the
+// Cipher that encrypt and decrypt take (Crypto.go). They are
 // part of the binary: the type checker and the runtime declare them before
 // any file, and no file can declare their names again.
 const builtinDeclSource = `
@@ -57,6 +58,8 @@ enum CursorShape =
     | blinkingUnderline | steadyUnderline
     | blinkingBar | steadyBar
 end
+
+enum Cipher = cipherAesGcm | cipherChaCha20Poly1305 | cipherXChaCha20Poly1305 end
 
 type PromptInfo = {stackDepth: int, stackTypes: [str], lastLineOk: bool, lastExitCode: Maybe[int], lastDurationMs: int}
 `
