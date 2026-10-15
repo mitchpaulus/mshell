@@ -81,3 +81,58 @@ func TestConcatBinaryGrowsOnlyNewest(t *testing.T) {
 		t.Error("joining onto a slice wrote into its buffer")
 	}
 }
+
+// TestAeadForCacheMatchesKeyAndCipher checks that aeadFor reuses an AEAD
+// only for the same cipher and key bytes, even when the caller's key
+// changes after the AEAD was made.
+func TestAeadForCacheMatchesKeyAndCipher(t *testing.T) {
+	key := make([]byte, 32)
+	plaintext := []byte("attack at dawn")
+	aead, err := aeadFor("cipherAesGcm", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := encryptRandomNonce(aead, plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := aeadFor("cipherAesGcm", make([]byte, 32)); again != aead {
+		t.Error("the same cipher and key did not reuse the AEAD")
+	}
+	key[0] = 1
+	other, err := aeadFor("cipherAesGcm", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := decryptParts("cipherAesGcm", other, e); ok {
+		t.Error("a changed key decrypted with the old key's AEAD")
+	}
+	if c, _ := aeadFor("cipherChaCha20Poly1305", key); c == other {
+		t.Error("a different cipher reused the AEAD")
+	}
+	if _, err := aeadFor("cipherAesGcm", key[:5]); err == nil {
+		t.Error("a 5 byte key was not an error")
+	}
+}
+
+// TestBitwiseBinaryMatchesBytes checks and, or and xor against each byte
+// for lengths that do and do not fill whole words.
+func TestBitwiseBinaryMatchesBytes(t *testing.T) {
+	for n := 0; n < 70; n++ {
+		a, b := make([]byte, n), make([]byte, n)
+		for i := range a {
+			a[i], b[i] = byte(i*37+11), byte(i*101+3)
+		}
+		for _, op := range []string{"and", "or", "xor"} {
+			got, err := bitwiseBinary(op, a, b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range a {
+				if want := byte(bitwiseInt(op, int(a[i]), int(b[i]))); got[i] != want {
+					t.Fatalf("%s length %d byte %d: got %x, want %x", op, n, i, got[i], want)
+				}
+			}
+		}
+	}
+}

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/subtle"
 	"fmt"
+	"sync/atomic"
 
 	"golang.org/x/crypto/chacha20poly1305"
 )
@@ -31,8 +34,18 @@ func bitwiseBinary(op string, a, b []byte) ([]byte, error) {
 		return nil, checkedErrorf("'%s' needs two binaries of the same length, got lengths %d and %d.\n", op, len(a), len(b))
 	}
 	out := make([]byte, len(a))
-	for i := range a {
-		out[i] = byte(bitwiseInt(op, int(a[i]), int(b[i])))
+	// The switch is outside the loops so op is compared once, not per byte.
+	switch op {
+	case "and":
+		for i := range a {
+			out[i] = a[i] & b[i]
+		}
+	case "or":
+		for i := range a {
+			out[i] = a[i] | b[i]
+		}
+	default:
+		subtle.XORBytes(out, a, b)
 	}
 	return out, nil
 }
@@ -61,8 +74,34 @@ func newAesGcm(key []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// aeadFor makes the AEAD that member names, using key.
+// aeadCacheEntry is the last AEAD aeadFor made, with the cipher and a
+// copy of the key it was made from.
+type aeadCacheEntry struct {
+	member string
+	key    []byte
+	aead   cipher.AEAD
+}
+
+// lastAead lets a loop that encrypts or decrypts many items with one key
+// set the key up once. Pipeline stages run at the same time, so it is
+// atomic; two stages using it at once at worst make the AEAD again.
+var lastAead atomic.Pointer[aeadCacheEntry]
+
+// aeadFor gives the AEAD that member names, using key.
 func aeadFor(member string, key []byte) (cipher.AEAD, error) {
+	if e := lastAead.Load(); e != nil && e.member == member && bytes.Equal(e.key, key) {
+		return e.aead, nil
+	}
+	aead, err := newAeadFor(member, key)
+	if err != nil {
+		return nil, err
+	}
+	lastAead.Store(&aeadCacheEntry{member, bytes.Clone(key), aead})
+	return aead, nil
+}
+
+// newAeadFor makes the AEAD that member names, using key.
+func newAeadFor(member string, key []byte) (cipher.AEAD, error) {
 	newAead, ok := cipherNew[member]
 	if !ok {
 		return nil, fmt.Errorf("unknown cipher %s", member)
@@ -99,7 +138,11 @@ func decryptParts(member string, aead cipher.AEAD, e encrypted) ([]byte, bool, e
 	if len(e.tag) != aead.Overhead() {
 		return nil, false, checkedErrorf("%s takes a tag of %d bytes, got %d.\n", member, aead.Overhead(), len(e.tag))
 	}
-	plaintext, err := aead.Open(nil, e.nonce, append(e.ciphertext[:len(e.ciphertext):len(e.ciphertext)], e.tag...), nil)
+	// Open decrypts into the buffer it reads, so the plaintext needs no
+	// second buffer.
+	buf := make([]byte, 0, len(e.ciphertext)+len(e.tag))
+	buf = append(append(buf, e.ciphertext...), e.tag...)
+	plaintext, err := aead.Open(buf[:0], e.nonce, buf, nil)
 	if err != nil {
 		return nil, false, nil
 	}
