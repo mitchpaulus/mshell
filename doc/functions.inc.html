@@ -6,6 +6,7 @@
         <li><a href="#functions-file-directory">File and Directory</a></li>
         <li><a href="#functions-math">Math</a></li>
         <li><a href="#functions-strings">Strings</a></li>
+        <li><a href="#functions-binary">Binary Data</a></li>
         <li><a href="#functions-lists">Lists</a></li>
         <li><a href="#functions-sorting">Sorting</a></li>
         <li><a href="#functions-dictionaries">Dictionaries</a></li>
@@ -46,7 +47,7 @@
         <tr> <td><code>wl</code></td> <td>Write a string to stdout and add a newline.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- )</code></td> </tr>
         <tr> <td><code>we</code></td> <td>Write a string or binary to stderr.</td> <td><code>(<span class="sig-type sig-type-str">str</span>|<span class="sig-type sig-type-binary">binary</span> -- )</code></td> </tr>
         <tr> <td><code>wle</code></td> <td>Write a string to stderr and add a newline.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- )</code></td> </tr>
-        <tr> <td><code>len</code></td> <td>Return the length of a string or list.</td> <td><code>([a] -- <span class="sig-type sig-type-int">int</span>)</code>, <code>(<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
+        <tr> <td><code>len</code></td> <td>Return the length of a string or list, or the number of bytes of binary data.</td> <td><code>([a] -- <span class="sig-type sig-type-int">int</span>)</code>, <code>(<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-int">int</span>)</code>, <code>(<span class="sig-type sig-type-binary">binary</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
         <tr> <td><code>args</code></td> <td>Push the argument list (without argv[0]) onto the stack.</td> <td><code>(-- [<span class="sig-type sig-type-str">str</span>])</code></td> </tr>
         <tr> <td><code>glob</code></td> <td>Run <a href="https://pkg.go.dev/path/filepath#Glob" target="_blank" rel="noopener noreferrer"><code>filepath.Glob</code></a> against the string on the stack and return the matches as a list of paths.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- [<span class="sig-type sig-type-path">path</span>])</code></td> </tr>
         <tr> <td><code>/</code></td> <td>Divide numbers or join paths.</td> <td><code>(<span class="sig-type sig-type-numeric">numeric</span> <span class="sig-type sig-type-numeric">numeric</span> -- <span class="sig-type sig-type-numeric">numeric</span>)</code>, <code>(<span class="sig-type sig-type-path">path</span> <span class="sig-type sig-type-path">path</span> -- <span class="sig-type sig-type-path">path</span>)</code></td> </tr>
@@ -254,6 +255,54 @@
         <tr> <td><code id="func-base64decode">base64decode</code></td> <td>Decode base64 into binary data.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-binary">binary</span>)</code></td> </tr>
         <tr> <td><code id="func-utf8Str">utf8Str</code></td> <td>Decode UTF-8 bytes into a string.</td> <td><code>(<span class="sig-type sig-type-binary">binary</span> -- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
         <tr> <td><code id="func-utf8Bytes">utf8Bytes</code></td> <td>Encode a string as UTF-8 bytes.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-binary">binary</span>)</code></td> </tr>
+    </tbody>
+</table>
+
+
+<h1 id="functions-binary">Binary Data <a class="section-link" href="#functions-binary" aria-label="Permalink">§</a> <a class="back-to-top" href="#functions-top">Back to top</a></h1>
+
+<p>
+<code>len</code> gives the number of bytes, <code>+</code> joins two binaries, and indexes and slices work as they do on strings, including negative indexes: <code>-16:</code> is the last 16 bytes.
+Building a binary by joining onto it in a loop does not copy the bytes so far on each join.
+</p>
+
+<p>
+<code>encrypt</code> and <code>decrypt</code> take a <code>Cipher</code>, a built-in enum.
+Each cipher both hides the data and detects any change to it.
+</p>
+
+<ul>
+    <li><code>cipherAesGcm</code>: AES in GCM mode. The key is 16, 24 or 32 bytes (AES-128, AES-192 or AES-256), and the nonce 12 bytes.</li>
+    <li><code>cipherChaCha20Poly1305</code>: ChaCha20-Poly1305 (RFC 8439). The key is 32 bytes, and the nonce 12 bytes.</li>
+    <li><code>cipherXChaCha20Poly1305</code>: XChaCha20-Poly1305. The key is 32 bytes, and the nonce 24 bytes.</li>
+</ul>
+
+<p>
+<code>Encrypted</code> is the type <code>{nonce: binary, ciphertext: binary, tag: binary}</code>.
+</p>
+
+<pre><code><span class="mshellINTEGER">32</span> <span class="mshellLITERAL">cryptoRandomBytes</span> <span class="mshellVARSTORE">key!</span>
+<span class="mshellSTRING">&#34;attack at dawn&#34;</span> <span class="mshellLITERAL">utf8Bytes</span> <span class="mshellVARRETRIEVE">@key</span> <span class="mshellLITERAL">cipherAesGcm</span> <span class="mshellLITERAL">encrypt</span> <span class="mshellVARSTORE">e!</span>
+<span class="mshellVARRETRIEVE">@e</span> <span class="mshellLITERAL">toJson</span> <span class="mshellLITERAL">wl</span>     <span class="mshellLINECOMMENT"># {&#34;nonce&#34;: &#34;...&#34;, &#34;ciphertext&#34;: &#34;...&#34;, &#34;tag&#34;: &#34;...&#34;}</span>
+<span class="mshellVARRETRIEVE">@e</span> <span class="mshellVARRETRIEVE">@key</span> <span class="mshellLITERAL">cipherAesGcm</span> <span class="mshellLITERAL">decrypt</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">v</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@v</span> <span class="mshellLITERAL">utf8Str</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">none</span> <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;wrong key, or the data was changed&#34;</span> <span class="mshellLITERAL">wle</span>
+<span class="mshellEND">end</span><span class="mshellEOF"></span></code></pre>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code id="func-and">and</code></td> <td>Bitwise and of two ints, or of each byte of two binaries of the same length. On bools it is logical and, and may take a quotation for its right side (see <a href="control-flow.html">Control Flow</a>).</td> <td><code>(<span class="sig-type sig-type-int">int</span> <span class="sig-type sig-type-int">int</span> -- <span class="sig-type sig-type-int">int</span>)</code>, <code>(<span class="sig-type sig-type-binary">binary</span> <span class="sig-type sig-type-binary">binary</span> -- <span class="sig-type sig-type-binary">binary</span>)</code>, <code>(<span class="sig-type sig-type-bool">bool</span> <span class="sig-type sig-type-bool">bool</span> -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
+        <tr> <td><code id="func-or">or</code></td> <td>Bitwise or of two ints, or of each byte of two binaries of the same length. On bools it is logical or, and may take a quotation for its right side.</td> <td><code>(<span class="sig-type sig-type-int">int</span> <span class="sig-type sig-type-int">int</span> -- <span class="sig-type sig-type-int">int</span>)</code>, <code>(<span class="sig-type sig-type-binary">binary</span> <span class="sig-type sig-type-binary">binary</span> -- <span class="sig-type sig-type-binary">binary</span>)</code>, <code>(<span class="sig-type sig-type-bool">bool</span> <span class="sig-type sig-type-bool">bool</span> -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
+        <tr> <td><code id="func-xor">xor</code></td> <td>Bitwise exclusive or of two ints, or of each byte of two binaries of the same length. On bools it is <code>true</code> when exactly one is <code>true</code>. Binaries of different lengths are an error.</td> <td><code>(<span class="sig-type sig-type-int">int</span> <span class="sig-type sig-type-int">int</span> -- <span class="sig-type sig-type-int">int</span>)</code>, <code>(<span class="sig-type sig-type-binary">binary</span> <span class="sig-type sig-type-binary">binary</span> -- <span class="sig-type sig-type-binary">binary</span>)</code>, <code>(<span class="sig-type sig-type-bool">bool</span> <span class="sig-type sig-type-bool">bool</span> -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
+        <tr> <td><code id="func-toBinary">toBinary</code></td> <td>Make binary data from a list of byte values. Each int must be from 0 to 255.</td> <td><code>([<span class="sig-type sig-type-int">int</span>] -- <span class="sig-type sig-type-binary">binary</span>)</code></td> </tr>
+        <tr> <td><code id="func-byteList">byteList</code></td> <td>List each byte of binary data as an int from 0 to 255.</td> <td><code>(<span class="sig-type sig-type-binary">binary</span> -- [<span class="sig-type sig-type-int">int</span>])</code></td> </tr>
+        <tr> <td><code id="func-hexDecode">hexDecode</code></td> <td>Decode a hexadecimal string, two digits per byte, upper or lower case, into binary data. Any other character, or an odd number of digits, is an error. <code>str</code> on binary data gives the hexadecimal string.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-binary">binary</span>)</code></td> </tr>
+        <tr> <td><code id="func-cryptoRandomBytes">cryptoRandomBytes</code></td> <td>Generate that many random bytes from the operating system's secure random source (Go <a href="https://pkg.go.dev/crypto/rand" target="_blank" rel="noopener noreferrer"><code>crypto/rand</code></a>). Use it for keys, nonces and tokens.</td> <td><code>(<span class="sig-type sig-type-int">int</span> -- <span class="sig-type sig-type-binary">binary</span>)</code></td> </tr>
+        <tr> <td><code id="func-encrypt">encrypt</code></td> <td>Encrypt data with a key and a <code>Cipher</code>, using a new random nonce. Gives an <code>Encrypted</code> dictionary with <code>nonce</code>, <code>ciphertext</code> and <code>tag</code>, all binary. The ciphertext is as long as the data, and the tag is 16 bytes. <code>toJson</code> writes each field as base64.</td> <td><code>(<span class="sig-type sig-type-binary">binary</span>:data <span class="sig-type sig-type-binary">binary</span>:key Cipher -- <span class="sig-type sig-type-dict">Encrypted</span>)</code></td> </tr>
+        <tr> <td><code id="func-decrypt">decrypt</code></td> <td>Decrypt an <code>Encrypted</code> dictionary with the key and <code>Cipher</code> it was made with. Gives <code>none</code> when the key is wrong or any part was changed. A nonce or tag of the wrong length for the cipher is an error.</td> <td><code>(<span class="sig-type sig-type-dict">Encrypted</span> <span class="sig-type sig-type-binary">binary</span>:key Cipher -- <span class="sig-type sig-type-maybe">Maybe</span>[<span class="sig-type sig-type-binary">binary</span>])</code></td> </tr>
     </tbody>
 </table>
 

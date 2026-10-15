@@ -6724,6 +6724,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						stack.Push(MShellInt{len(objTyped.Grid.Columns)})
 					case *MShellDict:
 						stack.Push(MShellInt{len(objTyped.Items)})
+					case MShellBinary:
+						stack.Push(MShellInt{len(objTyped.Data)})
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot get length of a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -6788,7 +6790,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						if t.Lexeme == "wl" || t.Lexeme == "wle" {
 							return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot write a binary with a newline. You are allowed to write contents directly with `w` or `we`.\n", t.Line, t.Column))
 						}
-						_, _ = writer.Write(topTyped)
+						_, _ = writer.Write(topTyped.Data)
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
 					}
@@ -7115,7 +7117,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.CheckedFailure(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
 					}
 
-					stack.Push(MShellBinary(content))
+					stack.Push(newBinary(content))
 				case "cd":
 					obj, err := stack.Pop()
 					if err != nil {
@@ -8123,7 +8125,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 					var contentBytes []byte
 					if asBinary, ok := obj2.(MShellBinary); ok {
-						contentBytes = []byte(asBinary)
+						contentBytes = asBinary.Data
 					} else {
 						contentStr, err := obj2.CastString()
 						if err != nil {
@@ -8434,7 +8436,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if !found {
 						stack.Push(&Maybe{obj: nil})
 					} else {
-						stack.Push(&Maybe{obj: MShellBinary(data)})
+						stack.Push(&Maybe{obj: newBinary(data)})
 					}
 				case "tarDirInc", "tarDirExc":
 					obj1, obj2, err := stack.Pop2(t)
@@ -8649,7 +8651,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if !found {
 						stack.Push(&Maybe{obj: nil})
 					} else {
-						stack.Push(&Maybe{obj: MShellBinary(data)})
+						stack.Push(&Maybe{obj: newBinary(data)})
 					}
 				case "e", "ec", "es":
 					// Token Type
@@ -10299,7 +10301,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						// Create a new JSON reader directly from the string contents
 						jsonData = []byte(obj1Typed.Content)
 					case MShellBinary:
-						binaryData := []byte(obj1Typed)
+						binaryData := obj1Typed.Data
 						if !utf8.Valid(binaryData) {
 							return state.CheckedFailure(fmt.Sprintf("%d:%d: Error parsing JSON: input is not valid UTF-8.\n", t.Line, t.Column))
 						}
@@ -10331,7 +10333,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 							return state.CheckedFailure(fmt.Sprintf("%d:%d: Error reading file %s: %s\n", t.Line, t.Column, p, err.Error()))
 						}
 					case MShellBinary:
-						xlsxData = []byte(obj1Typed)
+						xlsxData = obj1Typed.Data
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: 'parseExcel' expects a Path or Binary, got a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
@@ -11476,7 +11478,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					case MShellString:
 						data = []byte(objTyped.Content)
 					case MShellBinary:
-						data = []byte(objTyped)
+						data = objTyped.Data
 					case MShellPath:
 						pathStr, err := obj.CastString()
 						if err != nil {
@@ -11888,7 +11890,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						if err != nil {
 							return state.CheckedFailure(fmt.Sprintf("%d:%d: Error reading response body in '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
 						}
-						responseDict.Items["body"] = MShellBinary(bodyBytes)
+						responseDict.Items["body"] = newBinary(bodyBytes)
 
 						// Push the response dictionary onto the stack
 						stack.Push(&Maybe{obj: responseDict})
@@ -11944,7 +11946,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: The top of stack in 'base64encode' is expected to be a binary, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 					}
 
-					encoded := base64.StdEncoding.EncodeToString([]byte(binaryObj))
+					encoded := base64.StdEncoding.EncodeToString(binaryObj.Data)
 					stack.Push(MShellString{Content: encoded})
 				case "base64decode":
 					// Convert a base64 string to binary data.
@@ -11963,7 +11965,24 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.CheckedFailure(fmt.Sprintf("%d:%d: Error decoding base64 in 'base64decode': %s\n", t.Line, t.Column, err.Error()))
 					}
 
-					stack.Push(MShellBinary(decoded))
+					stack.Push(newBinary(decoded))
+				case "hexDecode":
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'hexDecode' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					strObj, ok := obj.(MShellString)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The top of stack in 'hexDecode' is expected to be a string, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+					}
+
+					decoded, err := hex.DecodeString(strObj.Content)
+					if err != nil {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: Error decoding hex in 'hexDecode': %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					stack.Push(newBinary(decoded))
 				case "utf8Str":
 					// Convert MShellBinary on the top of the stack to a UTF-8 string
 					obj, err := stack.Pop()
@@ -11977,7 +11996,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 
 					// Convert binary to string
-					strContent := string(binaryObj)
+					strContent := string(binaryObj.Data)
 					stack.Push(MShellString{Content: strContent})
 				case "utf8Bytes":
 					// Convert MShellString on the top of the stack to UTF-8 bytes
@@ -11993,7 +12012,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 					// Convert string to bytes
 					bytesContent := []byte(strObj.Content)
-					stack.Push(MShellBinary(bytesContent))
+					stack.Push(newBinary(bytesContent))
 				case "sleep":
 					// Sleep float number of seconds.
 					obj, err := stack.Pop()
@@ -12201,7 +12220,41 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 							stack.Push(MShellBool{seconObjBool.Value})
 						}
 					default:
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+						if r := state.evalBitwise(&t, stack, obj1, obj2); r != nil {
+							return *r
+						}
+					}
+				case "xor":
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'xor' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'xor' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+					if r := state.evalBitwise(&t, stack, obj1, obj2); r != nil {
+						return *r
+					}
+				case "toBinary":
+					if r := state.evalToBinary(&t, stack); r != nil {
+						return *r
+					}
+				case "byteList":
+					if r := state.evalByteList(&t, stack); r != nil {
+						return *r
+					}
+				case "cryptoRandomBytes":
+					if r := state.evalCryptoRandomBytes(&t, stack); r != nil {
+						return *r
+					}
+				case "encrypt":
+					if r := state.evalEncrypt(&t, stack); r != nil {
+						return *r
+					}
+				case "decrypt":
+					if r := state.evalDecrypt(&t, stack); r != nil {
+						return *r
 					}
 
 				default: // last new function
@@ -12444,7 +12497,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				} else if stdoutBehavior == STDOUT_COMPLETE {
 					stack.Push(MShellString{string(stdout)})
 				} else if stdoutBehavior == STDOUT_BINARY {
-					stack.Push(MShellBinary(stdout))
+					stack.Push(newBinary(stdout))
 				} else if stdoutBehavior != STDOUT_NONE {
 					// panic for unhandled
 					return state.TypeMismatch(fmt.Sprintf("%d:%d: Unhandled stdout behavior %d.\n", t.Line, t.Column, stdoutBehavior))
@@ -12463,7 +12516,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				} else if stderrBehavior == STDERR_COMPLETE {
 					stack.Push(MShellString{string(stderr)})
 				} else if stderrBehavior == STDERR_BINARY {
-					stack.Push(MShellBinary(stderr))
+					stack.Push(newBinary(stderr))
 				} else if stderrBehavior != STDERR_NONE {
 					// panic for unhandled
 					return state.TypeMismatch(fmt.Sprintf("%d:%d: Unhandled stderr behavior %d.\n", t.Line, t.Column, stderrBehavior))
@@ -13120,6 +13173,13 @@ func (state *EvalState) evalPlusToken(t *Token, stack *MShellStack, context *Exe
 		default:
 			return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot add a path to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 		}
+	case MShellBinary:
+		switch obj2.(type) {
+		case MShellBinary:
+			stack.Push(concatBinary(obj2.(MShellBinary), obj1.(MShellBinary)))
+		default:
+			return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot add a binary to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+		}
 	case *MShellGrid, *MShellGridView:
 		switch obj2.(type) {
 		case *MShellGrid, *MShellGridView:
@@ -13327,13 +13387,13 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 				switch obj2.(type) {
 				case *MShellList:
 					obj2.(*MShellList).StdinBehavior = STDIN_BINARY
-					obj2.(*MShellList).StandardInputBinary = obj1.(MShellBinary)
+					obj2.(*MShellList).StandardInputBinary = obj1.(MShellBinary).Data
 					obj2.(*MShellList).StandardInputContents = ""
 					obj2.(*MShellList).StandardInputFile = ""
 					stack.Push(obj2)
 				case *MShellQuotation:
 					obj2.(*MShellQuotation).StdinBehavior = STDIN_BINARY
-					obj2.(*MShellQuotation).StandardInputBinary = obj1.(MShellBinary)
+					obj2.(*MShellQuotation).StandardInputBinary = obj1.(MShellBinary).Data
 					obj2.(*MShellQuotation).StandardInputContents = ""
 					obj2.(*MShellQuotation).StandardInputFile = ""
 					stack.Push(obj2)
