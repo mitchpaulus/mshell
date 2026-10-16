@@ -204,9 +204,18 @@ type FileManager struct {
 	folderStateReqCh      chan folderStateRequest
 	folderStatesRequested bool // the current listing's folders were sent to the worker
 
-	// Formatted file sizes by path, filled as entries are drawn. Sizes need a
-	// stat call per file, so they are cached until the directory is reloaded.
-	entrySizes map[string]string
+	// File sizes in bytes by path, -1 when the size cannot be read. Filled as
+	// entries are drawn, since sizes need a stat call per file outside
+	// Windows. Cached until the directory is reloaded.
+	entrySizes map[string]int64
+
+	// Directory summary for the bottom row. The total size is shown only once
+	// every file's size is in entrySizes: always on Windows, where sizes come
+	// with the directory listing, and elsewhere once every file has been drawn.
+	dirCount      int
+	fileCount     int
+	knownSizes    int   // files with an entry in entrySizes
+	totalFileSize int64 // sum of the sizes in entrySizes
 
 	hostname string
 	username string
@@ -500,6 +509,9 @@ func (fm *FileManager) startPreviewLoop() {
 // makePreview computes the preview for a request. Tests replace it to
 // simulate previews that block.
 var makePreview = func(req previewRequest) ([]string, imagePreview) {
+	if !req.onlineOnly && !req.entry.IsDir() && looksCloudOnly(req.path) {
+		req.onlineOnly = true
+	}
 	if req.imageW > 0 && !req.onlineOnly && !req.entry.IsDir() && isImagePreviewPath(req.path) {
 		lines, sixel := previewImage(req.path, req.imageW, req.imageH, req.pixelAspect)
 		return lines, imagePreview{sixel: sixel, imageW: req.imageW}
@@ -815,6 +827,7 @@ func (fm *FileManager) loadDirectory() {
 	fm.showingWindowsVolumes = false
 	fm.inCloudSyncRoot = isCloudSyncRoot(fm.currentDir)
 	fm.folderStatesRequested = false
+	fm.resetEntrySizes()
 	entries, err := os.ReadDir(fm.currentDir)
 	if err != nil {
 		fm.entries = nil
@@ -836,9 +849,31 @@ func (fm *FileManager) loadDirectory() {
 	fm.previewImages = make(map[string]imagePreview)
 	fm.previewImageOrder = nil
 	fm.previewImageBytes = 0
-	fm.entrySizes = make(map[string]string)
 	fm.searchActive = false
 	fm.searchMatches = fm.searchMatches[:0]
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			fm.dirCount++
+			continue
+		}
+		fm.fileCount++
+		// On Windows a file's size comes with the directory listing, so the
+		// total costs nothing. A symbolic link shows its target's size, which
+		// needs a stat call, so links wait until they are drawn.
+		if runtime.GOOS == "windows" && entry.Type()&fs.ModeSymlink == 0 {
+			fm.entryBytes(entry)
+		}
+	}
+}
+
+// resetEntrySizes clears the size cache and the directory summary.
+func (fm *FileManager) resetEntrySizes() {
+	fm.entrySizes = make(map[string]int64)
+	fm.dirCount = 0
+	fm.fileCount = 0
+	fm.knownSizes = 0
+	fm.totalFileSize = 0
 }
 
 func windowsVolumeRoot(name string) string {
@@ -877,7 +912,7 @@ func (fm *FileManager) showWindowsVolumes() {
 	fm.previewImages = make(map[string]imagePreview)
 	fm.previewImageOrder = nil
 	fm.previewImageBytes = 0
-	fm.entrySizes = make(map[string]string)
+	fm.resetEntrySizes()
 	fm.searchActive = false
 	fm.searchMatches = fm.searchMatches[:0]
 	fm.showingWindowsVolumes = true
@@ -903,7 +938,7 @@ func (fm *FileManager) requireRealDirectory() bool {
 }
 
 func (fm *FileManager) visibleRows() int {
-	if fm.searching || fm.renaming || fm.statusMsg != "" {
+	if fm.searching || fm.renaming || fm.statusMsg != "" || !fm.showingWindowsVolumes {
 		return fm.rows - 2 // header + bottom bar
 	}
 	return fm.rows - 1 // header only
@@ -999,11 +1034,21 @@ func (fm *FileManager) entrySize(entry os.DirEntry) string {
 	if entry.IsDir() {
 		return ""
 	}
+	size := fm.entryBytes(entry)
+	if size < 0 {
+		return ""
+	}
+	return formatColumnSize(size)
+}
+
+// entryBytes returns the size in bytes of a file, or -1 when it cannot be
+// read, and caches it in entrySizes.
+func (fm *FileManager) entryBytes(entry os.DirEntry) int64 {
 	path := fm.selectedEntryPath(entry)
 	if size, ok := fm.entrySizes[path]; ok {
 		return size
 	}
-	size := ""
+	size := int64(-1)
 	var info fs.FileInfo
 	var err error
 	if entry.Type()&fs.ModeSymlink != 0 {
@@ -1012,13 +1057,42 @@ func (fm *FileManager) entrySize(entry os.DirEntry) string {
 		info, err = entry.Info()
 	}
 	if err == nil && info != nil && !info.IsDir() {
-		size = formatColumnSize(info.Size())
+		size = info.Size()
 	}
 	if fm.entrySizes == nil {
-		fm.entrySizes = make(map[string]string)
+		fm.entrySizes = make(map[string]int64)
 	}
 	fm.entrySizes[path] = size
+	fm.knownSizes++
+	if size > 0 {
+		fm.totalFileSize += size
+	}
 	return size
+}
+
+// directorySummary describes the current directory for the bottom row, such
+// as "3 directories, 12 files, 4.5 MiB". The total size is left off until
+// every file's size is known, so showing it never costs extra stat calls.
+func (fm *FileManager) directorySummary() string {
+	if fm.showingWindowsVolumes {
+		return ""
+	}
+	if fm.dirCount == 0 && fm.fileCount == 0 {
+		return "empty directory"
+	}
+	dirNoun := "directories"
+	if fm.dirCount == 1 {
+		dirNoun = "directory"
+	}
+	fileNoun := "files"
+	if fm.fileCount == 1 {
+		fileNoun = "file"
+	}
+	summary := fmt.Sprintf("%d %s, %d %s", fm.dirCount, dirNoun, fm.fileCount, fileNoun)
+	if fm.fileCount > 0 && fm.knownSizes >= fm.fileCount {
+		summary += ", " + formatPreviewSize(fm.totalFileSize)
+	}
+	return summary
 }
 
 // formatColumnSize formats a byte count in at most four columns, like ls -h:
@@ -1359,6 +1433,15 @@ func (fm *FileManager) render() {
 		}
 		buf.WriteString("\033[33m") // yellow
 		buf.WriteString(msg)
+		buf.WriteString("\033[0m")
+	} else if summary := fm.directorySummary(); summary != "" && !fm.searching && !fm.renaming {
+		buf.WriteString("\r\n")
+		summary = " " + summary
+		if utf8.RuneCountInString(summary) > fm.cols {
+			summary = string([]rune(summary)[:fm.cols])
+		}
+		buf.WriteString("\033[90m") // dim gray
+		buf.WriteString(summary)
 		buf.WriteString("\033[0m")
 	}
 
