@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"reflect"
+	"runtime"
 )
 
 type testDirEntry struct {
@@ -375,5 +376,79 @@ func TestHandleInputDoesNotWaitForeverOnUnfinishedSequence(t *testing.T) {
 	feedInput(fm, "\x1b["+strings.Repeat("1;", maxPendingEscapeBytes))
 	if len(fm.pendingInput) >= maxPendingEscapeBytes {
 		t.Fatalf("kept %d bytes waiting", len(fm.pendingInput))
+	}
+}
+
+func TestDirectorySummary(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), make([]byte, 1024), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fm := &FileManager{rows: 20, cols: 200, currentDir: dir}
+	fm.loadDirectory()
+
+	// Outside Windows, sizes cost a stat call each, so the total waits until
+	// every file has been drawn.
+	if runtime.GOOS != "windows" {
+		if got, want := fm.directorySummary(), "1 directory, 2 files"; got != want {
+			t.Fatalf("summary before drawing = %q, want %q", got, want)
+		}
+	}
+	for _, entry := range fm.entries {
+		fm.entrySize(entry)
+	}
+	if got, want := fm.directorySummary(), "1 directory, 2 files, 2.0 KiB"; got != want {
+		t.Fatalf("summary = %q, want %q", got, want)
+	}
+
+	fm.currentDir = t.TempDir()
+	fm.loadDirectory()
+	if got, want := fm.directorySummary(), "empty directory"; got != want {
+		t.Fatalf("empty summary = %q, want %q", got, want)
+	}
+}
+
+func TestRenderShowsDirectorySummary(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a file with a long name.txt"), make([]byte, 10), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	fm := &FileManager{rows: 5, cols: 200, currentDir: dir, ttyOut: out}
+	fm.loadDirectory()
+	fm.render()
+	data, err := os.ReadFile(out.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The only file is drawn, so its size is known and the total is shown.
+	if !strings.Contains(string(data), "0 directories, 1 file, 10 B") {
+		t.Fatalf("summary not found in %q", data)
+	}
+}
+
+// A sparse file on a Linux file system also has a size and no blocks, but it
+// is not on a Windows drive, so it is previewed.
+func TestLooksCloudOnlyIgnoresLinuxFileSystems(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sparse")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(1 << 20); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if looksCloudOnly(path) {
+		t.Fatalf("sparse file on a Linux file system taken for cloud only")
 	}
 }
