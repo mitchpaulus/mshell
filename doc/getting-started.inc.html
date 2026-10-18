@@ -165,14 +165,13 @@ These types and their members are built in, so their names cannot be used for yo
 
 <p>
 An abbreviation is a short word that the interactive shell expands into longer text as you type it.
-Abbreviations are added in <code>init.msh</code>.
-The common case is a word at the start of a command, expanded to text, which <code>abbr</code> adds:
-typing <code>s</code> and Space gives <code>git status -u </code>.
-<code>abbrAdd</code> takes an <code>Abbr</code> for everything else.
+Abbreviations are added in <code>init.msh</code> with <code>abbrAdd</code>, which takes an <code>Abbr</code>.
+The common case is a word at the start of a command, expanded to text:
+with the first line below, typing <code>s</code> and Space gives <code>git status -u </code>.
 </p>
 
 <pre>
-<code><span class="mshellSINGLEQUOTESTRING">&#39;s&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;git status -u&#39;</span> <span class="mshellLITERAL">abbr</span>
+<code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">abbr</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;s&#39;</span> <span class="mshellLITERAL">abbrWord</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">expansion</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;git status -u&#39;</span> <span class="mshellLITERAL">abbrText</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">abbrAdd</span>
 <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">abbr</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;co&#39;</span> <span class="mshellLITERAL">abbrWord</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">expansion</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;checkout&#39;</span> <span class="mshellLITERAL">abbrText</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">position</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;git&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">abbrArgOf</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">abbrAdd</span>
 <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">abbr</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;gcm&#39;</span> <span class="mshellLITERAL">abbrWord</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">expansion</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;git commit -m &#39;%&#39;&#34;</span> <span class="mshellLITERAL">abbrText</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">cursorMarker</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;%&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">abbrAdd</span>
 
@@ -209,7 +208,7 @@ A word inside a string, path or comment never expands.
         <tr> <td><code>expansion</code></td> <td><code>AbbrExpansion</code></td> <td>What the word becomes: <code>abbrText str</code>, this text, or <code>abbrFunc (AbbrInfo -- Maybe[str])</code>, the text a quotation returns when the word is typed, or <code>none</code> to leave the word to the next abbreviation.</td> </tr>
         <tr> <td><code>position</code> (optional)</td> <td><code>AbbrPosition</code></td> <td>Where the word expands. <code>abbrCommand</code>, the default, is a command word: the start of the line, the head of a list (<code>[s</code>), or after <code>|</code> on a command line. <code>abbrAnywhere</code> is any word. <code>abbrArgOf [str]</code> is an argument of one of these commands, compared as written: the first word of the list the word is in, or of the command on a command line. A file after <code>&lt;</code> or <code>&gt;</code> is not an argument.</td> </tr>
         <tr> <td><code>cursorMarker</code> (optional)</td> <td><code>str</code></td> <td>Text in the expansion where the cursor goes. It is removed, and a Space that expanded the word is not inserted. Any length; with <code>%</code>, <code>gcm</code> and Space give <code>git commit -m '|'</code> with the cursor at <code>|</code>.</td> </tr>
-        <tr> <td><code>description</code> (optional)</td> <td><code>str</code></td> <td>Shown by <code>abbrShow</code>.</td> </tr>
+        <tr> <td><code>description</code> (optional)</td> <td><code>str</code></td> <td>A note for yourself, which <code>abbrList</code> gives back.</td> </tr>
     </tbody>
 </table>
 
@@ -230,7 +229,8 @@ An <code>abbrFunc</code> quotation is given an <code>AbbrInfo</code>:
 
 <p>
 The quotation runs on its own stack, so it cannot change the values on yours.
-If it fails, takes longer than 1 second, or is interrupted with Ctrl-C, the word is left as typed, and the error is shown below the command line.
+If it fails or takes longer than 1 second, the word is left as typed, and the error is shown below the command line.
+Ctrl-C does not stop it; a key pressed while it runs is read after it ends.
 The error is shown once, not again while the quotation keeps failing the same way.
 What the quotation prints is not shown.
 </p>
@@ -239,8 +239,8 @@ What the quotation prints is not shown.
 When several abbreviations apply to a word, the one added last is tried first.
 <code>abbrAdd</code> replaces an abbreviation with an equal <code>abbr</code> and an equal position, so <code>l</code> can be one command at the start of a line and another after <code>jj</code>.
 <code>abbrErase</code> removes every abbreviation with an <code>abbr</code>, and <code>abbrRename</code> renames them.
+<code>abbrList</code> gives them all, oldest first.
 To remove only one of several with the same <code>abbr</code>, take <code>abbrList</code>, erase the <code>abbr</code>, and add back the ones to keep.
-<code>abbrShow</code> prints them all.
 </p>
 
 <p>

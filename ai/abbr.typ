@@ -26,7 +26,7 @@
 #align(center)[
   #text(size: 20pt, weight: "bold")[Abbreviations in mshell]
   #v(0.3em)
-  #text(size: 11pt)[Design draft --- 2026-10-06, revised 2026-10-18, branch `abbr-design`]
+  #text(size: 11pt)[Design draft --- 2026-10-06, revised 2026-10-18 (twice), branch `abbr-design`]
   #v(0.2em)
   #text(size: 10pt, style: "italic")[Written by Claude from the code on `main` (f0704c8, rechecked at 28bc881) and a source-level
   survey of fish 4.9, Nushell 0.116 / reedline 0.52, Elvish 0.21+, zsh-abbr 6.5 and xontrib-abbrevs.]
@@ -45,19 +45,19 @@ This design moves it into `init.msh`, typed and checked like `setPrompt`, with t
 - a word matched by a *regular expression* instead of a fixed word;
 - an expansion computed by a *quotation* at the moment it is typed (fish's `--function`);
 - a *cursor marker* in the expansion (fish's `--set-cursor`);
-- add, erase, rename, list and show.
+- add, erase, rename and list.
 
 The user writes:
 
 ```msh
-'s'  'git status -u' abbr                              # the common case
+{abbr: 's' abbrWord, expansion: 'git status -u' abbrText} abbrAdd     # the common case
 {abbr: 'co' abbrWord, expansion: 'checkout' abbrText, position: ['git'] abbrArgOf} abbrAdd
 {abbr: 'gcm' abbrWord, expansion: "git commit -m '%'" abbrText, cursorMarker: '%'} abbrAdd
 {abbr: '\.\.+' abbrRegex, expansion: (upDirs) abbrFunc} abbrAdd
 ```
 
 The pieces are two built-in record types and three built-in enums: what word is abbreviated, where it expands, and what it expands to;
-four builtins (`abbrAdd`, `abbrErase`, `abbrRename`, `abbrList`) and two standard library definitions (`abbr`, `abbrShow`).
+and four builtins (`abbrAdd`, `abbrErase`, `abbrRename`, `abbrList`). There are no standard library definitions (section 5.3).
 Where fish has a known problem (a trailing space after a cursor marker, no expansion on Enter when the line has a syntax error,
 quoted words, erasing an abbreviation that is restricted to several commands) the design chooses the other way, and says why.
 
@@ -189,7 +189,7 @@ These come from the code and from how the prompt was done.
   Fish lets a regex see quotes; mshell does not, because a quoted word on an mshell line is always a value, never something you are typing to be expanded.
 + *Command position from mshell's own structure.* mshell has no `;`, `and` or `if` before a command word.
   A command starts a line, heads a list (`[git ...]`), or follows `|` on a command line. That is the whole definition.
-+ *Small surface.* What can be written in mshell from the builtins goes in the standard library.
++ *Small surface.* What can be written in mshell from the builtins is left to the user's `init.msh`.
 
 = The design
 
@@ -221,7 +221,7 @@ type Abbr = {
     expansion: AbbrExpansion,
     position?: AbbrPosition,   # abbrCommand when missing
     cursorMarker?: str,        # put the cursor where this text is in the expansion
-    description?: str,         # shown by abbrShow and completion
+    description?: str,         # given back by abbrList, and shown by completion
 }
 ```
 
@@ -248,7 +248,7 @@ The field is named `abbr` because it is the abbreviation, the short form, paired
 *An enum for the expansion, not a union.*
 `expansion: str | (AbbrInfo -- Maybe[str])` would let the common case drop `abbrText`.
 The enum is preferred anyway: it is clearer, since the member says which kind of expansion it is,
-and the standard library's `abbr` covers the common case, so it costs little.
+and a user who writes many of the common case can define a shorter word for it in `init.msh` (section 5.3), so it costs little.
 The union also does not check today. I tried it: a quotation literal that reads a field of its input, such as `(:word? just)`, is refused there with
 "'get' reads a value whose type is not known here".
 A literal whose words wait for their input type, such as `(1 +)` or `(len)`, checks against a union; a field read does not wait.
@@ -310,32 +310,22 @@ Two positions are equal when they are the same member and, for `abbrArgOf`, the 
 That comparison is the builtins'; mshell's `=` does not compare `AbbrPosition` values, since one may hold a list, so the workaround above picks the entries to keep with `match`.
 ]
 
-== Standard library
+== No standard library definitions
 
-```msh
-def abbr (str str -- )
-    word!, expansion!
-    {abbr: @word abbrWord, expansion: @expansion abbrText} abbrAdd
-end
-
-def abbrShow ( -- )
-    # One line per abbreviation: the word or regex, where it expands, and the text or <function>.
-    ...
-end
-```
-
-`abbr` is fish's `abbr NAME EXPANSION`: a word in command position, expanded to text.
-`abbrShow` is fish's `abbr --show`, for reading at the REPL.
-It does not print source to paste back, as fish's does; that existed in fish to move abbreviations out of universal variables, and mshell has none.
-Fish's `--list` is `abbrList (:abbr?) map`, and `--query` is `abbrList (:abbr? 'gco' abbrWord =) any`; neither needs a word of its own.
+#decision[
+*The builtins are the whole interface.*
+An earlier draft had `abbr` (`'s' 'git status -u' abbr`, fish's `abbr NAME EXPANSION`) and `abbrShow` (fish's `abbr --show`) in the standard library.
+They are dropped: the standard library is checked at every start, and both are one-liners over the builtins that a user who wants them can write in `init.msh`.
+Fish's `--list` is `abbrList (:abbr?) map`, and `--query` is `abbrList (:abbr? 'gco' abbrWord =) any`.
 I checked the `--query` form against a prototype.
+]
 
 == Examples
 
 ```msh
-'s'  'git status -u' abbr
-'gu' '[git add -u]? ([git status -u];) iff' abbr
-'u'  "'..' cd" abbr
+{abbr: 's' abbrWord, expansion: 'git status -u' abbrText} abbrAdd
+{abbr: 'gu' abbrWord, expansion: '[git add -u]? ([git status -u];) iff' abbrText} abbrAdd
+{abbr: 'u' abbrWord, expansion: "'..' cd" abbrText} abbrAdd
 
 # Only as an argument of git: `git co` becomes `git checkout`.
 {abbr: 'co' abbrWord, expansion: 'checkout' abbrText, position: ['git'] abbrArgOf} abbrAdd
@@ -408,7 +398,7 @@ The applying abbreviations are tried from the newest to the oldest:
 - `abbrText s`: the word is replaced with `s`. Done.
 - `abbrFunc q`: `q` is run on an `AbbrInfo`. `just s` replaces the word with `s`, and that is all.
   `none` declines, and the next applying abbreviation is tried, as in fish.
-  If `q` fails, takes too long or is interrupted, the word is left as it is, the key is inserted, and nothing else is tried (section 6.6).
+  If `q` fails or takes too long, the word is left as it is, the key is inserted, and nothing else is tried (section 6.6).
 
 At most one word is expanded per key, and the expansion is not expanded again.
 
@@ -468,12 +458,20 @@ This differs from fish, which keeps the trigger; zsh-abbr and xonsh drop it.
 A quotation is run as the prompt quotation is, by the same code in `Prompt.go`:
 
 - on its own stack, so it cannot change the values on yours;
-- stopped after 1 second, or by Ctrl-C, together with any command it runs.
+- stopped after 1 second, together with any command it runs.
   This is its own limit, shorter than the prompt's 3 seconds, since the user is waiting for a key to appear;
 - when it fails or is stopped, the word stays, the key is inserted, and the error is shown below the command line, where completion messages go.
   The same error is not shown again while it keeps failing the same way.
 
 A quotation can run commands, such as `git branch`, but it runs while the user waits on a keystroke, so it should be quick.
+
+#decision[
+*Only the time limit stops a quotation; Ctrl-C does not.*
+The prompt also stops on Ctrl-C, which needs the terminal in its normal mode and the shell registered for the interrupt signal.
+Registering and unregistering costs about 77 µs, measured: 80% of running a short quotation.
+An abbreviation should be fast, and a quotation that runs away is stopped by the limit in at most a second, so the terminal stays raw while it runs,
+and a Ctrl-C typed meanwhile is read as a key after it ends.
+]
 
 == Painting
 
@@ -506,7 +504,7 @@ Fish's dropped `--quiet` (keep the short form in history) is not adopted: histor
   columns: (auto, 1fr),
   inset: 4pt,
   table.header([*fish*], [*mshell*]),
-  [`abbr NAME EXP`, `abbr --add`], [`'NAME' 'EXP' abbr`, or `{abbr: 'NAME' abbrWord, ...} abbrAdd`],
+  [`abbr NAME EXP`, `abbr --add`], [`{abbr: 'NAME' abbrWord, expansion: 'EXP' abbrText} abbrAdd`],
   [`--position command`], [`abbrCommand`, the default],
   [`--position anywhere`], [`abbrAnywhere`],
   [`--command CMD`...], [`['CMD' ...] abbrArgOf`],
@@ -518,7 +516,7 @@ Fish's dropped `--quiet` (keep the short form in history) is not adopted: histor
   [`--rename OLD NEW`], [`'OLD' abbrWord 'NEW' abbrWord abbrRename`],
   [`--list`], [`abbrList (:abbr?) map`],
   [`--query NAME`], [a test on `abbrList`],
-  [`--show`], [`abbrShow`, readable rather than re-runnable],
+  [`--show`], [Not adopted; `abbrList` gives the records (section 5.3)],
   [Space `; | & > < )` triggers], [Space `| ; < > ] )`; there is no `&` operator in mshell's command lines],
   [Enter expands the word at the cursor], [The same, before the line is checked],
   [Ctrl-Space], [The same, as today],
@@ -530,23 +528,28 @@ Fish's dropped `--quiet` (keep the short form in history) is not adopted: histor
 
 = Moving the current table
 
-Delete `aliases` from `Main.go` and put this in `init.msh`:
+Delete `aliases` from `Main.go` and put this in `init.msh`, with a definition of its own for the common case:
 
 ```msh
-'s'  'git status -u' abbr
-'v'  'nvim' abbr
-'mk' 'mkdir' abbr
-'ls' 'eza -l' abbr
-'gi' 'nvim .gitignore' abbr
-'a'  'git add' abbr
-'d'  'git diff -w' abbr
-'dc' 'git diff -w --cached' abbr
-'c'  'git commit' abbr
-'p'  'git push' abbr
-'u'  "'..' cd" abbr
-'gu' '[git add -u]? ([git status -u];) iff' abbr
-'ga' '[git add -A]? ([git status -u];) iff' abbr
-'fp' 'git fetch --prune' abbr
+def cmdAbbr (str str -- )
+    word!, expansion!
+    {abbr: @word abbrWord, expansion: @expansion abbrText} abbrAdd
+end
+
+'s'  'git status -u' cmdAbbr
+'v'  'nvim' cmdAbbr
+'mk' 'mkdir' cmdAbbr
+'ls' 'eza -l' cmdAbbr
+'gi' 'nvim .gitignore' cmdAbbr
+'a'  'git add' cmdAbbr
+'d'  'git diff -w' cmdAbbr
+'dc' 'git diff -w --cached' cmdAbbr
+'c'  'git commit' cmdAbbr
+'p'  'git push' cmdAbbr
+'u'  "'..' cd" cmdAbbr
+'gu' '[git add -u]? ([git status -u];) iff' cmdAbbr
+'ga' '[git add -A]? ([git status -u];) iff' cmdAbbr
+'fp' 'git fetch --prune' cmdAbbr
 ```
 
 What changes for these: they expand only in command position, not after `echo`; never in a string; also on `]`, `|`, `;`, `<`, `>`, `)`; and on Enter with the cursor anywhere in the word.
@@ -557,11 +560,10 @@ The shell ships with no abbreviations (fish issue \#9462 asks for defaults; that
 + *Types.* Add the declarations to the built-in declarations (`builtinDeclSource` in `Prompt.go`, or a new `Abbr.go` whose source is joined to it).
 + *State.* `EvalState` gets an ordered list of abbreviations with their compiled regexes, next to `PromptQuote`.
 + *Builtins.* `abbrAdd`, `abbrErase`, `abbrRename` and `abbrList` in `Evaluator.go`, in `BuiltInList.go`, and their signatures in `TypeCoreBuiltins.go`, which must match what the runtime accepts exactly.
-+ *Standard library.* `abbr` and `abbrShow` in `lib/std.msh`.
 + *Finding the word.* A function in `Abbr.go` that takes the line, the cursor and a test for "is a program", and returns the word's range, whether it may be tried, its position and its command.
   It has no terminal state, so it is tested with a table of lines and cursors.
 + *Expanding.* One function that the Space, separator and Enter handlers call, replacing the two copies in `Main.go`.
-  It runs quotations through the prompt's runner (`evalCancel`, killing commands it runs), with its own 1 second limit beside `promptTimeout`.
+  It runs quotations through the prompt's runner (`evalCancel`, killing commands it runs), with its own 1 second limit beside `promptTimeout`, and without the prompt's Ctrl-C handling (section 6.6).
 + *Completion* in the completion code. Painting is a separate change (section 6.7).
 + *Tests.*
   - Go: the word and position table (start, list heads, nested lists, `|` on command and code lines, strings, paths, comments, `!!`, `..`, mid-line cursor, Enter in the middle of a word, a no-break space, a combining mark after `[`, an `abbrWord` with an accent); precedence and `none` falling through; the cursor marker with each trigger.

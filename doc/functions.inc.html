@@ -498,8 +498,6 @@ Each cipher both hides the data and detects any change to it.
         <tr> <td><code id="func-abbrErase">abbrErase</code></td> <td>Remove every abbreviation with this <code>abbr</code>. One that does not exist is not an error. See <a href="getting-started.html#getting-started-abbreviations">Abbreviations</a>.</td> <td><code>(AbbrMatch -- )</code></td> </tr>
         <tr> <td><code id="func-abbrRename">abbrRename</code></td> <td>Give every abbreviation with the first <code>abbr</code> the second, replacing any with the second <code>abbr</code> and an equal position. See <a href="getting-started.html#getting-started-abbreviations">Abbreviations</a>.</td> <td><code>(AbbrMatch:old AbbrMatch:new -- )</code></td> </tr>
         <tr> <td><code id="func-abbrList">abbrList</code></td> <td>Every abbreviation, oldest first. <code>position</code> is always present. See <a href="getting-started.html#getting-started-abbreviations">Abbreviations</a>.</td> <td><code>( -- [Abbr])</code></td> </tr>
-        <tr> <td><code id="func-abbr">abbr</code></td> <td>Add an abbreviation that expands a word in command position to text: <code>'s' 'git status -u' abbr</code>. See <a href="getting-started.html#getting-started-abbreviations">Abbreviations</a>.</td> <td><code>(str:word str:expansion -- )</code></td> </tr>
-        <tr> <td><code id="func-abbrShow">abbrShow</code></td> <td>Print every abbreviation, one per line. See <a href="getting-started.html#getting-started-abbreviations">Abbreviations</a>.</td> <td><code>( -- )</code></td> </tr>
     </tbody>
 </table>
 

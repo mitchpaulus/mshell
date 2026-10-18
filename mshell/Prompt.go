@@ -473,7 +473,10 @@ func (state *TermState) userPrompt() (promptRender, bool) {
 		return promptRender{}, false
 	}
 	stack := MShellStack{state.promptInfo()}
-	run := state.runUserQuote(quote, &stack, state.context, promptTimeout)
+	cancel := newEvalCancel()
+	stopInterrupts := watchInterrupts(cancel)
+	run := state.runUserQuote(quote, &stack, state.context, promptTimeout, cancel)
+	stopInterrupts()
 
 	// A quote that finished with its list is shown, even if the time ran
 	// out as it finished.
@@ -519,16 +522,28 @@ type userQuoteRun struct {
 }
 
 // runUserQuote runs quote on stack, and stops it, together with any
-// command it runs, after timeout or on Ctrl-C. The terminal must be in its
-// normal mode, so Ctrl-C arrives as an interrupt.
-func (state *TermState) runUserQuote(quote *MShellQuotation, stack *MShellStack, context ExecuteContext, timeout time.Duration) userQuoteRun {
+// command it runs, after timeout or when cancel is requested.
+func (state *TermState) runUserQuote(quote *MShellQuotation, stack *MShellStack, context ExecuteContext, timeout time.Duration, cancel *evalCancel) userQuoteRun {
 	ev := &state.evalState
-	cancel := newEvalCancel()
 	var timedOut atomic.Bool
 	timer := time.AfterFunc(timeout, func() {
 		timedOut.Store(true)
 		cancel.request()
 	})
+
+	var errOut bytes.Buffer
+	ev.cancel, ev.failOut = cancel, &errOut
+	result, err := ev.EvaluateQuote(quote, stack, context, state.stdLibDefs)
+	ev.cancel, ev.failOut = nil, nil
+	timer.Stop()
+	return userQuoteRun{result: result, err: err, timedOut: timedOut.Load(), cancelled: cancel.requested.Load(), errOut: errOut.String()}
+}
+
+// watchInterrupts requests cancel on Ctrl-C until the function it
+// returns is called. The terminal must be in its normal mode, so Ctrl-C
+// arrives as an interrupt. Registering for the signal takes tens of
+// microseconds, too long for a key press.
+func watchInterrupts(cancel *evalCancel) func() {
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
 	finished := make(chan struct{})
@@ -539,15 +554,10 @@ func (state *TermState) runUserQuote(quote *MShellQuotation, stack *MShellStack,
 		case <-finished:
 		}
 	}()
-
-	var errOut bytes.Buffer
-	ev.cancel, ev.failOut = cancel, &errOut
-	result, err := ev.EvaluateQuote(quote, stack, context, state.stdLibDefs)
-	ev.cancel, ev.failOut = nil, nil
-	close(finished)
-	signal.Stop(interrupts)
-	timer.Stop()
-	return userQuoteRun{result: result, err: err, timedOut: timedOut.Load(), cancelled: cancel.requested.Load(), errOut: errOut.String()}
+	return func() {
+		close(finished)
+		signal.Stop(interrupts)
+	}
 }
 
 // failure says why a quote that did not succeed stopped. what names the

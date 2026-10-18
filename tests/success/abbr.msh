@@ -1,29 +1,59 @@
 # The abbreviation builtins in a script: adding, replacing, renaming,
 # erasing and listing. A script never expands them.
+
+# One line per abbreviation, oldest first.
+def show ( -- )
+    abbrList (
+        a!
+        @a :abbr? match
+            abbrWord w : @w,
+            abbrRegex r : $"regex {@r}",
+        end name!
+        @a :position? match
+            abbrCommand : "",
+            abbrAnywhere : " (anywhere)",
+            abbrArgOf cs : $" (after {@cs ", " join})",
+        end where!
+        @a :expansion? match
+            abbrText t : @t,
+            abbrFunc _ : "<function>",
+        end text!
+        @a :cursorMarker match
+            just m : $" (cursor at {@m})",
+            none : "",
+        end cursor!
+        @a :description match
+            just d : $"  # {@d}",
+            none : "",
+        end desc!
+        $"{@name}{@where}: {@text}{@cursor}{@desc}" wl
+    ) each
+end
+
 def upDirs (AbbrInfo -- Maybe[str])
     :word? len 1 - n!
     '..' @n repeat '/' join up!
     $"'{@up}' cd" just
 end
 
-'s' 'git status -u' abbr
+{abbr: 's' abbrWord, expansion: 'git status -u' abbrText} abbrAdd
 {abbr: 'co' abbrWord, expansion: 'checkout' abbrText, position: ['git' 'hg'] abbrArgOf, description: 'git checkout'} abbrAdd
 {abbr: 'gcm' abbrWord, expansion: "git commit -m '%'" abbrText, cursorMarker: '%'} abbrAdd
 {abbr: '\.\.+' abbrRegex, expansion: (upDirs) abbrFunc} abbrAdd
 {abbr: 'l' abbrWord, expansion: 'ls -alh' abbrText} abbrAdd
 {abbr: 'l' abbrWord, expansion: 'log' abbrText, position: ['jj'] abbrArgOf} abbrAdd
-abbrShow
+show
 
 "--- Same abbr and position: replaced, and now the newest." wl
-'s' 'git status' abbr
-abbrShow
+{abbr: 's' abbrWord, expansion: 'git status' abbrText} abbrAdd
+show
 
 "--- Rename and erase." wl
 'co' abbrWord 'ck' abbrWord abbrRename
 'l' abbrWord abbrErase
 'missing' abbrWord abbrErase
 'missing' abbrWord 'other' abbrWord abbrRename
-abbrShow
+show
 
 "--- Values that can never expand are added, not errors." wl
 {abbr: 'two words' abbrWord, expansion: 'x' abbrText} abbrAdd

@@ -614,11 +614,9 @@ func (state *TermState) runAbbrFunc(e *abbrEntry, word string, site abbrSite) (s
 	context := state.context
 	context.StandardOutput = &out
 	context.StandardError = &out
-	state.leaveRawMode()
-	run := state.runUserQuote(e.fn, &stack, context, abbrTimeout)
-	if err := state.enterRawMode(); err != nil {
-		state.Logf("Error setting terminal to raw mode after an abbreviation: %s\n", err)
-	}
+	// Only the time limit stops the quote. The terminal stays raw, so
+	// Ctrl-C is a key, read after the quote ends.
+	run := state.runUserQuote(e.fn, &stack, context, abbrTimeout, newEvalCancel())
 
 	what := "The quote of abbreviation " + e.describe()
 	var problem string

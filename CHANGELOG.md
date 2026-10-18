@@ -58,14 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Completion definitions can return a dictionary instead of a list, to choose what Tab offers:
   `values`, files matching glob patterns (`files`), preferred files with a fallback to the rest (`preferredFiles`), directories only (`dirs`), or executables on the path (`binaries`).
 - `\{` and `\}` escapes in double quoted strings and format strings, for literal braces.
-- Abbreviations, set in `init.msh`, expand a word as it is typed in the interactive shell: `'s' 'git status -u' abbr`.
+- Abbreviations, set in `init.msh`, expand a word as it is typed in the interactive shell: `{abbr: 's' abbrWord, expansion: 'git status -u' abbrText} abbrAdd`.
   Space, Enter and `| ; < > ] )` expand the word at the cursor; Ctrl-Space inserts a space without expanding.
   An abbreviation can match a word or a regular expression, expand in command position, anywhere, or as an argument of given commands,
   compute its text with a quotation, and place the cursor at a marker.
   Words in strings, paths and comments never expand.
 - Functions for abbreviations
   - `abbrAdd`, `abbrErase`, `abbrRename` and `abbrList` manage them.
-  - `abbr` adds the common case, and `abbrShow` prints them.
 
 ### Changed
 
