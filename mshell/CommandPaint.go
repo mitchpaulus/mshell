@@ -599,6 +599,7 @@ func (state *TermState) currentCompletions() ([]string, int) {
 // are joined with hard breaks, which resolve to nothing.
 func (state *TermState) appendCompletionMisses(misses []string, columns Cells) []string {
 	matches, _ := state.currentCompletions()
+	if len(matches) == 0 { matches = state.abbrMessageLines() }
 	if len(matches) == 0 { return misses }
 	state.trailerSource = state.trailerSource[:0]
 	for _, match := range matches {
@@ -614,7 +615,13 @@ func (state *TermState) appendCompletionMisses(misses []string, columns Cells) [
 
 func (state *TermState) completionTrailerLines(availableRows int, hidden bool, columns Cells) ([]string, []highlightRange) {
 	matches, highlight := state.currentCompletions()
-	if hidden || availableRows <= 0 || len(matches) == 0 { return nil, nil }
+	if hidden || availableRows <= 0 { return nil, nil }
+	if len(matches) == 0 {
+		// Without completions, a message about an abbreviation's quote.
+		lines := state.abbrMessageLines()
+		lines = lines[:min(len(lines), availableRows)]
+		return lines, make([]highlightRange, len(lines))
+	}
 	return completionDisplayRowsPlain(matches, highlight, min(tabCompletionColumnLimit, availableRows), availableRows, int(columns))
 }
 

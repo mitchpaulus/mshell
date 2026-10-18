@@ -172,16 +172,14 @@ func TestCompletionCyclesPreserveJoinedSuffix(t *testing.T) {
 	}
 }
 
-func TestAliasReplacementPreservesSuffix(t *testing.T) {
-	oldAliases := aliases
-	defer func() { aliases = oldAliases }()
-	aliases = map[string]string{"x": "ééé"}
+func TestAbbrReplacementPreservesSuffix(t *testing.T) {
 	state := TermState{currentCommand: "世 x suffix", index: 5}
+	state.evalState.Abbrs = []*abbrEntry{{word: "x", text: "ééé", pos: abbrPosAnywhere}}
 	if _, err := state.HandleToken(AsciiToken{Char: ' '}); err != nil {
 		t.Fatal(err)
 	}
 	if state.currentCommand != "世 ééé  suffix" || state.index != 11 {
-		t.Fatalf("alias replacement: %q at %d", state.currentCommand, state.index)
+		t.Fatalf("abbreviation replacement: %q at %d", state.currentCommand, state.index)
 	}
 	checkEditingCursor(t, &state)
 }

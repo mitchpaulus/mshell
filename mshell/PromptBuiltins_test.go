@@ -98,6 +98,11 @@ func TestPromptTablesCoverBuiltinEnums(t *testing.T) {
 		"PromptItem": nil,
 		// Not a prompt enum; TestCipherNewCoversCipher checks it.
 		"Cipher": nil,
+		// The abbreviation enums; parseAbbr reads their members, which
+		// TestAbbrBuiltins and TestAbbrExpansion use.
+		"AbbrMatch":     nil,
+		"AbbrPosition":  nil,
+		"AbbrExpansion": nil,
 	}
 	enums := builtinEnums(t)
 	for name, d := range enums {

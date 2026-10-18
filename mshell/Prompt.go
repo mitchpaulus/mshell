@@ -18,8 +18,9 @@ import (
 // Text items are sanitized and style items take no cells, so the shell
 // lays the prompt out exactly, as it does command text.
 
-// builtinDeclSource declares the types of the prompt builtins, and the
-// Cipher that encrypt and decrypt take (Crypto.go). They are
+// builtinDeclSource declares the types of the prompt builtins, the
+// Cipher that encrypt and decrypt take (Crypto.go), and the types of the
+// abbreviation builtins (Abbr.go). They are
 // part of the binary: the type checker and the runtime declare them before
 // any file, and no file can declare their names again.
 const builtinDeclSource = `
@@ -62,6 +63,16 @@ end
 enum Cipher = cipherAesGcm | cipherChaCha20Poly1305 | cipherXChaCha20Poly1305 end
 
 type PromptInfo = {stackDepth: int, stackTypes: [str], lastLineOk: bool, lastExitCode: Maybe[int], lastDurationMs: int}
+
+enum AbbrMatch = abbrWord str | abbrRegex str end
+
+enum AbbrPosition = abbrCommand | abbrAnywhere | abbrArgOf [str] end
+
+type AbbrInfo = {word: str, command: Maybe[str], line: str}
+
+enum AbbrExpansion = abbrText str | abbrFunc (AbbrInfo -- Maybe[str]) end
+
+type Abbr = {abbr: AbbrMatch, expansion: AbbrExpansion, position?: AbbrPosition, cursorMarker?: str, description?: str}
 `
 
 // builtinDeclFile is the file the built-in declarations' tokens name.
@@ -462,10 +473,59 @@ func (state *TermState) userPrompt() (promptRender, bool) {
 		return promptRender{}, false
 	}
 	stack := MShellStack{state.promptInfo()}
+	run := state.runUserQuote(quote, &stack, state.context, promptTimeout)
 
+	// A quote that finished with its list is shown, even if the time ran
+	// out as it finished.
+	var problem string
+	var render promptRender
+	switch {
+	case run.err != nil:
+		problem = run.err.Error()
+	case run.result.ExitCalled:
+		problem = "The prompt called 'exit'; that does not end the shell.\n"
+	case run.result.Success && len(stack) == 1:
+		var err error
+		render, err = renderPrompt(stack[0])
+		if err != nil {
+			problem = err.Error() + ".\n"
+		}
+	case run.result.Success:
+		problem = fmt.Sprintf("The prompt must leave one list on the stack, and left %d values.\n", len(stack))
+	default:
+		problem = run.failure("The prompt", promptTimeout)
+	}
+	if problem != "" {
+		if problem != state.promptProblem {
+			fmt.Fprint(os.Stderr, terminalSafeText(problem, true))
+			fmt.Fprintln(os.Stderr, "Showing the built-in prompt.")
+		}
+		state.promptProblem = problem
+		return promptRender{}, false
+	}
+	state.promptProblem = ""
+	return render, true
+}
+
+// userQuoteRun is how a quote the init file registered ended, when the
+// shell ran it.
+type userQuoteRun struct {
+	result    EvalResult
+	err       error
+	timedOut  bool
+	cancelled bool
+	// errOut is what the quote printed as it failed.
+	errOut string
+}
+
+// runUserQuote runs quote on stack, and stops it, together with any
+// command it runs, after timeout or on Ctrl-C. The terminal must be in its
+// normal mode, so Ctrl-C arrives as an interrupt.
+func (state *TermState) runUserQuote(quote *MShellQuotation, stack *MShellStack, context ExecuteContext, timeout time.Duration) userQuoteRun {
+	ev := &state.evalState
 	cancel := newEvalCancel()
 	var timedOut atomic.Bool
-	timer := time.AfterFunc(promptTimeout, func() {
+	timer := time.AfterFunc(timeout, func() {
 		timedOut.Store(true)
 		cancel.request()
 	})
@@ -482,49 +542,36 @@ func (state *TermState) userPrompt() (promptRender, bool) {
 
 	var errOut bytes.Buffer
 	ev.cancel, ev.failOut = cancel, &errOut
-	result, err := ev.EvaluateQuote(quote, &stack, state.context, state.stdLibDefs)
+	result, err := ev.EvaluateQuote(quote, stack, context, state.stdLibDefs)
 	ev.cancel, ev.failOut = nil, nil
 	close(finished)
 	signal.Stop(interrupts)
 	timer.Stop()
+	return userQuoteRun{result: result, err: err, timedOut: timedOut.Load(), cancelled: cancel.requested.Load(), errOut: errOut.String()}
+}
 
-	// A quote that finished with its list is shown, even if the time ran
-	// out as it finished.
-	var problem string
-	var render promptRender
+// failure says why a quote that did not succeed stopped. what names the
+// quote, starting a sentence.
+func (run userQuoteRun) failure(what string, timeout time.Duration) string {
 	switch {
-	case err != nil:
-		problem = err.Error()
-	case result.ExitCalled:
-		problem = "The prompt called 'exit'; that does not end the shell.\n"
-	case result.Success && len(stack) == 1:
-		render, err = renderPrompt(stack[0])
-		if err != nil {
-			problem = err.Error() + ".\n"
-		}
-	case result.Success:
-		problem = fmt.Sprintf("The prompt must leave one list on the stack, and left %d values.\n", len(stack))
-	case timedOut.Load():
-		problem = fmt.Sprintf("The prompt took longer than %d seconds.\n", int(promptTimeout/time.Second))
-	case cancel.requested.Load():
-		problem = "The prompt was interrupted.\n"
+	case run.timedOut:
+		return fmt.Sprintf("%s took longer than %s.\n", what, timeoutText(timeout))
+	case run.cancelled:
+		return what + " was interrupted.\n"
+	case run.errOut != "":
+		return run.errOut
 	default:
-		problem = errOut.String()
-		if problem == "" {
-			// A command run with '!' stops the quote without a message.
-			problem = fmt.Sprintf("The prompt stopped with exit code %d.\n", result.ExitCode)
-		}
+		// A command run with '!' stops the quote without a message.
+		return fmt.Sprintf("%s stopped with exit code %d.\n", what, run.result.ExitCode)
 	}
-	if problem != "" {
-		if problem != state.promptProblem {
-			fmt.Fprint(os.Stderr, terminalSafeText(problem, true))
-			fmt.Fprintln(os.Stderr, "Showing the built-in prompt.")
-		}
-		state.promptProblem = problem
-		return promptRender{}, false
+}
+
+// timeoutText is a time limit in words: "3 seconds", "1 second".
+func timeoutText(d time.Duration) string {
+	if n := int(d / time.Second); n != 1 {
+		return fmt.Sprintf("%d seconds", n)
 	}
-	state.promptProblem = ""
-	return render, true
+	return "1 second"
 }
 
 // writeWindowTitle sets the terminal's window title with OSC 2. title is

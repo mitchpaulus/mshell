@@ -1070,6 +1070,11 @@ type TermState struct {
 	promptStyles   []promptStyle // Escape sequences within promptText.
 	// promptProblem is the last error the prompt quote gave, printed once.
 	promptProblem string
+	// abbrProblem is the last error an abbreviation's quote gave, and
+	// abbrMessage the one shown below the command line until the next key
+	// (Abbr.go).
+	abbrProblem string
+	abbrMessage string
 	// What the prompt quote is told about the last line that was not empty
 	// (Prompt.go): whether it ran without an error, the exit code of the
 	// last process it ran, and how long it took.
@@ -2712,7 +2717,6 @@ func (state *TermState) ClearScreen() {
 	// state.promptRow = state.numPromptLines
 }
 
-var aliases map[string]string
 var history []string
 
 var historyToSave []HistoryItem
@@ -3538,23 +3542,22 @@ func (state *TermState) InteractiveMode() error {
 
 	state.stdInState = stdInState
 
-	// TODO: Read from file? Something like a snippet engine?
-	aliases = map[string]string{
-		"s":  "git status -u",
-		"v":  "nvim",
-		"mk": "mkdir",
-		"ls": "eza -l",
-		"gi": "nvim .gitignore",
-		"a":  "git add",
-		"d":  "git diff -w",
-		"dc": "git diff -w --cached",
-		"c":  "git commit",
-		"p":  "git push",
-		"u":  "'..' cd",
-		"gu": "[git add -u]? ([git status -u];) iff",
-		"ga": "[git add -A]? ([git status -u];) iff",
-		"fp": "git fetch --prune",
-	}
+	// The abbreviations that were built in, until they move to init.msh
+	// (abbrAdd, ai/abbr.typ):
+	// "s":  "git status -u",
+	// "v":  "nvim",
+	// "mk": "mkdir",
+	// "ls": "eza -l",
+	// "gi": "nvim .gitignore",
+	// "a":  "git add",
+	// "d":  "git diff -w",
+	// "dc": "git diff -w --cached",
+	// "c":  "git commit",
+	// "p":  "git push",
+	// "u":  "'..' cd",
+	// "gu": "[git add -u]? ([git status -u];) iff",
+	// "ga": "[git add -A]? ([git status -u];) iff",
+	// "fp": "git fetch --prune",
 
 	// Save the cooked state once, then apply the explicit raw definition.
 	if err := state.saveTerminalState(); err != nil {
@@ -3596,6 +3599,13 @@ func (state *TermState) InteractiveMode() error {
 				fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
 			}
 		}
+		if err := state.enterRawMode(); err != nil {
+			return err
+		}
+	}
+	if len(state.evalState.AbbrWarnings) > 0 {
+		state.leaveRawMode()
+		state.evalState.printAbbrWarnings()
 		if err := state.enterRawMode(); err != nil {
 			return err
 		}
@@ -3666,6 +3676,8 @@ func (state *TermState) InteractiveMode() error {
 		}
 
 
+		// A message about an abbreviation's quote lasts until the next key.
+		state.abbrMessage = ""
 		end, err = state.HandleToken(token)
 		if err != nil {
 			return err
@@ -3851,31 +3863,6 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	// Add command to history
 	currentCommandStr := string(state.currentCommand)
 
-	if state.index == state.commandEnd() {
-		// Walk back to last whitespace, check if final element is an alias.
-		i := state.index
-		for {
-			if i == 0 || state.currentCommand[i-1] == ' ' || state.currentCommand[i-1] == '[' {
-				break
-			}
-			i--
-		}
-
-		lastWord := string(state.currentCommand[i:state.index])
-		alias, aliasSet := aliases[lastWord]
-		if aliasSet {
-			state.replaceText(alias, i, state.index)
-			currentCommandStr = string(state.currentCommand)
-		}
-
-		// // Update the UI.
-		// state.clearToPrompt()
-		// fmt.Fprintf(os.Stdout, "%s", currentCommandStr)
-		// state.currentCommand = SourceText(currentCommandStr)
-		// // Move cursor to end
-		// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.legacyCursorColumn()+1)
-	}
-
 	// Park the cursor after the last byte so the final echo leaves the
 	// terminal cursor on the command's last painted row. The newline below
 	// moves down from wherever the cursor is; submitting from an earlier row
@@ -3883,7 +3870,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	// after it.
 	state.index = state.commandEnd()
 
-	// This render should handle stored tokens on aliases, cleared out history completion/tab completion.
+	// This render clears out history completion and tab completion.
 	if err := state.refreshInteractiveDisplay(false); err != nil {
 		state.Logf("Error painting submitted command: %s\n", err)
 	}
@@ -3916,6 +3903,11 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	state.leaveRawMode()
 	state.resetCursorShape()
 	fmt.Fprintln(os.Stdout)
+	// An abbreviation's quote that failed on Enter left the word as it was.
+	if state.abbrMessage != "" {
+		fmt.Fprint(os.Stderr, terminalSafeText(state.abbrMessage, true))
+		state.abbrMessage = ""
+	}
 
 	p := state.p
 	l := state.l
@@ -4040,6 +4032,7 @@ ParseError:
 		state.initCallStackItem.MShellParseItem = parsed.Items[0]
 		state.evalState.ReturnedAtTop = false
 		result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem)
+		state.evalState.printAbbrWarnings()
 
 		if result.ExitCalled {
 			return true, result.ExitCode
@@ -4436,12 +4429,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						return shouldExit, nil
 					} else {
 						// Push both tokens
-						state.PushChars([]rune{';'})
+						state.typeAbbrTrigger(';')
 						state.HandleToken(token)
 					}
 				} else {
 					// Push just the semicolon
-					state.PushChars([]rune{';'})
+					state.typeAbbrTrigger(';')
 					return state.HandleToken(token)
 				}
 			} else if t.Char == 'j' {
@@ -4508,6 +4501,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					state.PushChars([]rune{'q'})
 					return state.HandleToken(token)
 				}
+			} else if isAbbrTrigger(rune(t.Char)) {
+				state.typeAbbrTrigger(rune(t.Char))
 			} else {
 				state.PushChars([]rune{rune(t.Char)})
 				// state.currentCommand = append(state.currentCommand, rune(t.Char))
@@ -4524,30 +4519,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			// state.index++
 		} else if t.Char == 0 { // Ctrl-Space
 			state.PushChars([]rune{' '})
-		} else if t.Char == 32 {
-			// Space
-			// Check for aliases. Split current command by whitespace, and check if last word is in aliases.
-			// If it is, replace last word with alias value.
-
-			i := state.index - 1
-			if len(state.currentCommand) > 0 {
-				for {
-					if i < 0 || state.currentCommand[i] == ' ' || state.currentCommand[i] == '[' {
-						break
-					}
-					i--
-				}
-			}
-
-			lastWord := string(state.currentCommand[i+1 : state.index])
-
-			aliasValue, aliasSet := aliases[lastWord]
-			if aliasSet {
-				state.replaceText(aliasValue + " ", i + 1, state.index)
-				state.Logf("Alias: %s -> %s\n", lastWord, aliasValue)
-			} else {
-				state.PushChars([]rune{rune(t.Char)})
-			}
+		} else if t.Char == 32 { // Space
+			state.typeAbbrTrigger(' ')
 		} else if t.Char == 1 { // Ctrl-A
 			// Move cursor to beginning of line.
 			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
@@ -4651,6 +4624,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				Variables:   variables,
 				BuiltIns:    BuiltInList,
 				Definitions: definitions,
+				Abbreviations: state.evalState.commandAbbrWords(),
 			}
 
 			prevTokenType := EOF
@@ -4752,7 +4726,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.tabCompletions1 = state.tabCompletions1[:0]
 				return false, nil
 			}
-			// Add command to history
+			state.expandAbbrOnEnter()
 			shouldExit, _ := state.ExecuteCurrentCommand()
 			if shouldExit {
 				return true, nil

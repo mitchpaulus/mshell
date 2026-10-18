@@ -453,6 +453,44 @@ def parseHex (str -- Maybe[int]) 16 fromBase end
 def parseOctal (str -- Maybe[int]) 8 fromBase end
 def parseBin (str -- Maybe[int]) 2 fromBase end
 
+# Abbreviations. `'s' 'git status -u' abbr` expands `s` in command position
+# to `git status -u`; abbrAdd takes the other options.
+def abbr (str str -- )
+    word!, expansion!
+    {abbr: @word abbrWord, expansion: @expansion abbrText} abbrAdd
+end
+
+# One line per abbreviation, oldest first: its word or regex, where it
+# expands when that is not command position, its text or <function>, its
+# cursor marker and its description.
+def abbrShow ( -- )
+    abbrList (
+        a!
+        @a :abbr? match
+            abbrWord w : @w,
+            abbrRegex r : $"regex {@r}",
+        end name!
+        @a :position? match
+            abbrCommand : "",
+            abbrAnywhere : " (anywhere)",
+            abbrArgOf cs : $" (after {@cs ", " join})",
+        end where!
+        @a :expansion? match
+            abbrText t : @t,
+            abbrFunc _ : "<function>",
+        end text!
+        @a :cursorMarker match
+            just m : $" (cursor at {@m})",
+            none : "",
+        end cursor!
+        @a :description match
+            just d : $"  # {@d}",
+            none : "",
+        end desc!
+        $"{@name}{@where}: {@text}{@cursor}{@desc}" wl
+    ) each
+end
+
 # COMPLETIONS {{{
 # msh {{{
 def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])

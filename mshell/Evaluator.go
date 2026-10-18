@@ -527,6 +527,11 @@ type EvalState struct {
 	// member setCursorShape chose, or "".
 	PromptQuote *MShellQuotation
 	CursorShape string
+	// Abbrs are the abbreviations abbrAdd added, oldest first (Abbr.go),
+	// and AbbrWarnings the lines about ones that never expand that the
+	// interactive shell has not printed yet. A script never prints them.
+	Abbrs        []*abbrEntry
+	AbbrWarnings []string
 	// lastExitCode is the exit code of the last process to finish, when
 	// ranProcess is set.
 	lastExitCode int
@@ -12279,6 +12284,22 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 				case "decrypt":
 					if r := state.evalDecrypt(&t, stack); r != nil {
+						return *r
+					}
+				case "abbrAdd":
+					if r := state.evalAbbrAdd(&t, stack); r != nil {
+						return *r
+					}
+				case "abbrErase":
+					if r := state.evalAbbrErase(&t, stack); r != nil {
+						return *r
+					}
+				case "abbrRename":
+					if r := state.evalAbbrRename(&t, stack); r != nil {
+						return *r
+					}
+				case "abbrList":
+					if r := state.evalAbbrList(&t, stack); r != nil {
 						return *r
 					}
 
