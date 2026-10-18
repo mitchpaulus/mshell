@@ -432,7 +432,7 @@ editing the buffer resets the prefix for the next search.
 - Ctrl-P: search backward through history by prefix
 - Ctrl-N: search forward through history by prefix
 - Ctrl-Y: accept the inline history completion
-- Ctrl-Space: insert a literal space without expanding aliases
+- Ctrl-Space: insert a literal space without expanding abbreviations
 - Alt-.: insert the last argument from history; repeat to cycle older entries
 - Tab: complete the current token; press Tab again to cycle matches and fill the input
 - Shift-Tab: cycle completion backward when matches are active
@@ -742,8 +742,9 @@ A generic cannot be a union member.
 `match` takes a union apart by kind (`int n :`, `list xs :`), binding the member's own type.
 
 `type Name = T` is an alias, interchangeable with `T`; it may be recursive through a list, dict, field, quotation or enum (`type Person = {name: str, friends: [Person]}`).
-Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {Json}`, what `parseJson` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`, `PromptInfo`, `Encrypted` (`{nonce: binary, ciphertext: binary, tag: binary}`); and `UrlEncodable` (`str | path | int | [str | path | int]`), the values `urlEncode` takes in a dict.
+Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {Json}`, what `parseJson` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`, `PromptInfo`, `Abbr`, `AbbrInfo`, `Encrypted` (`{nonce: binary, ciphertext: binary, tag: binary}`); and `UrlEncodable` (`str | path | int | [str | path | int]`), the values `urlEncode` takes in a dict.
 The interactive prompt's enums are built in: `PromptItem`, `Base16Color`, `BaseBrightness`, `TextAttribute`, `CursorShape`; so is `Cipher` (`cipherAesGcm | cipherChaCha20Poly1305 | cipherXChaCha20Poly1305`), which `encrypt` and `decrypt` take.
+The abbreviation enums are built in too: `AbbrMatch`, `AbbrPosition`, `AbbrExpansion`.
 Their names and member names (`baseRed`, `attrBold`, `resetStyle`, `cipherAesGcm`, ...) cannot be declared or defined again.
 
 ### New and stored values

@@ -239,6 +239,9 @@ type CompletionDeps struct {
 	Variables   map[string]struct{} // Variable names (without @ or !)
 	BuiltIns    map[string]struct{} // Built-in command names
 	Definitions []string            // Definition names
+	// Abbreviations are the words of the abbreviations that expand in
+	// command position.
+	Abbreviations []string
 }
 
 // GenerateCompletions produces completion matches for the given input.
@@ -297,6 +300,13 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 		binMatches := deps.Binaries.Matches(prefix)
 		for _, match := range binMatches {
 			matches = append(matches, TabMatch{TABMATCHCMD, match})
+		}
+	}
+	if binaryPosition && len(prefix) > 0 && input.LastTokenType == LITERAL {
+		for _, word := range deps.Abbreviations {
+			if strings.HasPrefix(word, prefix) {
+				matches = append(matches, TabMatch{TABMATCHCMD, word})
+			}
 		}
 	}
 

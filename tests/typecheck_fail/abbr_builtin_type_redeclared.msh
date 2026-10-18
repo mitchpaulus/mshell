@@ -1,0 +1,2 @@
+# The abbreviation types are built in, and their names are reserved.
+type Abbr = int

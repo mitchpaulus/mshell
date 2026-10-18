@@ -99,7 +99,8 @@ func (pbm *PathBinManager) Lookup(binName string) (string, bool) {
 	if pbm.found == nil {
 		pbm.found = map[string]string{}
 	}
-	pbm.found[binName] = path
+	// binName may be a word of the command line; keep a copy, not the line.
+	pbm.found[strings.Clone(binName)] = path
 	return path, path != ""
 }
 

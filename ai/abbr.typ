@@ -1,0 +1,781 @@
+// Design: user-defined abbreviations for the interactive shell.
+// Build: typst compile ai/abbr.typ
+
+#set document(title: "Abbreviations in mshell", author: "Claude (draft for Mitchell)")
+#set page(paper: "us-letter", margin: (x: 1in, y: 1in), numbering: "1")
+#set text(font: "Libertinus Serif", size: 11pt)
+#set par(justify: true, leading: 0.62em)
+#show table: set par(justify: false)
+#show table: set text(size: 9.5pt)
+#set heading(numbering: "1.1")
+#show heading.where(level: 1): it => { v(0.8em); it; v(0.3em) }
+#show raw: set text(font: "DejaVu Sans Mono", size: 0.86em)
+#set raw(syntaxes: "msh.sublime-syntax")
+#show raw.where(block: true): it => block(
+  fill: luma(245), inset: 8pt, radius: 3pt, width: 100%, it,
+)
+
+#let callout(kind, body) = block(
+  width: 100%, inset: (left: 10pt, rest: 8pt), stroke: (left: 2pt + luma(120)),
+  fill: luma(250),
+  [*#kind.* #body],
+)
+#let decision(body) = callout("Decision", body)
+#let note(body) = callout("Note", body)
+
+#align(center)[
+  #text(size: 20pt, weight: "bold")[Abbreviations in mshell]
+  #v(0.3em)
+  #text(size: 11pt)[Design draft --- 2026-10-06, revised 2026-10-18 (twice), branch `abbr-design`]
+  #v(0.2em)
+  #text(size: 10pt, style: "italic")[Written by Claude from the code on `main` (f0704c8, rechecked at 28bc881) and a source-level
+  survey of fish 4.9, Nushell 0.116 / reedline 0.52, Elvish 0.21+, zsh-abbr 6.5 and xontrib-abbrevs.]
+]
+
+#v(1em)
+
+= Summary
+
+The interactive shell expands a short word into longer text as you type, as fish's `abbr` does.
+Today the table is hard-coded in `mshell/Main.go`.
+This design moves it into `init.msh`, typed and checked like `setPrompt`, with the features of fish 4.9's `abbr`:
+
+- a word that expands only in *command position* (the default) or *anywhere*;
+- a word that expands only as an *argument of certain commands* (fish's `--command`);
+- a word matched by a *regular expression* instead of a fixed word;
+- an expansion computed by a *quotation* at the moment it is typed (fish's `--function`);
+- a *cursor marker* in the expansion (fish's `--set-cursor`);
+- add, erase, rename and list.
+
+The user writes:
+
+```msh
+{abbr: 's' abbrWord, expansion: 'git status -u' abbrText} abbrAdd     # the common case
+{abbr: 'co' abbrWord, expansion: 'checkout' abbrText, position: ['git'] abbrArgOf} abbrAdd
+{abbr: 'gcm' abbrWord, expansion: "git commit -m '%'" abbrText, cursorMarker: '%'} abbrAdd
+{abbr: '\.\.+' abbrRegex, expansion: (upDirs) abbrFunc} abbrAdd
+```
+
+The pieces are two built-in record types and three built-in enums: what word is abbreviated, where it expands, and what it expands to;
+and four builtins (`abbrAdd`, `abbrErase`, `abbrRename`, `abbrList`). There are no standard library definitions (section 5.3).
+Where fish has a known problem (a trailing space after a cursor marker, no expansion on Enter when the line has a syntax error,
+quoted words, erasing an abbreviation that is restricted to several commands) the design chooses the other way, and says why.
+
+= What exists today
+
+`Main.go` declares `var aliases map[string]string` and fills it in `InteractiveMode` with fourteen entries
+(`s`, `v`, `mk`, `ls`, `gi`, `a`, `d`, `dc`, `c`, `p`, `u`, `gu`, `ga`, `fp`).
+It is expanded in two places:
+
+- *Space*: the word is the text back to the previous space or `[`. If it is a key, it is replaced by the value and a space.
+- *Enter*: only when the cursor is at the end of the line, the same lookup on the last word.
+
+Ctrl-Space inserts a space without expanding. History receives the expanded line.
+
+Problems with it, apart from being hard-coded:
+
++ *It expands anywhere.* `echo s` followed by Space gives `echo git status -u`. `ls` expands to `eza -l` as an argument too.
++ *It expands inside strings.* `"a s` followed by Space expands the `s`, since only spaces and `[` delimit a word.
++ *Code and commands are mixed.* `u` expands to `'..' cd` and `gu` to `[git add -u]? ([git status -u];) iff`.
+  Those are mshell code, which only makes sense at the start of the line; `s` is a command, which also makes sense at the head of a list (`[s] *`).
++ *The painter does not know about them.* While you type `s` it is shown as a plain word, not a command.
++ The feature is not in the user documentation; `doc/mshell.md` mentions only that Ctrl-Space inserts a space "without expanding aliases".
+
+= Prior art
+
+== fish 4.9
+
+Fish defines abbreviations with `abbr`, in `config.fish`.
+
+```fish
+abbr --add NAME [--position command | anywhere] [-r | --regex PATTERN] [-c | --command COMMAND]
+                [--set-cursor[=MARKER]] [--description DESC] ([-f | --function FUNCTION] | EXPANSION)
+abbr --erase [--command COMMAND]... NAME ...      abbr --rename [--command COMMAND]... OLD NEW
+abbr [--show]      abbr --list      abbr --query NAME ...
+```
+
+The behavior, read from `src/abbrs.rs`, `src/builtins/abbr.rs` and `src/reader/reader.rs`:
+
+- *Names.* A name is non-empty and has no whitespace. With `--regex`, the name only identifies the abbreviation for list, erase, rename and query.
+- *Position.* `command` (the default) is the command word of a statement:
+  the start of the line, after `;`, `|`, `&`, `&&`, `||`, `and`, `or`, `not`, `if`, `while`, inside `(...)`,
+  and after the decorators `command`, `builtin` and `exec` (4.0).
+  It is *not* after `sudo` or `env`; those are ordinary commands, so the next word is an argument.
+  `anywhere` is any token.
+- *`--command CMD`* (4.0) expands only in an argument of `CMD`, compared by the command word's raw text. It may be repeated, and it implies `anywhere`.
+  Since 4.2 the same name may exist with different command lists, and erase and rename take `--command` to say which one;
+  an entry added for `git` and `hg` cannot be erased for `hg` alone (open issue \#12568).
+- *Regex.* PCRE2, wrapped as `^(?:PATTERN)$`, so it must match the whole token.
+- *Function.* Called with the token. Exit status 0 replaces the token with the output; any other status leaves it, and the next matching abbreviation is tried.
+  It may read the command line but not change it.
+- *Cursor.* `--set-cursor` (marker `%` by default) moves the cursor to the first marker, which is deleted.
+  The trigger character is still inserted, at the end of the expansion; issue \#11228 asks for a way to avoid that trailing space.
+- *Triggers.* Space, `;`, `|`, `&`, `>`, `<` and `)` insert themselves and then expand the token before the cursor, anywhere in the line.
+  Enter expands the token that contains the cursor.
+  Ctrl-Space inserts a space without expanding, and so does Space-then-Enter, since the cursor is then no longer next to the word.
+  Tab completion and pasted text do not expand.
+- *Enter and syntax errors.* Fish checks the line before expanding; a line with a syntax error is not expanded (issue \#11710).
+- *Tokens and quotes.* Tokens come from the parser, as raw source text, so `'gco'` keeps its quotes and does not equal `gco`.
+- *Precedence.* One list in the order of definition, searched from the newest; the last added wins, whether literal or regex. One expansion per trigger.
+- *Storage.* In memory for the session, defined in `config.fish`. Before 3.6 each abbreviation was a universal variable;
+  that was dropped because "they have too much metadata to cram into a variable" (PR \#9313).
+  The same PR considered, and dropped, keeping the short form in history (`--quiet`) and expanding only on space or only on Enter (`--trigger-on`).
+- *History* gets the expanded line. *Undo* (Ctrl-Z) restores the word as one step.
+- *Highlighting*: a word in command position that matches an abbreviation is colored as a valid command, even when its function would decline (issue \#11809).
+- *Completion*: names (not regexes) are offered in command position, described as `Abbreviation: <expansion>`.
+
+== Nushell 0.113+ (reedline)
+
+Since 0.113 (May 2026) `$env.config.abbreviations` is a record of names to strings.
+Space and Enter expand the whitespace-delimited word before the cursor.
+Nushell refuses to expand inside strings and in the arguments of external commands, by asking its highlighter what the word is.
+There is no regex, function, cursor marker, position option, literal-space key, highlighting or completion of them.
+History gets the expanded line. `abbr list` lists them; there is no command to add or erase one.
+Before 0.113 the workaround was a menu bound to Ctrl-Space that looked up `alias` definitions, which only worked when the alias was the whole line.
+
+== Elvish
+
+Elvish has three maps from string to string, assigned in `rc.elv`, with no functions or regex (a regex request, \#646, was declined):
+
+- `edit:abbr` expands the moment its text has been typed, with no trigger, anywhere: `||` becomes `| less`.
+- `edit:small-word-abbr` expands when the next character is of a different kind (space, letter or digit, other).
+  So with `k` for `kubectl`, `ls -k` followed by Space gives `ls -kubectl` (\#1472).
+- `edit:command-abbr` expands a bare word in command position (start, `|`, `;`, `(`, `{`), found by a regular expression, when followed by whitespace at the end of the buffer.
+  It does not expand on Enter.
+
+Elvish has no undo in its line editor (\#636).
+
+== Others
+
+- *zsh-abbr* has "regular" (first word of the line) and "global" (anywhere) abbreviations,
+  configurable *prefixes* that do not count against the start of the line (`sudo ` by default),
+  multi-word names (`git cp`), a cursor marker that drops the trigger key when used,
+  and a "user" scope written to a file that every open session reloads.
+- *xontrib-abbrevs* (xonsh) allows a callable `(buffer, word) -> str`, and pressing Space again right after an expansion reverts it.
+
+== Comparison
+
+#table(
+  columns: (auto, 1fr, 1fr, 1fr, 1fr),
+  inset: 4pt,
+  table.header([], [*fish 4.9*], [*Nushell*], [*Elvish command-abbr*], [*This design*]),
+  [Triggers], [Space `; | & > < )`, Enter], [Space, Enter], [Whitespace at end of buffer], [Space `| ; < > ] )`, Enter],
+  [Literal space], [Ctrl-Space], [none], [none], [Ctrl-Space (exists)],
+  [Word], [parser token, raw text], [whitespace word], [regex bareword], [separator-delimited word, not in a string, path or comment],
+  [Quoted word], [does not equal the name], [no expansion], [no expansion], [no expansion],
+  [Positions], [command, anywhere, `--command`], [command, not in strings or external args], [command], [command, anywhere, argument of],
+  [Regex], [PCRE2, whole token], [no], [no], [Go `regexp`, whole word],
+  [Function], [function, status and output], [no], [no], [quotation `(AbbrInfo -- Maybe[str])`],
+  [Cursor marker], [first marker; trigger still appended], [no], [no], [first marker; a space trigger is dropped],
+  [Precedence], [last added; failing function falls through], [map key], [map key], [last added; `none` falls through],
+  [Enter on a bad line], [no expansion], [expands], [no expansion on Enter], [expands, then checks],
+  [Storage], [`config.fish`], [`$env.config`], [`rc.elv`], [`init.msh`, checked],
+  [Undo], [one step], [probably one step], [no undo], [no undo yet (section 6.9)],
+  [Highlight, complete], [yes, yes], [no, no], [no, no], [later (section 6.7), yes],
+)
+
+= Principles
+
+These come from the code and from how the prompt was done.
+
++ *Configured in `init.msh`, checked like the rest of it.* There is one configuration file, and it is fully type checked at startup.
+  A wrong quotation signature or a misspelled position is a type error before the first prompt, not a surprise at a keystroke.
+  This is fish 3.6's choice too, and for fish's reason: an abbreviation now has too much in it for a flat file or a variable.
++ *Enums for choices, records for independent settings.* The abbreviated word is a fixed word *or* a regex, so it is an enum.
+  Where it expands is one of three things, so it is an enum. What it expands to is text *or* a quotation, so it is an enum.
+  The cursor marker and the description are independent of those and of each other, so they are fields of a record.
+  A builtin taking a record follows `HttpRequest`, `ExtractOptions` and `NumFmtOptions`.
++ *Strings are data.* A word inside a string, a path or a comment never expands, whatever the abbreviation.
+  Fish lets a regex see quotes; mshell does not, because a quoted word on an mshell line is always a value, never something you are typing to be expanded.
++ *Command position from mshell's own structure.* mshell has no `;`, `and` or `if` before a command word.
+  A command starts a line, heads a list (`[git ...]`), or follows `|` on a command line. That is the whole definition.
++ *Small surface.* What can be written in mshell from the builtins is left to the user's `init.msh`.
+
+= The design
+
+== Types
+
+These are added to `builtinDeclSource` next to the prompt's types, so they are built in, and their names are reserved, as `PromptItem`'s are.
+
+```msh
+enum AbbrMatch =
+      abbrWord str       # this word, exactly
+    | abbrRegex str      # any word this regex matches in full
+end
+
+enum AbbrPosition =
+      abbrCommand        # the command word: start of line, head of a list, after | on a command line
+    | abbrAnywhere       # any word
+    | abbrArgOf [str]    # a word after one of these commands
+end
+
+enum AbbrExpansion =
+      abbrText str                         # replace the word with this text
+    | abbrFunc (AbbrInfo -- Maybe[str])    # just the replacement, or none to decline
+end
+
+type AbbrInfo = {word: str, command: Maybe[str], line: str}
+
+type Abbr = {
+    abbr: AbbrMatch,
+    expansion: AbbrExpansion,
+    position?: AbbrPosition,   # abbrCommand when missing
+    cursorMarker?: str,        # put the cursor where this text is in the expansion
+    description?: str,         # given back by abbrList, and shown by completion
+}
+```
+
+`AbbrInfo` is what a quotation is given:
+
+- `word`: the word being expanded, as typed.
+- `command`: the command the word is an argument of (section 6.4), or `none` in command position or at the top level of code.
+- `line`: the whole line as it is, before the trigger character. The quotation can read it, not change it.
+
+There is no offset of the word in the line, and nothing to tell command position from an argument at the top level of code, where `command` is `none` too.
+Fish's functions are given only the token and have not needed more.
+
+#decision[
+*`abbr` is an enum, and there is no name.*
+In fish, `NAME` does two jobs: it is the word that expands, and it identifies the abbreviation to `--erase`, `--rename`, `--list` and `--query`.
+With `--regex` it only identifies, and the pattern does the matching.
+So `name` and `regex` were not exclusive in fish; a regex abbreviation still needed a name that is never typed.
+Here the field holds what is matched, `abbrWord` or `abbrRegex`, so a regex and a word cannot both be given, and the checker says so.
+Nothing else is needed to pick out abbreviations: `abbrAdd` replaces by `abbr` and `position`, and erase and rename act on every entry with an `abbr` (section 5.2).
+The field is named `abbr` because it is the abbreviation, the short form, paired with `expansion`, the long one.
+]
+
+#decision[
+*An enum for the expansion, not a union.*
+`expansion: str | (AbbrInfo -- Maybe[str])` would let the common case drop `abbrText`.
+The enum is preferred anyway: it is clearer, since the member says which kind of expansion it is,
+and a user who writes many of the common case can define a shorter word for it in `init.msh` (section 5.3), so it costs little.
+The union also does not check today. I tried it: a quotation literal that reads a field of its input, such as `(:word? just)`, is refused there with
+"'get' reads a value whose type is not known here".
+A literal whose words wait for their input type, such as `(1 +)` or `(len)`, checks against a union; a field read does not wait.
+That is the case that matters here: an abbreviation quotation is given a record, `AbbrInfo`, and almost every one starts by reading a field of it (`:word?`).
+With the union, every such quotation written in place would need `as (AbbrInfo -- Maybe[str])` after it,
+which checks since the fix in \#361 but is longer than `abbrFunc` and must be written out each time.
+Since \#362 a union-typed def parameter gives the literal its input type, but a union-typed record field, as here, still does not.
+Only a quotation that calls a def, such as `(upDirs)`, would check without it, since the def's signature fixes the input type.
+As an enum payload, the literal is given its input type, as a def's quotation parameter gives one, so `(:word? just) abbrFunc` checks.
+The enum is kept even if the checker learns to type a literal in a union-typed field.
+]
+
+#decision[
+*Optional fields, not `Maybe`.* `position?: AbbrPosition` rather than `position: Maybe[AbbrPosition]`, so a literal writes only what it uses.
+A builtin is given a new literal, which may lack an optional key.
+A list of different literals needs `as [Abbr]`: `[{...} {...}] as [Abbr] (abbrAdd) each`. I checked that this passes.
+]
+
+== Builtins
+
+#table(
+  columns: (auto, auto, 1fr),
+  inset: 4pt,
+  table.header([*Word*], [*Signature*], [*Does*]),
+  [`abbrAdd`], [`(Abbr -- )`], [Adds an abbreviation. One with an equal `abbr` and an equal position is replaced, and the new one is the newest.],
+  [`abbrErase`], [`(AbbrMatch -- )`], [Removes every abbreviation whose `abbr` equals this, in every position. One that does not exist is not an error, as with `unsetenv`.],
+  [`abbrRename`], [`(AbbrMatch AbbrMatch -- )`], [Gives every abbreviation whose `abbr` equals the first the second instead, as if each were erased and added again: it replaces any entry with the second `abbr` and an equal position. When none has the first, nothing happens.],
+  [`abbrList`], [`( -- new [Abbr])`], [Every abbreviation, oldest first. `position` is always present; the other optional fields only when they were given.],
+)
+
+None of the four builtins fails on a value of its type.
+The builtins work in scripts too, where they only change a table nothing reads, and `init.msh` is loaded for scripts,
+so a mistake in an abbreviation must not stop every script from running.
+
+An `abbrRegex` is Go's `regexp` syntax, as `reMatch` uses, wrapped as `^(?:REGEX)$`.
+Go's `regexp` runs in time linear in the word, so no regex that compiles can hang a keystroke.
+
+`abbrAdd` adds an entry that can never expand, as it adds any other, so `abbrList` and `abbrErase` see it, but it is *inert*: it is never tried. An entry is inert when it has
+- an `abbrWord` that is empty, has white space (including Unicode white space) or a separator,
+  or starts with `#`, a quote, a backtick or `$"`, since such a word is never typed as one word outside a comment, string or path (section 6.2);
+- an `abbrRegex` that is empty or does not compile (the limits of Go's `regexp`, such as a repeat count over 1000, are compile errors);
+- an `abbrArgOf` list that is empty, or a command in it that is empty or has white space.
+
+When the shell is interactive, `abbrAdd` writes one line to stderr for an inert entry, naming its `abbr` and the reason; this covers `init.msh` at startup and the REPL.
+In a script it writes nothing.
+An empty `cursorMarker` is treated as missing, and does not make an entry inert.
+
+#note[
+*Add replaces by `abbr` and position; erase and rename act on `abbr` alone.*
+Fish 4.2 lets `l` be `ls -alh` as a command and `log` after `jj`, which means a name alone no longer picks one abbreviation,
+and erase and rename need `--command` lists that match exactly (\#12568).
+Here `abbrAdd` replaces only the entry with an equal `abbr` *and* an equal position, so `l` can have both meanings,
+and `abbrErase` and `abbrRename` act on every entry with that `abbr`.
+Erasing an abbreviation is rare, and erasing one of two that share an `abbr` rarer still, so there is no builtin for it.
+To do it: take `abbrList`, erase the `abbr`, and `abbrAdd` back the entries to keep.
+The entries added back become the newest, which matters only if two of them can apply to the same word.
+Two `abbr` values are equal when they are the same member with the same string, as enum values compare: `'l' abbrWord` and `'l' abbrRegex` are different.
+Two positions are equal when they are the same member and, for `abbrArgOf`, the same commands in the same order: `['git' 'hg']` and `['hg' 'git']` are different.
+That comparison is the builtins'; mshell's `=` does not compare `AbbrPosition` values, since one may hold a list, so the workaround above picks the entries to keep with `match`.
+]
+
+== No standard library definitions
+
+#decision[
+*The builtins are the whole interface.*
+An earlier draft had `abbr` (`'s' 'git status -u' abbr`, fish's `abbr NAME EXPANSION`) and `abbrShow` (fish's `abbr --show`) in the standard library.
+They are dropped: the standard library is checked at every start, and both are one-liners over the builtins that a user who wants them can write in `init.msh`.
+Fish's `--list` is `abbrList (:abbr?) map`, and `--query` is `abbrList (:abbr? 'gco' abbrWord =) any`.
+I checked the `--query` form against a prototype.
+]
+
+== Examples
+
+```msh
+{abbr: 's' abbrWord, expansion: 'git status -u' abbrText} abbrAdd
+{abbr: 'gu' abbrWord, expansion: '[git add -u]? ([git status -u];) iff' abbrText} abbrAdd
+{abbr: 'u' abbrWord, expansion: "'..' cd" abbrText} abbrAdd
+
+# Only as an argument of git: `git co` becomes `git checkout`.
+{abbr: 'co' abbrWord, expansion: 'checkout' abbrText, position: ['git'] abbrArgOf} abbrAdd
+
+# The cursor goes between the quotes, with no space after them.
+{abbr: 'gcm' abbrWord, expansion: "git commit -m '%'" abbrText, cursorMarker: '%'} abbrAdd
+
+# `..` is `'..' cd`, `...` is `'../..' cd`, and so on.
+def upDirs (AbbrInfo -- Maybe[str])
+    :word? len 1 - n!
+    '..' @n repeat '/' join up!
+    $"'{@up}' cd" just
+end
+{abbr: '\.\.+' abbrRegex, expansion: (upDirs) abbrFunc} abbrAdd
+```
+
+I checked `upDirs` against a prototype of these types: it type checks, and gives `'../..' cd` for `...`.
+
+Fish's usual example of a function, `!!` for the last command, has no counterpart here.
+It reads the history, and an mshell history line is not always a command, so no `history` builtin is added for it.
+
+= Editing behavior
+
+== When expansion happens
+
+An abbreviation is tried when one of these keys is pressed in the main command line:
+
+- *Space*, and the *separators* `|`, `;`, `<`, `>`, `]`, `)`: the word that ends at the cursor is tried, then the key is inserted.
+  This works anywhere in the line, not only at the end.
+- *Enter*: the word that contains the cursor, or ends at it, is tried, then the line runs.
+  The expansion happens *before* the line is parsed and checked, so a line that would not parse still expands (unlike fish, \#11710);
+  what runs, and what goes into history, is the expanded line.
+
+Nothing is tried for Ctrl-Space (a literal space, as today), Tab completion, history search, Alt-. or pasted text.
+To run an abbreviated word as it is, type Ctrl-Space and then Enter: the cursor is then no longer next to the word.
+
+`]` and `)` are triggers because a list head is often closed straight away: `[s]` should become `[git status -u]`.
+`;` stays for fish parity; `[s];` is already handled by `]`.
+
+== The word
+
+The *separators* are white space, as the lexer defines it (Go's `unicode.IsSpace`, so a no-break space counts), and `[ ] ( ) { } | ; < >`.
+The characters are some of those that end a literal in the lexer, which also include `: ? ! @ , * & " '`.
+Leaving those out keeps words such as `!!` whole; a word that runs into one of them (`s!`, `@s`) does not equal an abbreviation's word, and is not expanded.
+The word is the text between the nearest separator (or the start of the buffer) and the cursor; on Enter, it extends right to the next separator.
+It is not lexer tokens, since `!!` lexes as two `BANG` tokens and `..` as a `PREFIXQUOTE`, and both are useful abbreviated words.
+
+The word is *not tried* when it is empty, or when the line's lexer (allowing unfinished strings, as the painter does)
+puts its first character inside a string, format string, path or comment, finished or not.
+So `"a s` followed by Space, #raw("`s") and `# s` never expand.
+
+The word is also *not tried* unless both of its ends are grapheme boundaries of the line.
+The cursor is always on one, since the editor moves by grapheme.
+The other end may not be: a combining mark typed after `[` belongs to the bracket's grapheme, while the word scan, like the lexer, splits by code point and would start the word at the mark.
+Replacing that word would delete the `[` too, because `replaceText` widens a replacement to whole graphemes.
+Such a word is left alone. It only arises with a separator followed by a combining mark, a zero width joiner or a spacing mark, or (on Enter) a prepended mark before a separator.
+
+== Matching and precedence
+
+An abbreviation *matches* a word when its `abbr` is `abbrWord w` and `w` equals the word, or `abbrRegex r` and `r` matches the whole word.
+
+Equal means the same UTF-8 bytes, which is the same sequence of code points: there is no Unicode normalization and no case folding.
+That is how `=`, `match` and definition names compare strings in mshell, and how fish compares abbreviation names.
+So `é` written as one code point and as `e` with a combining accent are different words; keyboards and editors produce the single code point, so in practice they agree.
+A regex works on code points, as `reMatch` does: `.` is one code point, not one grapheme.
+It *applies* when it matches and its position allows the word's position (section 6.4).
+
+The applying abbreviations are tried from the newest to the oldest:
+
+- `abbrText s`: the word is replaced with `s`. Done.
+- `abbrFunc q`: `q` is run on an `AbbrInfo`. `just s` replaces the word with `s`, and that is all.
+  `none` declines, and the next applying abbreviation is tried, as in fish.
+  If `q` fails or takes too long, the word is left as it is, the key is inserted, and nothing else is tried (section 6.6).
+
+At most one word is expanded per key, and the expansion is not expanded again.
+
+== Positions
+
+The position of a word comes from the text before it, lexed as the painter lexes it:
+
+- *Command position*, which `abbrCommand` allows:
+  + nothing but whitespace is before the word;
+  + the token just before the word is `[`, so the word heads a list: `[s`, `[[s`;
+  + the line is a command line (its first word is a program, by the rule the shell uses when it runs the line) and the token just before the word is `|`.
+
+  A newline is not on the list: it means nothing in the grammar, so the first word after one is in command position only if one of these holds.
+- *An argument of `c`*, which `abbrArgOf [... c ...]` allows, when the word is not in command position and its command is `c`:
+  + inside a list, the command is the first element of the innermost unclosed `[`, if that is a plain word;
+  + otherwise, on a command line, it is the first word of the current part of the pipeline,
+    except that a word after `<` or `>` is a file to redirect from or to, and has no command.
+
+  The command is compared as written, so `/usr/bin/git co` does not match `['git']` (as in fish).
+- `abbrAnywhere` allows every word.
+
+`AbbrInfo.command` is the word's command as defined above, or `none`.
+There is nothing after `sudo`, as in fish: in `sudo s`, `s` is an argument of `sudo`.
+An `abbrArgOf ['sudo' 'doas']` copy of the abbreviation covers it.
+zsh-abbr's prefixes that do not count as the command are not adopted.
+
+#note[
+*`u` and `gu` are mshell code, not commands.* Under `abbrCommand` they also expand at the head of a list, where `['..' cd` makes no sense.
+Nobody types `[u`, so there is no position for "start of line only".
+If it becomes a problem, an `abbrLineStart` position can be added without breaking anything.
+]
+
+== The cursor marker
+
+`cursorMarker` is a string of any length, not one character: `'%'`, `'%%'` or `'<cursor>'` are all markers.
+Any length matters because a one-character marker can collide with the expansion's own text:
+with `'%'` as the marker, the expansion `date +%Y-%m-%d %` would lose the `%` of `%Y` and put the cursor after `date +`, so that abbreviation would use `'<cursor>'` instead.
+Fish's `--set-cursor=MARKER` is a string of any length too; its default is `%`, and here there is no default.
+
+When `cursorMarker` is given and the expansion contains it, the first occurrence of the whole marker is removed and the cursor is put where it began.
+For a function, this applies to the text it returns.
+Then:
+
+- a *Space* trigger is dropped: the cursor is inside the expansion, and a space at its end is what fish users complain about (\#11228).
+  `gcm` and Space give `git commit -m '|'`, with the cursor at `|`.
+- any other trigger is inserted at the end of the expansion, since it is syntax the user typed: `[gcm]` gives `[git commit -m '|']`.
+- on *Enter*, the marker is removed and the line runs.
+
+The expansion is searched for the marker's bytes. Since both are UTF-8, a match is always a whole sequence of code points, never part of one.
+The marker need not be whole graphemes. If the cursor would fall inside a grapheme (for example, the marker was followed by a combining mark), it moves forward to the end of that grapheme, as it does after any replacement.
+
+When the expansion does not contain the marker, `cursorMarker` changes nothing.
+This differs from fish, which keeps the trigger; zsh-abbr and xonsh drop it.
+
+== Running a quotation
+
+A quotation is run as the prompt quotation is, by the same code in `Prompt.go`:
+
+- on its own stack, so it cannot change the values on yours;
+- stopped after 1 second, together with any command it runs.
+  This is its own limit, shorter than the prompt's 3 seconds, since the user is waiting for a key to appear;
+- when it fails or is stopped, the word stays, the key is inserted, and the error is shown below the command line, where completion messages go.
+  The same error is not shown again while it keeps failing the same way.
+
+A quotation can run commands, such as `git branch`, but it runs while the user waits on a keystroke, so it should be quick.
+
+#decision[
+*Only the time limit stops a quotation; Ctrl-C does not.*
+The prompt also stops on Ctrl-C, which needs the terminal in its normal mode and the shell registered for the interrupt signal.
+Registering and unregistering costs about 77 µs, measured: 80% of running a short quotation.
+An abbreviation should be fast, and a quotation that runs away is stopped by the limit in at most a second, so the terminal stays raw while it runs,
+and a Ctrl-C typed meanwhile is read as a key after it ends.
+]
+
+== Painting
+
+Painting is a separate change, after the rest of this design. It is described here so that it is not forgotten.
+
+A word in command position that has an abbreviation applying there (by `abbrWord` or `abbrRegex`) is painted as a command, as a program on the path is (underlined blue).
+Today the painter marks only the first word of the line as a program, not one at the head of a list or after `|`; whether abbreviations follow that or all three positions are painted is decided in that change.
+A function abbreviation is not run to decide this, so a word whose function would decline is still painted as a command (as in fish, \#11809).
+
+== Completion
+
+Tab in command position offers the `abbrWord` words of abbreviations that apply in command position, next to programs and definitions.
+`abbrArgOf` abbreviations are not offered for their commands' arguments, nor `abbrAnywhere` ones elsewhere; fish tried the latter in 4.8 and took it back.
+When completion can show descriptions, `description` (or the expansion's text) is the one to show.
+
+== Undo
+
+The line editor has no undo. When it gets one, an expansion is one step back to the typed word and the key.
+Until then Ctrl-Space is the way to avoid an expansion, and Backspace over the expanded text the way out of one.
+There is no special key to revert an expansion, such as xonsh's second Space.
+
+== History
+
+History gets the expanded line, as now, and as in every shell surveyed.
+Fish's dropped `--quiet` (keep the short form in history) is not adopted: history is the record of what ran.
+
+= Fish parity
+
+#table(
+  columns: (auto, 1fr),
+  inset: 4pt,
+  table.header([*fish*], [*mshell*]),
+  [`abbr NAME EXP`, `abbr --add`], [`{abbr: 'NAME' abbrWord, expansion: 'EXP' abbrText} abbrAdd`],
+  [`--position command`], [`abbrCommand`, the default],
+  [`--position anywhere`], [`abbrAnywhere`],
+  [`--command CMD`...], [`['CMD' ...] abbrArgOf`],
+  [`--add NAME --regex P`], [`abbr: 'P' abbrRegex`, with no name; Go syntax instead of PCRE2],
+  [`--function F`], [`(F) abbrFunc`; `none` for a non-zero status],
+  [`--set-cursor[=M]`], [`cursorMarker: 'M'`, a string of any length; there is no default marker, and a space trigger is dropped],
+  [`--description D`], [`description: 'D'`],
+  [`--erase NAME`], [`'NAME' abbrWord abbrErase`; erases every position, and a missing one is not an error],
+  [`--rename OLD NEW`], [`'OLD' abbrWord 'NEW' abbrWord abbrRename`],
+  [`--list`], [`abbrList (:abbr?) map`],
+  [`--query NAME`], [a test on `abbrList`],
+  [`--show`], [Not adopted; `abbrList` gives the records (section 5.3)],
+  [Space `; | & > < )` triggers], [Space `| ; < > ] )`; there is no `&` operator in mshell's command lines],
+  [Enter expands the word at the cursor], [The same, before the line is checked],
+  [Ctrl-Space], [The same, as today],
+  [Undo is one step], [Not yet; no undo in the line editor],
+  [Highlight as a command], [The same, in a separate change],
+  [Complete names in command position], [The same, for `abbrWord` words],
+  [Universal variables (3.0--3.5)], [Not adopted],
+)
+
+= Moving the current table
+
+Delete `aliases` from `Main.go` and put this in `init.msh`, with a definition of its own for the common case:
+
+```msh
+def cmdAbbr (str str -- )
+    word!, expansion!
+    {abbr: @word abbrWord, expansion: @expansion abbrText} abbrAdd
+end
+
+'s'  'git status -u' cmdAbbr
+'v'  'nvim' cmdAbbr
+'mk' 'mkdir' cmdAbbr
+'ls' 'eza -l' cmdAbbr
+'gi' 'nvim .gitignore' cmdAbbr
+'a'  'git add' cmdAbbr
+'d'  'git diff -w' cmdAbbr
+'dc' 'git diff -w --cached' cmdAbbr
+'c'  'git commit' cmdAbbr
+'p'  'git push' cmdAbbr
+'u'  "'..' cd" cmdAbbr
+'gu' '[git add -u]? ([git status -u];) iff' cmdAbbr
+'ga' '[git add -A]? ([git status -u];) iff' cmdAbbr
+'fp' 'git fetch --prune' cmdAbbr
+```
+
+What changes for these: they expand only in command position, not after `echo`; never in a string; also on `]`, `|`, `;`, `<`, `>`, `)`; and on Enter with the cursor anywhere in the word.
+The shell ships with no abbreviations (fish issue \#9462 asks for defaults; that is a separate question).
+
+= Cost of a key press
+
+Every Space, Enter and `| ; < > ] )` runs the lookup below, and every key, trigger or not, repaints the line.
+The figures compare the branch's first version with what it does now: the line is lexed once per edit, its tokens are shared,
+and its text and tokens live in buffers kept from key to key.
+Costs are for three lines, each ending in a word that matches nothing:
+short (`git checkout nomatch`, 20 B), medium (a pipeline of lists, 101 B) and long (a pipeline repeated, 1.9 KB).
+They are medians of 6 to 8 interleaved runs on the FX-8350 with Go 1.27, written short / medium / long.
+
+#let stepbox(title, body, fill: white) = block(
+  width: 100%, inset: 6pt, radius: 3pt, stroke: 0.6pt + luma(140), fill: fill, breakable: false,
+  align(left, stack(dir: ttb, spacing: 4pt,
+    text(weight: "bold", size: 9pt, title),
+    par(justify: false, leading: 0.5em, text(size: 8.5pt, body)))),
+)
+#let down = align(center, text(size: 10pt, fill: luma(110))[↓])
+#let costs(s) = text(size: 8pt, fill: rgb("#7a2e2e"), s)
+#let same = rgb("#f4f4f4")
+#let worse = rgb("#fbe9e7")
+#let better = rgb("#e8f3ec")
+
+#figure(
+  grid(
+    columns: (1fr, 1fr), column-gutter: 8pt, row-gutter: 2pt,
+    grid.cell(colspan: 2, stepbox(fill: same, [1. A trigger key arrives], [Space, Enter, or `| ; < > ] )`. No abbreviations: insert the key, as before.])),
+    grid.cell(colspan: 2, down),
+    grid.cell(colspan: 2, stepbox(fill: same, [2. Find the word], [Scan back from the cursor to a space or `[ ] ( ) { } | ; < >`, and forward too for Enter. Bytes only, so its cost is the word's length.])),
+    down, down,
+    stepbox(fill: worse, [3. Could it match? --- _not in the first version_], [Every word goes on to step 4.]),
+    stepbox(fill: better, [3. Could it match?], [Compare the `abbrWord` words and match the `abbrRegex` ones. No match: insert the key and stop, without looking at tokens. #costs[About 0.1 µs.]]),
+    down, down,
+    stepbox(fill: worse, [4. Lex the line up to the word], [A new `Lexer` and a new `[]Token` for the text up to the word, and each token copied into `before`. #costs[1.3 / 15.6 / 240 µs, 6 / 17 / 63 allocations, including step 5.]]),
+    stepbox(fill: better, [4. Read the cached tokens], [The previous key's paint lexed this same line (@fig-cache). #costs[No time, no allocations.]]),
+    down, down,
+    stepbox(fill: same, [5. Walk the tokens before the word], [A stack of open brackets, the last `|` outside them, the first and last tokens. Gives command position, the command the word is an argument of, or neither.]),
+    stepbox(fill: same, [5. Walk the tokens before the word], [The same walk, on indices into the cached tokens instead of copies. #costs[0.1 / 0.24 / 5.1 µs, no allocations.]]),
+    grid.cell(colspan: 2, down),
+    grid.cell(colspan: 2, stepbox(fill: same, [6. Try the abbreviations, newest first], [The first with `matches(word)` and `appliesAt(site)`: `abbrText` gives its text; `abbrFunc` runs the quote on an `AbbrInfo`, stopped after 1 second (about 8 µs for a short quote). Replace the word, then insert the key or move to the cursor marker.])),
+    grid.cell(colspan: 2, down),
+    stepbox(fill: worse, [7. Paint: lex the whole line again], [`Tokenize` with a new `[]Token` each time, which the paint drops when it is done. #costs[1.5 / 11.2 / 185 µs.]]),
+    stepbox(fill: better, [7. Paint: lex the whole line, once], [Into the cache's buffer, reused from the last edit, without decoding literal values, which painting does not use. The tokens stay for the next key. #costs[0.5 / 4.0 / 80 µs, no allocations.]]),
+    down, down,
+    grid.cell(colspan: 2, stepbox(fill: same, [8. Paint: style, lay out, write], [Style spans from the tokens, widths, rows, escape sequences. #costs[0.4 / 0.6 / 8 µs now; 0.6 / 1.4 / 13 µs in the first version, which also paid the garbage collector for its lexes.]])),
+  ),
+  kind: image,
+  caption: [One trigger key. Left: the first version. Right: now. Red boxes cost more than they need to, green ones are the change.],
+) <fig-key-steps>
+
+#let tbox(body, fill: white) = box(
+  width: 100%, inset: 4pt, radius: 2pt, stroke: 0.5pt + luma(140), fill: fill,
+  align(center, text(size: 7.5pt, body)),
+)
+#let rarr = align(center + horizon, text(size: 9pt, fill: luma(110))[→])
+
+#figure(
+  grid(
+    columns: (1fr, auto, 1fr, auto, 1fr, auto, 1fr, auto, 1fr),
+    column-gutter: 2pt, align: horizon,
+    tbox(fill: better)[Key $n-1$ edits the line to `L`],
+    rarr,
+    tbox(fill: better)[Paint lexes `L` once: cache holds `L` and its tokens],
+    rarr,
+    tbox[Key $n$: Space. Lookup reads the cache (the line is still `L`)],
+    rarr,
+    tbox[Replace the word, insert the key: the line is now `L'`],
+    rarr,
+    tbox(fill: better)[Paint lexes `L'` once: the cache holds `L'`],
+  ),
+  kind: image,
+  caption: [Where the lookup's tokens come from. The cache is keyed by the line's text, so an edit that the paint has not seen yet (keys typed faster than the screen repaints) only means one lex on the first read. There is one lex per edit, whoever asks first.],
+) <fig-cache>
+
+#let cLookup = rgb("#d1495b")
+#let cWalk = rgb("#edae49")
+#let cPaintLex = rgb("#00798c")
+#let cReused = rgb("#66a182")
+#let cRest = luma(175)
+#let cOld = rgb("#30638e")
+#let swatch(c, label) = box[#box(width: 8pt, height: 8pt, fill: c, baseline: 1pt) #text(size: 8pt, label)#h(8pt)]
+#let costbar(scale, parts) = stack(dir: ltr, ..parts.map(p => box(width: p.at(0) * scale, height: 10pt, fill: p.at(1))))
+#let barchart(title, scale, rows) = {
+  align(left, text(size: 9pt, weight: "bold", title))
+  v(-4pt)
+  grid(
+    columns: (2.7cm, 10.6cm, auto), row-gutter: 5pt, column-gutter: 6pt,
+    align: (right + horizon, left + horizon, left + horizon),
+    ..rows.map(r => (text(size: 8.5pt, r.at(0)), costbar(scale, r.at(1)), text(size: 8.5pt, r.at(2)))).flatten(),
+  )
+}
+
+#figure(
+  {
+    barchart([Medium line, 101 B], 0.36cm, (
+      ([`main`, alias map], ((0.2, cOld), (11.2, cPaintLex), (1.4, cRest)), [12.4 µs, 10 allocs]),
+      ([first version], ((15.6, cLookup), (11.2, cPaintLex), (1.4, cRest)), [28.8 µs, 27 allocs]),
+      ([now], ((0.1, cWalk), (4.0, cReused), (1.2, cRest)), [5.3 µs, 0 allocs]),
+    ))
+    v(6pt)
+    barchart([Long line, 1.9 KB], 0.0235cm, (
+      ([`main`, alias map], ((1.5, cOld), (185, cPaintLex), (12.9, cRest)), [194 µs, 52 allocs]),
+      ([first version], ((240, cLookup), (185, cPaintLex), (12.9, cRest)), [443 µs, 115 allocs]),
+      ([now], ((0.1, cWalk), (79.6, cReused), (13.1, cRest)), [93 µs, 0 allocs]),
+    ))
+    v(4pt)
+    swatch(cOld)[alias lookup (`main`)]
+    swatch(cLookup)[lookup: own lex and walk]
+    swatch(cWalk)[lookup: could it match?]
+    swatch(cPaintLex)[paint: `Tokenize`]
+    swatch(cReused)[paint: lex into reused buffer]
+    swatch(cRest)[paint: the rest]
+  },
+  kind: image,
+  caption: [One Space key, to the end of preparing the repaint. The segments are from benchmarks of each step; the totals on the right were measured over the whole key.
+  The word matches nothing, so now the lookup stops at step 3. The short line is 2.4 µs on `main`, 5.0 µs in the first version and 1.3 µs now.],
+) <fig-key-costs>
+
+Three things stand out in @fig-key-costs:
+
+- The paint's lex is most of a key press already, on `main`: 89% of the paint on the medium line, 93% on the long one.
+  The first version added a second lex of nearly the whole line to every trigger key, which more than doubled its cost.
+- Of each lex, most of the time is not lexing: `Tokenize` grows a new `[]Token` (72 bytes a token) each time, and the garbage collector scans it.
+  Lexing into a buffer kept from the last edit is 2.3--2.9 times faster with the same tokens.
+- With one lex per edit, a trigger key is cheaper than a plain key is on `main` today: the lookup's walk is small, and the paint gets the faster lex.
+
+#decision[
+*Lex once per edit, and share the tokens.*
+The editor keeps the current line's tokens in one cache, lexed as painting needs them (white space and comments emitted, unterminated strings allowed),
+keyed by the line's text, with its own `Lexer` and a `[]Token` that is reused from edit to edit.
+The paint and the abbreviation lookup both read it; whichever asks first after an edit lexes.
+A lex error stops the lexer, so the cache keeps the tokens before the error and where it was: the paint shows the line unstyled, as now,
+and the lookup gives up only when the error is before the word's end.
+
+Two other readers lex the line, and do not use the cache:
+Tab completion lexes up to the cursor, without white space, once per Tab press;
+Enter's parser lexes the line in its own mode, once per line.
+Neither runs on every key, so sharing would add rules without saving anything that shows.
+]
+
+#decision[
+*The word's token is the token on the screen.*
+Reading the whole line's tokens, rather than lexing up to the word, changes one thing: the word's own token is lexed with what follows it.
+Where the word ends inside a longer token, the lookup now sees that token.
+For example, with the cursor between `$` and `"` in `$"a"`, the word `$` is the start of a string, as its color shows, and does not expand;
+and with the cursor inside `99999999999999999999999`, the digits before it are part of a number too large to read, so they do not expand,
+where lexing only up to the cursor saw a small number.
+
+`TestAbbrSiteFromLineTokens` checks that nothing else changes. It keeps the first version as a reference and compares the two
+on random lines built from words, brackets, quotes, comments, numbers too large to read, combining marks and wide characters,
+at every cursor and for both Space and Enter.
+They may differ only where the word ends inside a token of the whole line: the line's token at the word's last byte runs past it, or a lex error starts in the word.
+Run once over 200,000 lines (6.3 million cases), they differ in 178,106 (2.8%), every one of that kind; the test in the suite runs 10,000 lines.
+The tokens before the word, which decide the position, never differ.
+]
+
+== No allocations per key
+
+A key goes through four steps: read it, handle it, find the history suggestion, repaint.
+The first version allocated about 5 times a key on that path, and 4 of them were not the abbreviations' doing:
+
+- *`Tokenize`* grew a new `[]Token` on every repaint. The cache lexes into a slice it keeps (`Lexer.TokenizeInto`).
+  It keeps room for 4,096 tokens, or twice the line, whichever is more, so one huge paste does not hold a huge buffer for the rest of the session.
+- *Literal values.* The lexer decodes each string literal into a value; for highlighting it skips that (`Lexer.skipValues`).
+- *The line's text.* The line is a Go string, so each edit, `a + new + b`, made a new one, and so did the line with its history suggestion.
+  Both now come from `lineArena` (`CommandBuffers.go`): 64 KB chunks that are only ever appended to.
+  A string handed out is never written again, so the strings are as immutable as any other, the cache can compare them, and nothing can see one change.
+  A new chunk is an allocation every few thousand edits of a short line. Lines over 8 KB are made as before.
+- A string kept for long keeps its whole chunk alive, so whatever keeps the line past the next few edits takes a copy:
+  the line run on Enter (history and the evaluator keep it), a word `PathBinManager.Lookup` caches, the line given to Tab completion, and the `AbbrInfo` given to a quote.
+  The width cache already copied what it keeps.
+
+`TestKeyPathAllocations` types lines through the whole path, with and without abbreviations and a history suggestion, and onto the medium and long lines; none allocates.
+`BenchmarkKeyPath` gives the cost per key:
+
+#table(
+  columns: (auto, auto, auto, auto),
+  inset: 4pt,
+  table.header([*Typing, per key*], [*`main`*], [*first version*], [*now*]),
+  [a short line], [3.2 µs, 5 allocs], [3.2 µs, 5 allocs], [1.5 µs, 0],
+  [`nomatch` onto the medium line], [13.5 µs, 10], [16.0 µs, 12], [5.7 µs, 0],
+  [`nomatch` onto the long line], [199 µs, 52], [237 µs, 60], [99 µs, 0],
+  [a short line, 2,000 history entries], [9.4 µs, 6], [9.4 µs, 6], [7.6 µs, 0],
+)
+
+#note[
+Two costs on the same path are not the abbreviations' doing and are tracked on their own:
+the history suggestion scans the whole history on every key (issue \#371; 23 µs a key with 8,000 entries, 2 µs if it resumes from the last match),
+and the interactive shell fsyncs its debug log before every key (issue \#372; 0.35 µs on tmpfs, 49 µs to 1.6 ms on a disk).
+]
+
+= Implementation plan
+
++ *Types.* Add the declarations to the built-in declarations (`builtinDeclSource` in `Prompt.go`, or a new `Abbr.go` whose source is joined to it).
++ *State.* `EvalState` gets an ordered list of abbreviations with their compiled regexes, next to `PromptQuote`.
++ *Builtins.* `abbrAdd`, `abbrErase`, `abbrRename` and `abbrList` in `Evaluator.go`, in `BuiltInList.go`, and their signatures in `TypeCoreBuiltins.go`, which must match what the runtime accepts exactly.
++ *Finding the word.* A function in `Abbr.go` that takes the line, the cursor and a test for "is a program", and returns the word's range, whether it may be tried, its position and its command.
+  It has no terminal state, so it is tested with a table of lines and cursors.
++ *Expanding.* One function that the Space, separator and Enter handlers call, replacing the two copies in `Main.go`.
+  It runs quotations through the prompt's runner (`evalCancel`, killing commands it runs), with its own 1 second limit beside `promptTimeout`, and without the prompt's Ctrl-C handling (section 6.6).
++ *Completion* in the completion code. Painting is a separate change (section 6.7).
++ *Lexing once* (section 9). `lineTokens`, a per-edit token cache on the editor, with its own `Lexer` and reused `[]Token`, that the paint fills and the abbreviation lookup reads.
+  The lookup finds the word (`abbrWordAt`), checks that some abbreviation could match it, and walks the cached tokens by index (`findAbbrSite`).
+  Tested against the first version by `TestAbbrSiteFromLineTokens`.
++ *No allocations per key* (section 9.1). `lineArena` for the line's text, copies where the line is kept, and `TestKeyPathAllocations` and `BenchmarkKeyPath`.
++ *Tests.*
+  - Go: the word and position table (start, list heads, nested lists, `|` on command and code lines, strings, paths, comments, `!!`, `..`, mid-line cursor, Enter in the middle of a word, a no-break space, a combining mark after `[`, an `abbrWord` with an accent); precedence and `none` falling through; the cursor marker with each trigger.
+  - Go: a word after `<` and `>` on a command line has no command; positions compared in order.
+  - `tests/success`: `abbrAdd`, `abbrList`, `abbrRename` and `abbrErase` round trips; inert entries (a bad regex, a word with a space) added without failing and listed; erasing a missing `abbr`; renaming onto an existing one.
+  - `tests/typecheck_fail`: a quotation of the wrong type, text where `AbbrExpansion` or `AbbrMatch` is expected, redeclaring a built-in name.
++ *Documentation.* An "Abbreviations" section in `getting-started.inc.html` after "Customizing the Prompt";
+  the builtins in `functions.inc.html`; the built-in type names in `type_system.inc.html` and one line in `mshell.md` (only that the names are reserved, as for the prompt);
+  "without expanding aliases" in `mshell.md` becomes "abbreviations"; an entry in `CHANGELOG.md`.
+
+= Sources
+
+- fish: #link("https://fishshell.com/docs/current/cmds/abbr.html")[abbr docs];
+  #link("https://fishshell.com/docs/current/interactive.html#abbreviations")[interactive docs];
+  source `src/abbrs.rs`, `src/builtins/abbr.rs`, `src/reader/reader.rs` at master `da63cfd2`;
+  #link("https://github.com/fish-shell/fish-shell/pull/9313")[PR \#9313];
+  issues \#11228, \#11710, \#11809, \#11944, \#12568, \#9462.
+- Nushell: #link("https://www.nushell.sh/book/line_editor.html#abbreviations")[line editor book];
+  #link("https://www.nushell.sh/blog/2026-05-23-nushell_v0_113_0.html")[0.113 release notes];
+  #link("https://github.com/nushell/nushell/pull/18197")[PR \#18197]; reedline `src/engine.rs`.
+- Elvish: #link("https://elv.sh/ref/edit.html")[edit module reference]; `pkg/cli/tk/codearea.go`; issues \#646, \#1472, \#636.
+- zsh-abbr: #link("https://zsh-abbr.olets.dev/")[zsh-abbr.olets.dev]. xonsh: #link("https://github.com/xonsh/xontrib-abbrevs")[xontrib-abbrevs].

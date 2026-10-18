@@ -494,6 +494,10 @@ Each cipher both hides the data and detects any change to it.
         <tr> <td><code>mkdirp</code></td> <td>Create a directory and any required parents.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- )</code></td> </tr>
         <tr> <td><code id="func-setPrompt">setPrompt</code></td> <td>Set the interactive shell's prompt to the list of items the quotation returns before each prompt. See <a href="getting-started.html#getting-started-prompt">Customizing the Prompt</a>.</td> <td><code>((PromptInfo -- [PromptItem]) -- )</code></td> </tr>
         <tr> <td><code id="func-setCursorShape">setCursorShape</code></td> <td>Set the cursor's shape while the interactive shell reads a command. See <a href="getting-started.html#getting-started-prompt">Customizing the Prompt</a>.</td> <td><code>(CursorShape -- )</code></td> </tr>
+        <tr> <td><code id="func-abbrAdd">abbrAdd</code></td> <td>Add an abbreviation for the interactive shell, replacing one with an equal <code>abbr</code> and position. See <a href="getting-started.html#getting-started-abbreviations">Abbreviations</a>.</td> <td><code>(Abbr -- )</code></td> </tr>
+        <tr> <td><code id="func-abbrErase">abbrErase</code></td> <td>Remove every abbreviation with this <code>abbr</code>. One that does not exist is not an error. See <a href="getting-started.html#getting-started-abbreviations">Abbreviations</a>.</td> <td><code>(AbbrMatch -- )</code></td> </tr>
+        <tr> <td><code id="func-abbrRename">abbrRename</code></td> <td>Give every abbreviation with the first <code>abbr</code> the second, replacing any with the second <code>abbr</code> and an equal position. See <a href="getting-started.html#getting-started-abbreviations">Abbreviations</a>.</td> <td><code>(AbbrMatch:old AbbrMatch:new -- )</code></td> </tr>
+        <tr> <td><code id="func-abbrList">abbrList</code></td> <td>Every abbreviation, oldest first. <code>position</code> is always present. See <a href="getting-started.html#getting-started-abbreviations">Abbreviations</a>.</td> <td><code>( -- [Abbr])</code></td> </tr>
     </tbody>
 </table>
 

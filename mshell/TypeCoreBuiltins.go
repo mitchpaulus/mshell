@@ -530,6 +530,11 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("hostname", "( -- str)")
 	b.reg("setPrompt", "((PromptInfo -- [PromptItem]) -- )")
 	b.reg("setCursorShape", "(CursorShape -- )")
+	b.reg("abbrAdd", "(Abbr -- )")
+	b.reg("abbrErase", "(AbbrMatch -- )")
+	// Old below, new on top.
+	b.reg("abbrRename", "(AbbrMatch AbbrMatch -- )")
+	b.reg("abbrList", "( -- new [Abbr])")
 	// Name below, value on top.
 	b.reg("setenv", "(str | path str | path -- )")
 	b.reg("unsetenv", "(str | path -- )")

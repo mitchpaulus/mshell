@@ -58,9 +58,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Completion definitions can return a dictionary instead of a list, to choose what Tab offers:
   `values`, files matching glob patterns (`files`), preferred files with a fallback to the rest (`preferredFiles`), directories only (`dirs`), or executables on the path (`binaries`).
 - `\{` and `\}` escapes in double quoted strings and format strings, for literal braces.
+- Abbreviations, set in `init.msh`, expand a word as it is typed in the interactive shell: `{abbr: 's' abbrWord, expansion: 'git status -u' abbrText} abbrAdd`.
+  Space, Enter and `| ; < > ] )` expand the word at the cursor; Ctrl-Space inserts a space without expanding.
+  An abbreviation can match a word or a regular expression, expand in command position, anywhere, or as an argument of given commands,
+  compute its text with a quotation, and place the cursor at a marker.
+  Words in strings, paths and comments never expand.
+- Functions for abbreviations
+  - `abbrAdd`, `abbrErase`, `abbrRename` and `abbrList` manage them.
 
 ### Changed
 
+- The interactive shell has no built-in aliases; add abbreviations to `init.msh` instead.
 - Every script is type-checked before it runs, and runs only if it checks: a file, `-c` code, or code read from standard input.
   There is no way to run a script unchecked; `--check-types` is still accepted and changes nothing.
   `--type-check-only` checks and exits, as before.

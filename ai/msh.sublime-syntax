@@ -1,0 +1,107 @@
+%YAML 1.2
+---
+# mshell highlighting for Typst code blocks in ai/*.typ.
+# Follows code/syntaxes/mshell.textmate.json, plus type names, record keys and field reads.
+name: mshell
+file_extensions: [msh, mshell]
+scope: source.mshell
+
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.number-sign.mshell
+    - match: '\$"'
+      scope: punctuation.definition.string.begin.mshell
+      push: format_string
+    - match: '"'
+      scope: punctuation.definition.string.begin.mshell
+      push: double_string
+    - match: "'"
+      scope: punctuation.definition.string.begin.mshell
+      push: single_string
+    - match: '`'
+      scope: punctuation.definition.string.begin.mshell
+      push: path_string
+    - match: 'else\*|\*if'
+      scope: keyword.control.mshell
+    - match: '\b(def|end|if|iff|loop|read|break|continue|else|enum|type|tryAs|match|as)\b(?!!)'
+      scope: keyword.control.mshell
+    - match: '\b(and|or|not)\b(?!!)'
+      scope: keyword.operator.word.mshell
+    - match: '\bsoe\b'
+      scope: keyword.other.mshell
+    - match: '\b(true|false|none)\b'
+      scope: constant.language.mshell
+    - match: '\b(int|float|bool|str)\b(?!!)'
+      scope: storage.type.mshell
+    - match: '\b[A-Z][A-Za-z0-9_]*\b'
+      scope: storage.type.mshell
+    - match: '\b[0-9]+(\.[0-9]+)?\b'
+      scope: constant.numeric.mshell
+    - match: '=>|--'
+      scope: keyword.operator.mshell
+    - match: '2>&1|1>&2'
+      scope: keyword.operator.redirect.merge.mshell
+    - match: '\$[A-Za-z0-9_]+!'
+      scope: variable.other.set.mshell entity.other.attribute-name.mshell
+    - match: '\$[A-Za-z0-9_]+'
+      scope: variable.other.envretrieve.mshell entity.other.attribute-name.mshell
+    - match: '[A-Za-z0-9_]+!'
+      scope: variable.other.set.mshell entity.other.attribute-name.mshell
+    - match: '@[A-Za-z0-9_]+'
+      scope: variable.other.retrieve.mshell entity.other.attribute-name.mshell
+    # A record key: `abbr:`, `position?:`.
+    - match: '[A-Za-z_][A-Za-z0-9_]*\??(?=:)'
+      scope: entity.name.tag.mshell
+    # A field read: `:word?`, `:word`.
+    - match: ':[A-Za-z_][A-Za-z0-9_]*\??'
+      scope: entity.name.tag.mshell
+
+  single_string:
+    - meta_scope: string.quoted.single.mshell
+    - match: "'"
+      scope: punctuation.definition.string.end.mshell
+      pop: true
+
+  path_string:
+    - meta_scope: string.quoted.other.path.mshell
+    - match: '`'
+      scope: punctuation.definition.string.end.mshell
+      pop: true
+
+  double_string:
+    - meta_scope: string.quoted.double.mshell
+    - match: '\\[entr"\\{}]'
+      scope: constant.character.escape.mshell
+    - match: '"'
+      scope: punctuation.definition.string.end.mshell
+      pop: true
+
+  format_string:
+    - meta_scope: string.quoted.double.interpolated.mshell
+    - match: '\\[entr"\\{}]'
+      scope: constant.character.escape.mshell
+    - match: '\{'
+      scope: punctuation.section.interpolation.begin.mshell
+      push: interpolation
+    - match: '"'
+      scope: punctuation.definition.string.end.mshell
+      pop: true
+
+  interpolation:
+    - clear_scopes: 1
+    - meta_scope: meta.interpolation.mshell
+    - match: '\}'
+      scope: punctuation.section.interpolation.end.mshell
+      pop: true
+    - match: '\{'
+      push: braces
+    - include: main
+
+  # A dict inside an interpolation, so its closing brace does not end the interpolation.
+  braces:
+    - match: '\}'
+      pop: true
+    - match: '\{'
+      push: braces
+    - include: main

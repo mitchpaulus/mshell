@@ -1000,3 +1000,30 @@ func (p *prebuiltCompletionFS) ReadDir(dir string) (*DirListing, error) {
 }
 func (p *prebuiltCompletionFS) Getwd() (string, error)           { return "/w", nil }
 func (p *prebuiltCompletionFS) Stat(string) (fs.FileInfo, error) { return nil, fs.ErrNotExist }
+
+func TestAbbreviationCompletion(t *testing.T) {
+	deps := CompletionDeps{
+		FS:            FakeCompletionFS{Cwd: "/home/user", Entries: map[string][]FakeDirEntry{}},
+		Env:           FakeCompletionEnv{},
+		Binaries:      FakePathBinManager{},
+		Variables:     map[string]struct{}{},
+		BuiltIns:      map[string]struct{}{},
+		Definitions:   []string{},
+		Abbreviations: []string{"gco", "gcm", "s"},
+	}
+	// The first word, and the head of a list.
+	for _, input := range []CompletionInput{
+		{Prefix: "gc", LastTokenType: LITERAL, NumTokens: 2},
+		{Prefix: "gc", LastTokenType: LITERAL, PrevTokenType: LEFT_SQUARE_BRACKET, NumTokens: 3},
+	} {
+		got := filterMatchesByType(GenerateCompletions(input, deps), TABMATCHCMD)
+		if len(got) != 2 || got[0] != "gcm" || got[1] != "gco" {
+			t.Errorf("%+v: command matches %v, want [gcm gco]", input, got)
+		}
+	}
+	// Not an argument.
+	input := CompletionInput{Prefix: "gc", LastTokenType: LITERAL, PrevTokenType: LITERAL, NumTokens: 3}
+	if got := filterMatchesByType(GenerateCompletions(input, deps), TABMATCHCMD); len(got) != 0 {
+		t.Errorf("an argument is offered abbreviations: %v", got)
+	}
+}
