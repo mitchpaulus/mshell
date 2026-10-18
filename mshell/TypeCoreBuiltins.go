@@ -115,6 +115,7 @@ func (b *coreTableBuilder) builtinAliases() {
 	b.alias("CompletionResult", "[str] | {values?: [str], preferredFiles?: str | [str], files?: str | [str], "+
 		"dirs?: bool, binaries?: bool}")
 	b.alias("HttpResponse", "{status: int, reason: str, headers: {str: [str]}, body: binary, cookieJar?: [Cookie]}")
+	b.alias("Encrypted", "{nonce: binary, ciphertext: binary, tag: binary}")
 }
 
 // typ resolves a type written in type syntax, with no generics.
@@ -216,7 +217,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		"(datetime datetime -- bool)",
 	}
 	// `+` on two grids is in TypeCoreGrid.go.
-	b.regTok(PLUS, append(arithmetic, "(str str -- str)", "([t] [t] -- [t])", "(path path -- path)")...)
+	b.regTok(PLUS, append(arithmetic, "(str str -- str)", "([t] [t] -- [t])", "(path path -- path)", "(binary binary -- binary)")...)
 	for i := range t.byToken[PLUS] {
 		if s := &t.byToken[PLUS][i]; len(s.ins) == 2 && ar.Kind(s.ins[0]) == TKList {
 			s.newListOut = 1
@@ -272,6 +273,8 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// String below, delimiter on top.
 	b.reg("split", "(str | path str | path -- new [str])")
+	// Gives [before after] at the first delimiter.
+	b.reg("splitOnce", "(str | path str | path -- new Maybe[[str]])")
 	b.reg("wsplit", "(str | path -- new [str])")
 	b.reg("lines", "(str -- new [str])")
 	// The grid form (two grids and a key quote for each) is in
@@ -306,6 +309,15 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("base64decode", "(str -- binary)")
 	b.reg("utf8Str", "(binary -- str)")
 	b.reg("utf8Bytes", "(str -- binary)")
+	b.reg("hexDecode", "(str -- binary)")
+	// Each int must be 0 to 255.
+	b.reg("toBinary", "([int] -- binary)")
+	b.reg("byteList", "(binary -- new [int])")
+	b.reg("cryptoRandom", "(int -- binary)")
+	// Data, key, cipher. encrypt makes a random nonce; decrypt gives none
+	// for a wrong key or changed data.
+	b.reg("encrypt", "(binary binary Cipher -- new Encrypted)")
+	b.reg("decrypt", "(Encrypted binary Cipher -- Maybe[binary])")
 	// A str or binary is hashed as its content; a path names a file.
 	b.reg("md5", "(str | path | binary -- str)")
 	// Always names a file.
@@ -335,7 +347,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// ----- Lists -----
 
-	b.reg("len", append([]string{"([a] -- int)", "(str | path | {} -- int)", "(GridRow_s -- int)"},
+	b.reg("len", append([]string{"([a] -- int)", "(str | path | {} | binary -- int)", "(GridRow_s -- int)"},
 		gridForms("(G_s -- int)")...)...)
 	// The value-below-list order (`x [xs] append`) is left to partialName:
 	// when both are lists the runtime appends the upper list into the
@@ -453,9 +465,12 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	}
 	// With a quote, the quote runs on the current stack only when the bool
 	// below does not decide the result.
+	// On ints and binaries they are bitwise; binaries must have the same
+	// length.
 	for _, name := range []string{"and", "or"} {
-		b.reg(name, "(bool bool -- bool)", "(bool ( -- bool) -- bool)")
+		b.reg(name, "(bool bool -- bool)", "(bool ( -- bool) -- bool)", "(int int -- int)", "(binary binary -- binary)")
 	}
+	b.reg("xor", "(bool bool -- bool)", "(int int -- int)", "(binary binary -- binary)")
 
 	// Paths. A path input is a str or a path.
 	b.reg("toPath", "(str | path -- path)")

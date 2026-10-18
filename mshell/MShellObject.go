@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -61,8 +62,27 @@ type MShellSimple struct {
 }
 
 // Binary {{{
-// Represents raw binary data
-type MShellBinary []byte
+// Represents raw binary data. A binary is a value, like a string: nothing
+// that holds one sees it change.
+type MShellBinary struct {
+	Data []byte
+	// grow is set on a binary that '+' made. It is shared by every binary
+	// made by joining onto the end of the same buffer, and records how many
+	// bytes of the buffer are in use, so only the newest of them grows into
+	// the spare space (see concatBinary).
+	grow *binaryGrowth
+}
+
+// binaryGrowth is how many bytes of a buffer the binaries using it hold.
+// It is atomic so two joins onto the same binary never both take the space.
+type binaryGrowth struct {
+	used atomic.Int64
+}
+
+// newBinary wraps data as a binary.
+func newBinary(data []byte) MShellBinary {
+	return MShellBinary{Data: data}
+}
 
 func (b MShellBinary) TypeName() string {
 	return "Binary"
@@ -86,81 +106,108 @@ func (b MShellBinary) CommandLine() string {
 
 func (b MShellBinary) DebugString() string {
 	// Return a hex representation of the first 5 bytes, or the whole thing if it's shorter
-	if len(b) > 5 {
-		return fmt.Sprintf("Binary(%x...)", b[:5])
+	if len(b.Data) > 5 {
+		return fmt.Sprintf("Binary(%x...)", b.Data[:5])
 	} else {
-		return fmt.Sprintf("Binary(%x)", b)
+		return fmt.Sprintf("Binary(%x)", b.Data)
 	}
 }
+
+// Indexes and slices share b's bytes but not its grow, so '+' on them
+// copies.
 
 func (b MShellBinary) Index(index int) (MShellObject, error) {
-	if index < 0 || index >= len(b) {
-		return nil, checkedErrorf("Index %d out of range for Binary with length %d.\n", index, len(b))
+	if index < 0 {
+		index = len(b.Data) + index
 	}
-
-	return MShellBinary{b[index]}, nil
+	if err := IndexCheck(index, len(b.Data), b); err != nil {
+		return nil, err
+	}
+	return newBinary([]byte{b.Data[index]}), nil
 }
 
-func (b MShellBinary) SliceStart(startInclusive int) (MShellObject, error) {
-	if startInclusive < 0 || startInclusive >= len(b) {
-		return nil, checkedErrorf("Start index %d out of range for Binary with length %d.\n", startInclusive, len(b))
+func (b MShellBinary) SliceStart(start int) (MShellObject, error) {
+	if start < 0 {
+		start = len(b.Data) + start
 	}
-	return MShellBinary(b[startInclusive:]), nil
+	if err := IndexCheckExc(start, len(b.Data), b); err != nil {
+		return nil, err
+	}
+	return newBinary(b.Data[start:]), nil
 }
 
 func (b MShellBinary) SliceEnd(end int) (MShellObject, error) {
-	if end < 0 || end > len(b) {
-		return nil, checkedErrorf("End index %d out of range for Binary with length %d.\n", end, len(b))
+	if end < 0 {
+		end = len(b.Data) + end
 	}
-
-	return MShellBinary(b[:end]), nil
+	if err := IndexCheckExc(end, len(b.Data), b); err != nil {
+		return nil, err
+	}
+	return newBinary(b.Data[:end]), nil
 }
 
 func (b MShellBinary) Slice(startInc int, endExc int) (MShellObject, error) {
-	if startInc < 0 || startInc >= len(b) || endExc < 0 || endExc > len(b) || startInc > endExc {
-		return nil, checkedErrorf("Slice indices %d:%d out of range for Binary with length %d.\n", startInc, endExc, len(b))
+	if startInc < 0 {
+		startInc = len(b.Data) + startInc
 	}
-
-	return MShellBinary(b[startInc:endExc]), nil
+	if endExc < 0 {
+		endExc = len(b.Data) + endExc
+	}
+	if err := SliceIndexCheck(startInc, endExc, len(b.Data), b); err != nil {
+		return nil, err
+	}
+	return newBinary(b.Data[startInc:endExc]), nil
 }
 
 func (b MShellBinary) ToJson() string {
 	// Convert the binary data to a base64 string for JSON representation
-	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(b)))
-	base64.StdEncoding.Encode(encoded, b)
+	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(b.Data)))
+	base64.StdEncoding.Encode(encoded, b.Data)
 	return fmt.Sprintf("\"%s\"", string(encoded))
 }
 
 func (b MShellBinary) ToString() string {
 	// Convert the binary data to a hex string, the entire thing.
-	return fmt.Sprintf("%x", b)
+	return fmt.Sprintf("%x", b.Data)
 }
 
 func (b MShellBinary) IndexErrStr() string {
-	return fmt.Sprintf(" Indexing into Binary is not supported. Length: %d", len(b))
+	return " " + b.DebugString()
 }
 
 func (b MShellBinary) Concat(other MShellObject) (MShellObject, error) {
 	if otherBinary, ok := other.(MShellBinary); ok {
-		// Concatenate the two binary slices
-		return MShellBinary(append(b, otherBinary...)), nil
+		return concatBinary(b, otherBinary), nil
 	}
 	return nil, fmt.Errorf("Cannot concatenate Binary with %s.\n", other.TypeName())
 }
 
+// concatBinary joins a and b. When a is the newest binary in its buffer
+// and the buffer has room, b's bytes are written into the spare space
+// after a, which no binary holds, so joining in a loop does not copy the
+// bytes so far each time. Otherwise the bytes are copied to a new buffer
+// with room to grow.
+func concatBinary(a, b MShellBinary) MShellBinary {
+	n := len(a.Data)
+	total := n + len(b.Data)
+	if len(b.Data) == 0 {
+		return a
+	}
+	if a.grow != nil && total <= cap(a.Data) && a.grow.used.CompareAndSwap(int64(n), int64(total)) {
+		out := a.Data[:total]
+		copy(out[n:], b.Data)
+		return MShellBinary{Data: out, grow: a.grow}
+	}
+	// The full slice expression makes append copy a.
+	out := append(a.Data[:n:n], b.Data...)
+	grow := &binaryGrowth{}
+	grow.used.Store(int64(total))
+	return MShellBinary{Data: out, grow: grow}
+}
+
 func (b MShellBinary) Equals(other MShellObject) (bool, error) {
 	if otherBinary, ok := other.(MShellBinary); ok {
-		// Compare the two binary slices
-		if len(b) != len(otherBinary) {
-			return false, nil
-		} else {
-			for i := range b {
-				if b[i] != otherBinary[i] {
-					return false, nil
-				}
-			}
-			return true, nil
-		}
+		return bytes.Equal(b.Data, otherBinary.Data), nil
 	}
 	return false, fmt.Errorf("Cannot compare Binary with %s.\n", other.TypeName())
 }

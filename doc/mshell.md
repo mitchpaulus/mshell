@@ -742,8 +742,9 @@ A generic cannot be a union member.
 `match` takes a union apart by kind (`int n :`, `list xs :`), binding the member's own type.
 
 `type Name = T` is an alias, interchangeable with `T`; it may be recursive through a list, dict, field, quotation or enum (`type Person = {name: str, friends: [Person]}`).
-Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {Json}`, what `parseJson` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`, `PromptInfo`; and `UrlEncodable` (`str | path | int | [str | path | int]`), the values `urlEncode` takes in a dict.
-The interactive prompt's enums are built in: `PromptItem`, `Base16Color`, `BaseBrightness`, `TextAttribute`, `CursorShape`; their names and member names (`baseRed`, `attrBold`, `resetStyle`, ...) cannot be declared or defined again.
+Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {Json}`, what `parseJson` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`, `PromptInfo`, `Encrypted` (`{nonce: binary, ciphertext: binary, tag: binary}`); and `UrlEncodable` (`str | path | int | [str | path | int]`), the values `urlEncode` takes in a dict.
+The interactive prompt's enums are built in: `PromptItem`, `Base16Color`, `BaseBrightness`, `TextAttribute`, `CursorShape`; so is `Cipher` (`cipherAesGcm | cipherChaCha20Poly1305 | cipherXChaCha20Poly1305`), which `encrypt` and `decrypt` take.
+Their names and member names (`baseRed`, `attrBold`, `resetStyle`, `cipherAesGcm`, ...) cannot be declared or defined again.
 
 ### New and stored values
 
@@ -1271,7 +1272,7 @@ end wl # Output: 11
 - `wl`: Write line to stdout (str|int -- ). Binary is not allowed because trailing newlines after raw bytes are rarely intended; use `w` for binary output. Other types must be converted with `str` first.
 - `we`: Write error to stderr (str|int|binary -- ).
 - `wle`: Write error line stderr (str|int -- ).
-- `len`: Length of a string (byte length), list, dictionary, path, `Grid`/`GridView` (row count), or `GridRow` (column count). `([a] -- int)` / `(str -- int)`
+- `len`: Length of a string (byte length), list, dictionary, path, binary (byte count), `Grid`/`GridView` (row count), or `GridRow` (column count). `([a] -- int)` / `(str -- int)` / `(binary -- int)`
 - `args`: List of string arguments. Does not include the name of the executing file. `( -- [str])`
 - `glob`: Run glob against string/literal on top of the stack. Leaves a list of paths on the stack. Relies on golang's [filepath.Glob](https://pkg.go.dev/path/filepath#Glob), which in the current implementation, the response is sorted. `(str -- [path])`
 - `/`: Divide numbers or join paths. `(numeric numeric -- numeric)` treats the top of stack as divisor. `(path path -- path)` joins the paths using the OS separator.
@@ -1408,6 +1409,7 @@ end wl # Output: 11
 - `leftPad`: Pad the left side of a string to reach the requested length, counted in code points. `(str str int -- str)`
 - `lines`: Split string into list of string lines
 - `split`: Split string into list of strings by delimiter. (str delimiter -- [str])
+- `splitOnce`: Split string at the first occurrence of delimiter into `[before after]`, or `none` when the delimiter is not in the string. An empty delimiter splits after the first character, as `split` does. Unwrap and destructure: `just parts : @parts => [before after] ...`. `(str delimiter -- Maybe[[str]])`
 - `wsplit`: Split string into list of strings by runs of whitespace. (str -- [str])
 - `join`: Join list of strings into a single string, (list delimiter -- str)
 - `unlines`: Join list of strings into a single string using `\n` line endings. `([str] -- str)`
@@ -1443,6 +1445,34 @@ end wl # Output: 11
 - `base64decode`: Decode base64 string into binary data. `(str -- binary)`
 - `utf8Str`: Decode UTF-8 bytes into a string. `(binary -- str)`
 - `utf8Bytes`: Encode a string as UTF-8 bytes. `(str -- binary)`
+
+## Binary Functions
+
+Binary values support `len` (byte count), `+` (join), and indexes and slices as on strings, including negative ones (`-16:` is the last 16 bytes).
+Joining onto a binary in a loop (`@acc @chunk + acc!`) does not copy the bytes so far on each join.
+`str` on a binary gives its bytes as lowercase hexadecimal.
+
+- `and` / `or` / `xor`: Bitwise on two ints, or on each byte of two binaries of the same length (different lengths are an error). On bools, `and`/`or` are logical and `xor` is true when exactly one is true. `(int int -- int)` / `(binary binary -- binary)` / `(bool bool -- bool)`
+- `toBinary`: Make binary from byte values, each 0 to 255. `([int] -- binary)`
+- `byteList`: Each byte as an int from 0 to 255. `(binary -- [int])`
+- `hexDecode`: Decode a hexadecimal string (two digits per byte, either case) into binary; any other character or an odd digit count is an error. `(str -- binary)`
+- `cryptoRandom`: Secure random bytes from the operating system, for keys and nonces. `(int -- binary)`
+- `encrypt`: Encrypt data with a key and a `Cipher`, using a new random nonce. `(binary:data binary:key Cipher -- Encrypted)`
+- `decrypt`: Decrypt with the key and `Cipher` used to encrypt; `none` when the key is wrong or any part was changed. A nonce or tag of the wrong length is an error. `(Encrypted binary:key Cipher -- Maybe[binary])`
+
+`Encrypted` is `{nonce: binary, ciphertext: binary, tag: binary}`; the ciphertext is as long as the data and the tag is 16 bytes.
+`Cipher` members and their key and nonce sizes in bytes:
+
+- `cipherAesGcm`: AES-GCM; key 16, 24 or 32; nonce 12.
+- `cipherChaCha20Poly1305`: key 32; nonce 12.
+- `cipherXChaCha20Poly1305`: key 32; nonce 24.
+
+```mshell
+32 cryptoRandom key!
+"attack at dawn" utf8Bytes @key cipherAesGcm encrypt e!
+@e toJson wl   # each field as base64
+@e @key cipherAesGcm decrypt ? utf8Str wl
+```
 
 ## List Functions
 

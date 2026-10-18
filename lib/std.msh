@@ -782,6 +782,11 @@ def __gitCompletion { 'complete': ['git'] } ([str] -- [str])
                     @completions ['git' 'for-each-ref' '--format=%(refname:short)' 'refs/heads' 'refs/remotes' 'refs/tags'] * ; lines extend completions!
                 end
 
+                # checkout/switch with a bare remote branch name creates a local tracking branch.
+                ['checkout' 'switch'] (@subcmd =) any if
+                    @completions ['git' 'for-each-ref' '--format=%(refname:lstrip=3)' 'refs/remotes'] * ; lines ('HEAD' = not) filter extend completions!
+                end
+
                 @fileCommands (@subcmd =) any if
                     @subcmd 'add' = if
                         @completions __gitAddFilePaths extend completions!

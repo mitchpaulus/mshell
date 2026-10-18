@@ -1,0 +1,1 @@
+1:6: Error decoding hex in 'hexDecode': encoding/hex: invalid byte: U+007A 'z'
