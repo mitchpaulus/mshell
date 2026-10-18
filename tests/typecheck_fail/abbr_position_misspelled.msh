@@ -1,0 +1,2 @@
+# A misspelled position is caught before anything runs.
+{abbr: 'x' abbrWord, expansion: 'y' abbrText, position: abbrComand} abbrAdd

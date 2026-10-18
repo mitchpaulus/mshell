@@ -1,0 +1,2 @@
+# The abbr is an AbbrMatch, so a word needs abbrWord.
+{abbr: 'x', expansion: 'y' abbrText} abbrAdd

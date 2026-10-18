@@ -161,6 +161,102 @@ The terminal's own cursor is put back before each command runs, and when the she
 These types and their members are built in, so their names cannot be used for your own types, members or definitions.
 </p>
 
+<h1 id="getting-started-abbreviations">Abbreviations <a class="section-link" href="#getting-started-abbreviations" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
+
+<p>
+An abbreviation is a short word that the interactive shell expands into longer text as you type it.
+Abbreviations are added in <code>init.msh</code>.
+The common case is a word at the start of a command, expanded to text, which <code>abbr</code> adds:
+typing <code>s</code> and Space gives <code>git status -u </code>.
+<code>abbrAdd</code> takes an <code>Abbr</code> for everything else.
+</p>
+
+<pre>
+<code><span class="mshellSINGLEQUOTESTRING">&#39;s&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;git status -u&#39;</span> <span class="mshellLITERAL">abbr</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">abbr</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;co&#39;</span> <span class="mshellLITERAL">abbrWord</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">expansion</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;checkout&#39;</span> <span class="mshellLITERAL">abbrText</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">position</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;git&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">abbrArgOf</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">abbrAdd</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">abbr</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;gcm&#39;</span> <span class="mshellLITERAL">abbrWord</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">expansion</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;git commit -m &#39;%&#39;&#34;</span> <span class="mshellLITERAL">abbrText</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">cursorMarker</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;%&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">abbrAdd</span>
+
+<span class="mshellLINECOMMENT"># `..` is `&#39;..&#39; cd`, `...` is `&#39;../..&#39; cd`, and so on.</span>
+<span class="mshellDEF">def</span> <span class="mshellLITERAL">upDirs</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">AbbrInfo</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellCOLON">:</span><span class="mshellLITERAL">word</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">len</span> <span class="mshellINTEGER">1</span> <span class="mshellMINUS">-</span> <span class="mshellVARSTORE">n!</span>
+    <span class="mshellSINGLEQUOTESTRING">&#39;..&#39;</span> <span class="mshellVARRETRIEVE">@n</span> <span class="mshellLITERAL">repeat</span> <span class="mshellSINGLEQUOTESTRING">&#39;/&#39;</span> <span class="mshellLITERAL">join</span> <span class="mshellVARSTORE">up!</span>
+    <span class="mshellFORMATSTRINGSTART">$&#34;&#39;{</span><span class="mshellVARRETRIEVE">@up</span><span class="mshellFORMATSTRINGEND">}&#39; cd&#34;</span> <span class="mshellLITERAL">just</span>
+<span class="mshellEND">end</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">abbr</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;\.\.+&#39;</span> <span class="mshellLITERAL">abbrRegex</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">expansion</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">upDirs</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">abbrFunc</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">abbrAdd</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+Space and the characters <code>|</code>, <code>;</code>, <code>&lt;</code>, <code>&gt;</code>, <code>]</code> and <code>)</code> try the word that ends at the cursor, then insert the key,
+so <code>[s]</code> gives <code>[git status -u]</code>.
+Enter tries the word the cursor is in or at the end of, then runs the line, so a line runs expanded even if it would not parse unexpanded.
+Ctrl-Space inserts a space without expanding; to run a word as typed, press Ctrl-Space and then Enter.
+Tab completion, history and pasted text do not expand.
+History gets the expanded line.
+</p>
+
+<p>
+The word is the text back to the previous space or <code>[ ] ( ) { } | ; &lt; &gt;</code>.
+A word inside a string, path or comment never expands.
+</p>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Key</th> <th>Type</th> <th>Description</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>abbr</code></td> <td><code>AbbrMatch</code></td> <td>The word to expand: <code>abbrWord str</code>, exactly this word, or <code>abbrRegex str</code>, any word the regular expression matches in full. Regular expressions use the same syntax as <code>reMatch</code>.</td> </tr>
+        <tr> <td><code>expansion</code></td> <td><code>AbbrExpansion</code></td> <td>What the word becomes: <code>abbrText str</code>, this text, or <code>abbrFunc (AbbrInfo -- Maybe[str])</code>, the text a quotation returns when the word is typed, or <code>none</code> to leave the word to the next abbreviation.</td> </tr>
+        <tr> <td><code>position</code> (optional)</td> <td><code>AbbrPosition</code></td> <td>Where the word expands. <code>abbrCommand</code>, the default, is a command word: the start of the line, the head of a list (<code>[s</code>), or after <code>|</code> on a command line. <code>abbrAnywhere</code> is any word. <code>abbrArgOf [str]</code> is an argument of one of these commands, compared as written: the first word of the list the word is in, or of the command on a command line. A file after <code>&lt;</code> or <code>&gt;</code> is not an argument.</td> </tr>
+        <tr> <td><code>cursorMarker</code> (optional)</td> <td><code>str</code></td> <td>Text in the expansion where the cursor goes. It is removed, and a Space that expanded the word is not inserted. Any length; with <code>%</code>, <code>gcm</code> and Space give <code>git commit -m '|'</code> with the cursor at <code>|</code>.</td> </tr>
+        <tr> <td><code>description</code> (optional)</td> <td><code>str</code></td> <td>Shown by <code>abbrShow</code>.</td> </tr>
+    </tbody>
+</table>
+
+<p>
+An <code>abbrFunc</code> quotation is given an <code>AbbrInfo</code>:
+</p>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Key</th> <th>Type</th> <th>Description</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>word</code></td> <td><code>str</code></td> <td>The word being expanded, as typed.</td> </tr>
+        <tr> <td><code>command</code></td> <td><code>Maybe[str]</code></td> <td>The command the word is an argument of, as for <code>abbrArgOf</code>, or <code>none</code>.</td> </tr>
+        <tr> <td><code>line</code></td> <td><code>str</code></td> <td>The whole command line, before the key that expanded the word.</td> </tr>
+    </tbody>
+</table>
+
+<p>
+The quotation runs on its own stack, so it cannot change the values on yours.
+If it fails, takes longer than 1 second, or is interrupted with Ctrl-C, the word is left as typed, and the error is shown below the command line.
+The error is shown once, not again while the quotation keeps failing the same way.
+What the quotation prints is not shown.
+</p>
+
+<p>
+When several abbreviations apply to a word, the one added last is tried first.
+<code>abbrAdd</code> replaces an abbreviation with an equal <code>abbr</code> and an equal position, so <code>l</code> can be one command at the start of a line and another after <code>jj</code>.
+<code>abbrErase</code> removes every abbreviation with an <code>abbr</code>, and <code>abbrRename</code> renames them.
+To remove only one of several with the same <code>abbr</code>, take <code>abbrList</code>, erase the <code>abbr</code>, and add back the ones to keep.
+<code>abbrShow</code> prints them all.
+</p>
+
+<p>
+None of these fails on a value of the right type.
+An abbreviation that can never expand, such as a word with a space, a regular expression that does not compile, or an empty <code>abbrArgOf</code> list, is added but never expands,
+and the interactive shell prints a warning about it.
+</p>
+
+<p>
+Tab in command position offers the words of abbreviations that expand there.
+</p>
+
+<p>
+These types and their members are built in, so their names cannot be used for your own types, members or definitions.
+</p>
+
 <h1 id="getting-started-github-actions">GitHub Actions <a class="section-link" href="#getting-started-github-actions" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
 
 <p>

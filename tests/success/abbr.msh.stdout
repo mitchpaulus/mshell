@@ -1,0 +1,26 @@
+s: git status -u
+co (after git, hg): checkout  # git checkout
+gcm: git commit -m '%' (cursor at %)
+regex \.\.+: <function>
+l: ls -alh
+l (after jj): log
+--- Same abbr and position: replaced, and now the newest.
+co (after git, hg): checkout  # git checkout
+gcm: git commit -m '%' (cursor at %)
+regex \.\.+: <function>
+l: ls -alh
+l (after jj): log
+s: git status
+--- Rename and erase.
+gcm: git commit -m '%' (cursor at %)
+regex \.\.+: <function>
+s: git status
+ck (after git, hg): checkout  # git checkout
+--- Values that can never expand are added, not errors.
+7
+true
+false
+--- A function, called by hand.
+'../..' cd
+--- A list of different literals.
+9
