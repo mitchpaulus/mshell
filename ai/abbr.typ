@@ -10,6 +10,7 @@
 #set heading(numbering: "1.1")
 #show heading.where(level: 1): it => { v(0.8em); it; v(0.3em) }
 #show raw: set text(font: "DejaVu Sans Mono", size: 0.86em)
+#set raw(syntaxes: "msh.sublime-syntax")
 #show raw.where(block: true): it => block(
   fill: luma(245), inset: 8pt, radius: 3pt, width: 100%, it,
 )
@@ -25,9 +26,9 @@
 #align(center)[
   #text(size: 20pt, weight: "bold")[Abbreviations in mshell]
   #v(0.3em)
-  #text(size: 11pt)[Design draft --- 2026-10-06, branch `abbr-config`]
+  #text(size: 11pt)[Design draft --- 2026-10-06, revised 2026-10-18, branch `abbr-design`]
   #v(0.2em)
-  #text(size: 10pt, style: "italic")[Written by Claude from the code on `main` (f0704c8) and a source-level
+  #text(size: 10pt, style: "italic")[Written by Claude from the code on `main` (f0704c8, rechecked at 28bc881) and a source-level
   survey of fish 4.9, Nushell 0.116 / reedline 0.52, Elvish 0.21+, zsh-abbr 6.5 and xontrib-abbrevs.]
 ]
 
@@ -48,7 +49,7 @@ This design moves it into `init.msh`, typed and checked like `setPrompt`, with t
 
 The user writes:
 
-```
+```msh
 's'  'git status -u' abbr                              # the common case
 {abbr: 'co' abbrWord, expansion: 'checkout' abbrText, position: ['git'] abbrArgOf} abbrAdd
 {abbr: 'gcm' abbrWord, expansion: "git commit -m '%'" abbrText, cursorMarker: '%'} abbrAdd
@@ -86,7 +87,7 @@ Problems with it, apart from being hard-coded:
 
 Fish defines abbreviations with `abbr`, in `config.fish`.
 
-```
+```fish
 abbr --add NAME [--position command | anywhere] [-r | --regex PATTERN] [-c | --command COMMAND]
                 [--set-cursor[=MARKER]] [--description DESC] ([-f | --function FUNCTION] | EXPANSION)
 abbr --erase [--command COMMAND]... NAME ...      abbr --rename [--command COMMAND]... OLD NEW
@@ -170,7 +171,7 @@ Elvish has no undo in its line editor (\#636).
   [Enter on a bad line], [no expansion], [expands], [no expansion on Enter], [expands, then checks],
   [Storage], [`config.fish`], [`$env.config`], [`rc.elv`], [`init.msh`, checked],
   [Undo], [one step], [probably one step], [no undo], [no undo yet (section 6.9)],
-  [Highlight, complete], [yes, yes], [no, no], [no, no], [yes, yes],
+  [Highlight, complete], [yes, yes], [no, no], [no, no], [later (section 6.7), yes],
 )
 
 = Principles
@@ -196,7 +197,7 @@ These come from the code and from how the prompt was done.
 
 These are added to `builtinDeclSource` next to the prompt's types, so they are built in, and their names are reserved, as `PromptItem`'s are.
 
-```
+```msh
 enum AbbrMatch =
       abbrWord str       # this word, exactly
     | abbrRegex str      # any word this regex matches in full
@@ -230,29 +231,34 @@ type Abbr = {
 - `command`: the command the word is an argument of (section 6.4), or `none` in command position or at the top level of code.
 - `line`: the whole line as it is, before the trigger character. The quotation can read it, not change it.
 
+There is no offset of the word in the line, and nothing to tell command position from an argument at the top level of code, where `command` is `none` too.
+Fish's functions are given only the token and have not needed more.
+
 #decision[
 *`abbr` is an enum, and there is no name.*
 In fish, `NAME` does two jobs: it is the word that expands, and it identifies the abbreviation to `--erase`, `--rename`, `--list` and `--query`.
 With `--regex` it only identifies, and the pattern does the matching.
 So `name` and `regex` were not exclusive in fish; a regex abbreviation still needed a name that is never typed.
 Here the field holds what is matched, `abbrWord` or `abbrRegex`, so a regex and a word cannot both be given, and the checker says so.
-Nothing else is needed to identify an abbreviation: `abbr` and `position` together are its identity (section 5.2), and erase and rename take an `AbbrMatch`.
+Nothing else is needed to pick out abbreviations: `abbrAdd` replaces by `abbr` and `position`, and erase and rename act on every entry with an `abbr` (section 5.2).
 The field is named `abbr` because it is the abbreviation, the short form, paired with `expansion`, the long one.
 ]
 
 #decision[
 *An enum for the expansion, not a union.*
 `expansion: str | (AbbrInfo -- Maybe[str])` would let the common case drop `abbrText`.
-I tried it: a quotation literal that reads a field of its input, such as `(:word? just)`, is refused there with
+The enum is preferred anyway: it is clearer, since the member says which kind of expansion it is,
+and the standard library's `abbr` covers the common case, so it costs little.
+The union also does not check today. I tried it: a quotation literal that reads a field of its input, such as `(:word? just)`, is refused there with
 "'get' reads a value whose type is not known here".
 A literal whose words wait for their input type, such as `(1 +)` or `(len)`, checks against a union; a field read does not wait.
 That is the case that matters here: an abbreviation quotation is given a record, `AbbrInfo`, and almost every one starts by reading a field of it (`:word?`).
 With the union, every such quotation written in place would need `as (AbbrInfo -- Maybe[str])` after it,
 which checks since the fix in \#361 but is longer than `abbrFunc` and must be written out each time.
+Since \#362 a union-typed def parameter gives the literal its input type, but a union-typed record field, as here, still does not.
 Only a quotation that calls a def, such as `(upDirs)`, would check without it, since the def's signature fixes the input type.
 As an enum payload, the literal is given its input type, as a def's quotation parameter gives one, so `(:word? just) abbrFunc` checks.
-The standard library's `abbr` covers the common case, so the enum costs little.
-If the checker learns to type a quotation literal from a union member, this could be revisited (@open-question).
+The enum is kept even if the checker learns to type a literal in a union-typed field.
 ]
 
 #decision[
@@ -269,32 +275,44 @@ A list of different literals needs `as [Abbr]`: `[{...} {...}] as [Abbr] (abbrAd
   table.header([*Word*], [*Signature*], [*Does*]),
   [`abbrAdd`], [`(Abbr -- )`], [Adds an abbreviation. One with an equal `abbr` and an equal position is replaced, and the new one is the newest.],
   [`abbrErase`], [`(AbbrMatch -- )`], [Removes every abbreviation whose `abbr` equals this, in every position. One that does not exist is not an error, as with `unsetenv`.],
-  [`abbrRename`], [`(AbbrMatch AbbrMatch -- )`], [Gives every abbreviation whose `abbr` equals the first the second instead. An error if none has the first or any already has the second.],
+  [`abbrRename`], [`(AbbrMatch AbbrMatch -- )`], [Gives every abbreviation whose `abbr` equals the first the second instead, as if each were erased and added again: it replaces any entry with the second `abbr` and an equal position. When none has the first, nothing happens.],
   [`abbrList`], [`( -- new [Abbr])`], [Every abbreviation, oldest first. `position` is always present; the other optional fields only when they were given.],
 )
 
-`abbrAdd` checks at run time, and fails like any builtin given a bad value:
+None of the four builtins fails on a value of its type.
+The builtins work in scripts too, where they only change a table nothing reads, and `init.msh` is loaded for scripts,
+so a mistake in an abbreviation must not stop every script from running.
 
-- an `abbrWord` is non-empty and has no white space (including Unicode white space) or separator (section 6.2), since such a word could never be typed as one word;
-- an `abbrRegex` is non-empty and compiles (Go's `regexp` syntax, as `reMatch` uses); it is wrapped as `^(?:REGEX)$`;
-- the cursor marker is non-empty (it may be any length; section 6.5);
-- an `abbrArgOf` list is non-empty, and each command in it is non-empty with no whitespace.
+An `abbrRegex` is Go's `regexp` syntax, as `reMatch` uses, wrapped as `^(?:REGEX)$`.
+Go's `regexp` runs in time linear in the word, so no regex that compiles can hang a keystroke.
 
-The builtins work in scripts too, where they only change a table nothing reads; `init.msh` is loaded for scripts, so it must not fail there.
+`abbrAdd` adds an entry that can never expand, as it adds any other, so `abbrList` and `abbrErase` see it, but it is *inert*: it is never tried. An entry is inert when it has
+- an `abbrWord` that is empty, has white space (including Unicode white space) or a separator,
+  or starts with `#`, a quote, a backtick or `$"`, since such a word is never typed as one word outside a comment, string or path (section 6.2);
+- an `abbrRegex` that is empty or does not compile (the limits of Go's `regexp`, such as a repeat count over 1000, are compile errors);
+- an `abbrArgOf` list that is empty, or a command in it that is empty or has white space.
+
+When the shell is interactive, `abbrAdd` writes one line to stderr for an inert entry, naming its `abbr` and the reason; this covers `init.msh` at startup and the REPL.
+In a script it writes nothing.
+An empty `cursorMarker` is treated as missing, and does not make an entry inert.
 
 #note[
-*Identity is `abbr` and the position.*
+*Add replaces by `abbr` and position; erase and rename act on `abbr` alone.*
 Fish 4.2 lets `l` be `ls -alh` as a command and `log` after `jj`, which means a name alone no longer picks one abbreviation,
 and erase and rename need `--command` lists that match exactly (\#12568).
 Here `abbrAdd` replaces only the entry with an equal `abbr` *and* an equal position, so `l` can have both meanings,
-and `abbrErase` and `abbrRename` act on every entry with that `abbr`. That is simpler, and nobody needs to erase one of two `l`s from the REPL;
-editing `init.msh` does that.
+and `abbrErase` and `abbrRename` act on every entry with that `abbr`.
+Erasing an abbreviation is rare, and erasing one of two that share an `abbr` rarer still, so there is no builtin for it.
+To do it: take `abbrList`, erase the `abbr`, and `abbrAdd` back the entries to keep.
+The entries added back become the newest, which matters only if two of them can apply to the same word.
 Two `abbr` values are equal when they are the same member with the same string, as enum values compare: `'l' abbrWord` and `'l' abbrRegex` are different.
+Two positions are equal when they are the same member and, for `abbrArgOf`, the same commands in the same order: `['git' 'hg']` and `['hg' 'git']` are different.
+That comparison is the builtins'; mshell's `=` does not compare `AbbrPosition` values, since one may hold a list, so the workaround above picks the entries to keep with `match`.
 ]
 
 == Standard library
 
-```
+```msh
 def abbr (str str -- )
     word!, expansion!
     {abbr: @word abbrWord, expansion: @expansion abbrText} abbrAdd
@@ -314,7 +332,7 @@ I checked the `--query` form against a prototype.
 
 == Examples
 
-```
+```msh
 's'  'git status -u' abbr
 'gu' '[git add -u]? ([git status -u];) iff' abbr
 'u'  "'..' cd" abbr
@@ -360,7 +378,8 @@ To run an abbreviated word as it is, type Ctrl-Space and then Enter: the cursor 
 == The word
 
 The *separators* are white space, as the lexer defines it (Go's `unicode.IsSpace`, so a no-break space counts), and `[ ] ( ) { } | ; < >`.
-Using the lexer's definition keeps the word the same as what the line means when it runs.
+The characters are some of those that end a literal in the lexer, which also include `: ? ! @ , * & " '`.
+Leaving those out keeps words such as `!!` whole; a word that runs into one of them (`s!`, `@s`) does not equal an abbreviation's word, and is not expanded.
 The word is the text between the nearest separator (or the start of the buffer) and the cursor; on Enter, it extends right to the next separator.
 It is not lexer tokens, since `!!` lexes as two `BANG` tokens and `..` as a `PREFIXQUOTE`, and both are useful abbreviated words.
 
@@ -405,7 +424,8 @@ The position of a word comes from the text before it, lexed as the painter lexes
   A newline is not on the list: it means nothing in the grammar, so the first word after one is in command position only if one of these holds.
 - *An argument of `c`*, which `abbrArgOf [... c ...]` allows, when the word is not in command position and its command is `c`:
   + inside a list, the command is the first element of the innermost unclosed `[`, if that is a plain word;
-  + otherwise, on a command line, it is the first word of the current part of the pipeline.
+  + otherwise, on a command line, it is the first word of the current part of the pipeline,
+    except that a word after `<` or `>` is a file to redirect from or to, and has no command.
 
   The command is compared as written, so `/usr/bin/git co` does not match `['git']` (as in fish).
 - `abbrAnywhere` allows every word.
@@ -457,7 +477,10 @@ A quotation can run commands, such as `git branch`, but it runs while the user w
 
 == Painting
 
+Painting is a separate change, after the rest of this design. It is described here so that it is not forgotten.
+
 A word in command position that has an abbreviation applying there (by `abbrWord` or `abbrRegex`) is painted as a command, as a program on the path is (underlined blue).
+Today the painter marks only the first word of the line as a program, not one at the head of a list or after `|`; whether abbreviations follow that or all three positions are painted is decided in that change.
 A function abbreviation is not run to decide this, so a word whose function would decline is still painted as a command (as in fish, \#11809).
 
 == Completion
@@ -500,7 +523,7 @@ Fish's dropped `--quiet` (keep the short form in history) is not adopted: histor
   [Enter expands the word at the cursor], [The same, before the line is checked],
   [Ctrl-Space], [The same, as today],
   [Undo is one step], [Not yet; no undo in the line editor],
-  [Highlight as a command], [The same],
+  [Highlight as a command], [The same, in a separate change],
   [Complete names in command position], [The same, for `abbrWord` words],
   [Universal variables (3.0--3.5)], [Not adopted],
 )
@@ -509,7 +532,7 @@ Fish's dropped `--quiet` (keep the short form in history) is not adopted: histor
 
 Delete `aliases` from `Main.go` and put this in `init.msh`:
 
-```
+```msh
 's'  'git status -u' abbr
 'v'  'nvim' abbr
 'mk' 'mkdir' abbr
@@ -539,33 +562,15 @@ The shell ships with no abbreviations (fish issue \#9462 asks for defaults; that
   It has no terminal state, so it is tested with a table of lines and cursors.
 + *Expanding.* One function that the Space, separator and Enter handlers call, replacing the two copies in `Main.go`.
   It runs quotations through the prompt's runner (`evalCancel`, killing commands it runs), with its own 1 second limit beside `promptTimeout`.
-+ *Painting and completion* in `CommandPaint.go` and the completion code.
++ *Completion* in the completion code. Painting is a separate change (section 6.7).
 + *Tests.*
   - Go: the word and position table (start, list heads, nested lists, `|` on command and code lines, strings, paths, comments, `!!`, `..`, mid-line cursor, Enter in the middle of a word, a no-break space, a combining mark after `[`, an `abbrWord` with an accent); precedence and `none` falling through; the cursor marker with each trigger.
-  - `tests/success`: `abbrAdd`, `abbrList`, `abbrRename` and `abbrErase` round trips.
+  - Go: a word after `<` and `>` on a command line has no command; positions compared in order.
+  - `tests/success`: `abbrAdd`, `abbrList`, `abbrRename` and `abbrErase` round trips; inert entries (a bad regex, a word with a space) added without failing and listed; erasing a missing `abbr`; renaming onto an existing one.
   - `tests/typecheck_fail`: a quotation of the wrong type, text where `AbbrExpansion` or `AbbrMatch` is expected, redeclaring a built-in name.
 + *Documentation.* An "Abbreviations" section in `getting-started.inc.html` after "Customizing the Prompt";
   the builtins in `functions.inc.html`; the built-in type names in `type_system.inc.html` and one line in `mshell.md` (only that the names are reserved, as for the prompt);
   "without expanding aliases" in `mshell.md` becomes "abbreviations"; an entry in `CHANGELOG.md`.
-
-= Open question <open-question>
-
-*A quotation literal is not given its input type by a union.* The smallest example:
-
-```
-def qq (int | ({a: int} -- int) -- ) drop end
-(:a?) qq
-```
-
-gives "type error at line 2, column 3: 'get' reads a value whose type is not known here (\_); annotate it".
-It checks when the parameter is a plain quotation type, `def qq (({a: int} -- int) -- ) drop end`,
-and when the body's words wait for their input type, as `(len)` against `int | (str -- int)` does.
-
-The related `as` case, `(:a?) as ({a: int} -- int) drop`, was fixed in \#361 (`0af057e`).
-I checked against a build of that commit: the `as` case checks, and so does `(:a?) as ({a: int} -- int) qq` against the union parameter, so `as` is now a workaround.
-The union case above still fails.
-Should a union with exactly one quotation member give a quotation literal that member's input type, as a plain quotation parameter does?
-The design uses an enum either way.
 
 = Sources
 
