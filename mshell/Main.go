@@ -628,6 +628,9 @@ func main() {
 	// 26). --check-types is accepted and changes nothing.
 	typeCheckOnly := false
 	inputFromStdin := false
+	// --debug opens the interactive debug log. It is for development, so
+	// it is left out of --help and the completions.
+	debugLog := false
 
 	if len(os.Args) == 1 {
 		// Enter interactive mode
@@ -679,6 +682,8 @@ func main() {
 		} else if arg == "--version" {
 			fmt.Fprintln(os.Stdout, mshellVersion)
 			os.Exit(0)
+		} else if arg == "--debug" {
+			debugLog = true
 		} else if arg == "--check-terminal" {
 			os.Exit(runTerminalCheck())
 		} else if arg == "-c" {
@@ -751,38 +756,11 @@ func main() {
 			os.Exit(1)
 		}
 
-		// For debugging, write number of bytes read and bytes to /tmp/mshell.log
-		// If on Windows
 		var f *os.File
-		if runtime.GOOS == "windows" {
-			local_app_data, ok := os.LookupEnv("LOCALAPPDATA")
-			if !ok {
-				fmt.Fprintf(os.Stderr, "Error getting LOCALAPPDATA environment variable\n")
-				os.Exit(1)
-				return
-			}
-
-			// Make dir LOCALAPPDATA/msh if it doesn't exist
-			err = os.MkdirAll(local_app_data+"/msh", 0755)
+		if debugLog {
+			f, err = openDebugLog()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error creating directory %s/msh: %s\n", local_app_data, err)
-				os.Exit(1)
-				return
-			}
-
-			// Open file for writing
-			f, err = os.OpenFile(local_app_data+"/msh/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error opening file %s/msh/mshell.log: %s\n", local_app_data, err)
-				os.Exit(1)
-				return
-			}
-			defer f.Close()
-		} else {
-			// Open file for writing
-			f, err = os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+				fmt.Fprintf(os.Stderr, "Error opening debug log: %s\n", err)
 				os.Exit(1)
 				return
 			}
@@ -1102,7 +1080,7 @@ type TermState struct {
 	l              *Lexer
 	p              *MShellParser
 	historyIndex   int
-	f              *os.File // This is log file.
+	f              *os.File // The debug log, nil unless --debug was given.
 	logInstanceID  string
 	// tokenChan chan TerminalToken
 	stdInState *StdinReaderState
@@ -1731,6 +1709,18 @@ func newLogInstanceID() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
+// openDebugLog opens the debug log for appending, next to the history
+// files, private to the current user.
+func openDebugLog() (*os.File, error) {
+	dir, err := GetHistoryDir()
+	if err != nil {
+		return nil, err
+	}
+	return openHistoryFile(filepath.Join(dir, "mshell.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY)
+}
+
+// Logf writes to the debug log. Without --debug it returns at once, so
+// keep calls off the per-key path.
 func (state *TermState) Logf(format string, args ...interface{}) {
 	if state == nil || state.f == nil {
 		return
@@ -3440,7 +3430,6 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 			}
 
 			if b2 >= 128 && b2 <= 191 { // 128-191 are the second byte of a 2-byte UTF-8 character
-				state.Logf("Got 2-byte UTF-8 character: %d %d\n", c, b2)
 				// Return the 2-byte UTF-8 character as a single token
 				// Convert to rune
 				r := rune((int32(b2) & 0x3F) | ((int32(c) & 0x1F) << 6))
@@ -3468,7 +3457,6 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				}
 
 				if b3 >= 128 && b3 <= 191 { // 128-191 are the third byte of a 3-byte UTF-8 character
-					state.Logf("Got 3-byte UTF-8 character: %d %d %d (%x %x %x)\n", c, b2, b3, c, b2, b3)
 					// Return the 3-byte UTF-8 character as a single token
 					// Convert to rune
 					r := rune((int32(c&0x0F) << 12) | (int32(b2&0x3F) << 6) | int32(b3&0x3F))
@@ -3511,7 +3499,6 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					}
 
 					if b4 >= 128 && b4 <= 191 { // 128-191 are the fourth byte of a 4-byte UTF-8 character
-						state.Logf("Got 4-byte UTF-8 character: %d %d %d %d\n", c, b2, b3, b4)
 						// Return the 4-byte UTF-8 character as a single token
 						// Convert to rune
 						r := rune((int32(c&0x07) << 18) | (int32(b2&0x3F) << 12) | (int32(b3&0x3F) << 6) | int32(b4&0x3F))
@@ -3663,9 +3650,6 @@ func (state *TermState) InteractiveMode() error {
 		} else {
 			state.tabCompletions1 = state.tabCompletions1[:0]
 		}
-
-		// state.Logf("Waiting for token...\n")
-		state.f.Sync()
 
 		token, err = state.readInputToken()
 
