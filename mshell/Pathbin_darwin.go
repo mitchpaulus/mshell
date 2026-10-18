@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/signal"
 	"os/exec"
-	"fmt"
 	"syscall"
 	"golang.org/x/term"
 	"golang.org/x/sys/unix"
@@ -167,6 +166,6 @@ func (s *TermState) UpdateSize() {
 	var err error
 	s.numCols, s.numRows, err = term.GetSize(s.stdInFd)
 	if err != nil {
-		fmt.Fprintf(s.f, "Error getting terminal size for FD %d: %s\n", s.stdInFd, err)
+		s.Logf("Error getting terminal size for FD %d: %s\n", s.stdInFd, err)
 	}
 }

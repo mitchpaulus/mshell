@@ -69,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The interactive shell has no built-in aliases; add abbreviations to `init.msh` instead.
+- The interactive shell writes a debug log only when started with `--debug`.
+  The log is `mshell.log` in the history directory, readable only by you, instead of `/tmp/mshell.log`.
+  Without `--debug`, no log file is opened, so a key press no longer waits on an fsync,
+  and the shell no longer fails to start when the log file cannot be opened.
 - Every script is type-checked before it runs, and runs only if it checks: a file, `-c` code, or code read from standard input.
   There is no way to run a script unchecked; `--check-types` is still accepted and changes nothing.
   `--type-check-only` checks and exits, as before.
