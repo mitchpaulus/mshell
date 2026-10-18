@@ -352,6 +352,17 @@ func (state *EvalState) evalAbbrList(t *Token, stack *MShellStack) *EvalResult {
 	return nil
 }
 
+// abbrMayMatch reports whether an abbreviation that can expand matches
+// word, wherever it is.
+func (state *EvalState) abbrMayMatch(word string) bool {
+	for _, e := range state.Abbrs {
+		if e.inert == "" && e.matches(word) {
+			return true
+		}
+	}
+	return false
+}
+
 // commandAbbrWords are the words of the abbreviations that expand in
 // command position, for completion.
 func (state *EvalState) commandAbbrWords() []string {
@@ -386,13 +397,14 @@ func isAbbrTextToken(t TokenType) bool {
 	return false
 }
 
-// findAbbrSite finds the word to try an abbreviation on in line, with the
+// abbrWordAt finds the word to try an abbreviation on in line, with the
 // cursor at cursor: the text from the nearest separator before the cursor
-// to the cursor, or with toWordEnd (for Enter), to the next separator.
-// isProgram says whether a word names a program, by the rule the shell
-// uses when it runs a line. It returns false when there is no word to try.
-func findAbbrSite(line SourceText, cursor ByteOffset, toWordEnd bool, isProgram func(string) bool) (abbrSite, bool) {
-	start, end := cursor, cursor
+// to the cursor, or with toWordEnd (for Enter), to the next separator. It
+// returns false when there is no word, or when the word does not start and
+// end on grapheme boundaries: replacing it would take the rest of a
+// grapheme with it.
+func abbrWordAt(line SourceText, cursor ByteOffset, toWordEnd bool) (start, end ByteOffset, ok bool) {
+	start, end = cursor, cursor
 	for start > 0 {
 		r, size := utf8.DecodeLastRuneInString(string(line[:start]))
 		if isAbbrSeparator(r) {
@@ -407,31 +419,34 @@ func findAbbrSite(line SourceText, cursor ByteOffset, toWordEnd bool, isProgram 
 		}
 		end += ByteOffset(size)
 	}
-	// Replacing a word that does not end on grapheme boundaries would take
-	// the rest of a grapheme with it.
 	if start == end || graphemeFloor(line, start) != start || graphemeCeil(line, end) != end {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+// findAbbrSite finds the position of the word [start, end) of line, from
+// the line's tokens. The word's token is the line's token that starts at
+// the word, as it is painted, even when it runs on past the word. isProgram
+// says whether a word names a program, by the rule the shell uses when it
+// runs a line. It returns false when the word may not expand: it is not at
+// the start of a token, or is in a string, path or comment, or the line
+// does not lex up to the word's end.
+func findAbbrSite(lt *lineTokens, line SourceText, start, end ByteOffset, isProgram func(string) bool) (abbrSite, bool) {
+	tokens := lt.get(line)
+	if lt.errAt >= 0 && lt.errAt < end {
 		return abbrSite{}, false
 	}
 
-	l := NewLexer(string(line[:end]), &TokenFile{"REPL"})
-	l.allowUnterminatedString = true
-	l.emitWhitespace = true
-	l.emitComments = true
-	tokens, err := l.Tokenize()
-	if err != nil {
-		return abbrSite{}, false
-	}
-
-	// The tokens before the word, without white space or comments, and
-	// the open brackets among them.
-	var before []Token
-	var open []int
-	lastPipe := -1
+	// The tokens before the word, without white space or comments, are
+	// tracked by index: the first, the last, the last '|' outside brackets,
+	// and the open brackets.
+	open := lt.brackets[:0]
+	first, last, lastPipe := -1, -1, -1
 	found := false
-	// With white space and comments emitted, the tokens tile the line, so
-	// their byte offsets add up.
+	// The tokens tile the line, so their byte offsets add up.
 	var offset ByteOffset
-	for _, t := range tokens {
+	for i, t := range tokens {
 		if t.Type == EOF {
 			break
 		}
@@ -446,55 +461,75 @@ func findAbbrSite(line SourceText, cursor ByteOffset, toWordEnd bool, isProgram 
 		if offset > start {
 			// A token that starts before the word runs into it: the word is
 			// inside a string, path or comment.
-			return abbrSite{}, false
+			break
 		}
 		switch t.Type {
 		case WHITESPACE, LINECOMMENT:
 			continue
 		case LEFT_SQUARE_BRACKET, LEFT_PAREN, LEFT_CURLY, GRID_OPEN:
-			open = append(open, len(before))
+			open = append(open, int32(i))
 		case RIGHT_SQUARE_BRACKET, RIGHT_PAREN, RIGHT_CURLY, GRID_CLOSE:
 			if len(open) > 0 {
 				open = open[:len(open)-1]
 			}
 		case PIPE:
 			if len(open) == 0 {
-				lastPipe = len(before)
+				lastPipe = i
 			}
 		}
-		before = append(before, t)
+		if first < 0 {
+			first = i
+		}
+		last = i
 	}
+	lt.brackets = open
 	if !found {
 		return abbrSite{}, false
 	}
 
 	site := abbrSite{Start: start, End: end}
-	if len(before) == 0 {
+	if first < 0 {
 		site.CommandPosition = true
 		return site, true
 	}
-	commandLine := before[0].Type == LITERAL && isProgram(before[0].Lexeme)
-	prev := before[len(before)-1].Type
+	commandLine := tokens[first].Type == LITERAL && isProgram(tokens[first].Lexeme)
+	prev := tokens[last].Type
 	if prev == LEFT_SQUARE_BRACKET || (prev == PIPE && commandLine) {
 		site.CommandPosition = true
 		return site, true
 	}
 
-	// The command the word is an argument of.
+	// The command the word is an argument of: the first token after the
+	// innermost open '[', or after the last '|' (or the first token) on a
+	// command line.
 	head := -1
 	switch {
 	case len(open) > 0:
-		if i := open[len(open)-1]; before[i].Type == LEFT_SQUARE_BRACKET {
-			head = i + 1
+		if i := open[len(open)-1]; tokens[i].Type == LEFT_SQUARE_BRACKET {
+			head = nextAbbrToken(tokens, int(i), last)
 		}
 	case commandLine && prev != LESSTHAN && prev != GREATERTHAN:
 		// A word after a redirect is a file, not an argument.
-		head = lastPipe + 1
+		head = first
+		if lastPipe >= 0 {
+			head = nextAbbrToken(tokens, lastPipe, last)
+		}
 	}
-	if head >= 0 && head < len(before) && before[head].Type == LITERAL {
-		site.Command, site.HasCommand = before[head].Lexeme, true
+	if head >= 0 && tokens[head].Type == LITERAL {
+		site.Command, site.HasCommand = tokens[head].Lexeme, true
 	}
 	return site, true
+}
+
+// nextAbbrToken is the index of the first token after i, up to last, that
+// is not white space or a comment, or -1.
+func nextAbbrToken(tokens []Token, i int, last int) int {
+	for j := i + 1; j <= last; j++ {
+		if t := tokens[j].Type; t != WHITESPACE && t != LINECOMMENT {
+			return j
+		}
+	}
+	return -1
 }
 
 // isProgramWord reports whether word names a program, by the rule the
@@ -530,11 +565,20 @@ func (state *TermState) expandAbbr(toWordEnd bool) (abbrExpansion, bool) {
 	if len(abbrs) == 0 {
 		return abbrExpansion{}, false
 	}
-	site, ok := findAbbrSite(state.currentCommand, state.index, toWordEnd, state.isProgramWord)
+	line := state.currentCommand
+	start, end, ok := abbrWordAt(line, state.index, toWordEnd)
 	if !ok {
 		return abbrExpansion{}, false
 	}
-	word := string(state.currentCommand[site.Start:site.End])
+	// Most words match nothing; they need no tokens.
+	word := string(line[start:end])
+	if !state.evalState.abbrMayMatch(word) {
+		return abbrExpansion{}, false
+	}
+	site, ok := findAbbrSite(&state.lineTokens, line, start, end, state.isProgramWord)
+	if !ok {
+		return abbrExpansion{}, false
+	}
 	for i := len(abbrs) - 1; i >= 0; i-- {
 		e := abbrs[i]
 		if e.inert != "" || !e.matches(word) || !e.appliesAt(site) {
@@ -600,14 +644,16 @@ func (state *TermState) expandAbbrOnEnter() {
 // is set when the quote failed: the word is left as it is, and no other
 // abbreviation is tried. The quote's output is not shown.
 func (state *TermState) runAbbrFunc(e *abbrEntry, word string, site abbrSite) (string, bool, bool) {
+	// The quote may keep what it is given, so it gets copies, not the
+	// editor's arena.
 	info := NewDict()
-	info.Items["word"] = MShellString{word}
+	info.Items["word"] = MShellString{strings.Clone(word)}
 	command := &Maybe{}
 	if site.HasCommand {
-		command.obj = MShellString{site.Command}
+		command.obj = MShellString{strings.Clone(site.Command)}
 	}
 	info.Items["command"] = command
-	info.Items["line"] = MShellString{string(state.currentCommand)}
+	info.Items["line"] = MShellString{strings.Clone(string(state.currentCommand))}
 	stack := MShellStack{info}
 
 	var out bytes.Buffer

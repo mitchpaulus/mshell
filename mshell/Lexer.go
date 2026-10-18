@@ -383,6 +383,9 @@ type Lexer struct {
 	allowUnterminatedString bool
 	emitWhitespace bool // If true, will emit whitespace tokens.
 	emitComments bool // If true, will emit comments as tokens.
+	// skipValues leaves Token.Value nil, for readers that only need
+	// token types and lexemes, such as highlighting.
+	skipValues bool
 	tokenFile *TokenFile
 	// One entry per format string whose interpolation is open, innermost
 	// last. Each counts the '{' opened inside that interpolation and not yet
@@ -446,14 +449,17 @@ func (l *Lexer) makeToken(tokenType TokenType) Token {
 			Lexeme: fmt.Sprintf("%d:%d: %s", l.startLine, l.startCol+1, msg)}
 	}
 
-	return Token{
+	t := Token{
 		Line:   l.startLine,
 		Column: l.startCol + 1,
 		Start:  l.runeStart,
 		Lexeme: lexeme,
 		Type:   tokenType,
-		Value:  literalValue(tokenType, lexeme),
 	}
+	if !l.skipValues {
+		t.Value = literalValue(tokenType, lexeme)
+	}
+	return t
 }
 
 // numberLexemeError checks the numbers in a number, index or positional
@@ -1562,7 +1568,13 @@ func (l *Lexer) parsePath() Token {
 }
 
 func (l *Lexer) Tokenize() ([]Token, error) {
-	var tokens []Token
+	return l.TokenizeInto(nil)
+}
+
+// TokenizeInto is Tokenize appending to dst[:0], so a caller that lexes
+// again and again can reuse one slice.
+func (l *Lexer) TokenizeInto(dst []Token) ([]Token, error) {
+	tokens := dst[:0]
 	for {
 		t := l.scanToken()
 		tokens = append(tokens, t)

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"math/rand"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func testIsProgram(word string) bool {
@@ -73,7 +75,8 @@ func TestFindAbbrSite(t *testing.T) {
 		if cursor < 0 {
 			cursor = len(line)
 		}
-		site, ok := findAbbrSite(SourceText(line), ByteOffset(cursor), c.toWordEnd, testIsProgram)
+		var lt lineTokens
+		site, ok := abbrSiteAt(&lt, SourceText(line), ByteOffset(cursor), c.toWordEnd)
 		if ok != c.ok {
 			t.Errorf("%q: ok = %v, want %v", c.line, ok, c.ok)
 			continue
@@ -95,6 +98,160 @@ func TestFindAbbrSite(t *testing.T) {
 			t.Errorf("%q: command %q, want %q", c.line, command, c.command)
 		}
 	}
+}
+
+// abbrSiteAt finds the word at the cursor and its position, as expandAbbr
+// does.
+func abbrSiteAt(lt *lineTokens, line SourceText, cursor ByteOffset, toWordEnd bool) (abbrSite, bool) {
+	start, end, ok := abbrWordAt(line, cursor, toWordEnd)
+	if !ok {
+		return abbrSite{}, false
+	}
+	return findAbbrSite(lt, line, start, end, testIsProgram)
+}
+
+// findAbbrSiteByPrefix is the lookup as it was first written: it lexes the
+// line only up to the word's end. It is the reference for
+// TestAbbrSiteFromLineTokens.
+func findAbbrSiteByPrefix(line SourceText, cursor ByteOffset, toWordEnd bool) (abbrSite, bool) {
+	start, end, ok := abbrWordAt(line, cursor, toWordEnd)
+	if !ok {
+		return abbrSite{}, false
+	}
+	l := NewLexer(string(line[:end]), &TokenFile{"REPL"})
+	l.allowUnterminatedString = true
+	l.emitWhitespace = true
+	l.emitComments = true
+	tokens, err := l.Tokenize()
+	if err != nil {
+		return abbrSite{}, false
+	}
+	var before []Token
+	var open []int
+	lastPipe := -1
+	found := false
+	var offset ByteOffset
+	for _, t := range tokens {
+		if t.Type == EOF {
+			break
+		}
+		tokenStart := offset
+		offset += ByteOffset(len(t.Lexeme))
+		if tokenStart >= start {
+			found = tokenStart == start && !isAbbrTextToken(t.Type)
+			break
+		}
+		if offset > start {
+			return abbrSite{}, false
+		}
+		switch t.Type {
+		case WHITESPACE, LINECOMMENT:
+			continue
+		case LEFT_SQUARE_BRACKET, LEFT_PAREN, LEFT_CURLY, GRID_OPEN:
+			open = append(open, len(before))
+		case RIGHT_SQUARE_BRACKET, RIGHT_PAREN, RIGHT_CURLY, GRID_CLOSE:
+			if len(open) > 0 {
+				open = open[:len(open)-1]
+			}
+		case PIPE:
+			if len(open) == 0 {
+				lastPipe = len(before)
+			}
+		}
+		before = append(before, t)
+	}
+	if !found {
+		return abbrSite{}, false
+	}
+	site := abbrSite{Start: start, End: end}
+	if len(before) == 0 {
+		site.CommandPosition = true
+		return site, true
+	}
+	commandLine := before[0].Type == LITERAL && testIsProgram(before[0].Lexeme)
+	prev := before[len(before)-1].Type
+	if prev == LEFT_SQUARE_BRACKET || (prev == PIPE && commandLine) {
+		site.CommandPosition = true
+		return site, true
+	}
+	head := -1
+	switch {
+	case len(open) > 0:
+		if i := open[len(open)-1]; before[i].Type == LEFT_SQUARE_BRACKET {
+			head = i + 1
+		}
+	case commandLine && prev != LESSTHAN && prev != GREATERTHAN:
+		head = lastPipe + 1
+	}
+	if head >= 0 && head < len(before) && before[head].Type == LITERAL {
+		site.Command, site.HasCommand = before[head].Lexeme, true
+	}
+	return site, true
+}
+
+// TestAbbrSiteFromLineTokens checks the lookup on the line's tokens
+// against lexing the line up to the word, at every cursor of random lines.
+// They may differ only where the word ends inside a longer token of the
+// whole line: then the lookup judges the token as it is painted.
+func TestAbbrSiteFromLineTokens(t *testing.T) {
+	pieces := []string{
+		"s", "co", "git", "echo", "grep", "sudo", "x", "1", "99999999999999999999999", "-", "-5", ".", "..", "/usr/bin/git",
+		" ", " ", " ", "\n", "\t", "[", "]", "(", ")", "{", "}", "|", ";", "<", ">", "#", "'", "\"", "`", "$\"", "{", "}",
+		"\\", "é", "\u0301", "世", "?", "!", "@", ":", ",", "[|", "|]", "2024-01-02", "true", "abbr:", "@x", "x!", "%",
+	}
+	rng := rand.New(rand.NewSource(1))
+	var lt lineTokens
+	cases, cut := 0, 0
+	for n := 0; n < 10000; n++ {
+		var b strings.Builder
+		for k := rng.Intn(12) + 1; k > 0; k-- {
+			b.WriteString(pieces[rng.Intn(len(pieces))])
+		}
+		line := SourceText(b.String())
+		for cursor := 0; cursor <= len(line); cursor++ {
+			if cursor < len(line) && !utf8.RuneStart(line[cursor]) {
+				continue
+			}
+			for _, toWordEnd := range []bool{false, true} {
+				cases++
+				want, wantOk := findAbbrSiteByPrefix(line, ByteOffset(cursor), toWordEnd)
+				got, gotOk := abbrSiteAt(&lt, line, ByteOffset(cursor), toWordEnd)
+				if got == want && gotOk == wantOk {
+					continue
+				}
+				if wordCutsToken(&lt, line, ByteOffset(cursor), toWordEnd) {
+					cut++
+					continue
+				}
+				t.Fatalf("%q cursor %d toWordEnd %v: %+v %v, lexing up to the word gives %+v %v", line, cursor, toWordEnd, got, gotOk, want, wantOk)
+			}
+		}
+	}
+	t.Logf("%d cases, %d differ where the word ends inside a token", cases, cut)
+}
+
+// wordCutsToken reports whether the word ends inside a token of the
+// whole line: the line's token at the word's last byte runs past it, or a
+// lex error starts in the word (a number too large to read that the cursor
+// is in). Lexing only up to the word's end sees that token cut short.
+func wordCutsToken(lt *lineTokens, line SourceText, cursor ByteOffset, toWordEnd bool) bool {
+	start, end, ok := abbrWordAt(line, cursor, toWordEnd)
+	if !ok {
+		return false
+	}
+	lt.get(line)
+	if lt.errAt >= start && lt.errAt < end {
+		return true
+	}
+	var offset ByteOffset
+	for _, t := range lt.tokens {
+		tokenStart := offset
+		offset += ByteOffset(len(t.Lexeme))
+		if tokenStart < end && offset >= end {
+			return offset > end
+		}
+	}
+	return false
 }
 
 // abbrTestState is an editor holding the abbreviations source adds. Its

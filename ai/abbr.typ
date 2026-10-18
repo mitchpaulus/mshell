@@ -555,6 +555,195 @@ end
 What changes for these: they expand only in command position, not after `echo`; never in a string; also on `]`, `|`, `;`, `<`, `>`, `)`; and on Enter with the cursor anywhere in the word.
 The shell ships with no abbreviations (fish issue \#9462 asks for defaults; that is a separate question).
 
+= Cost of a key press
+
+Every Space, Enter and `| ; < > ] )` runs the lookup below, and every key, trigger or not, repaints the line.
+The figures compare the branch's first version with what it does now: the line is lexed once per edit, its tokens are shared,
+and its text and tokens live in buffers kept from key to key.
+Costs are for three lines, each ending in a word that matches nothing:
+short (`git checkout nomatch`, 20 B), medium (a pipeline of lists, 101 B) and long (a pipeline repeated, 1.9 KB).
+They are medians of 6 to 8 interleaved runs on the FX-8350 with Go 1.27, written short / medium / long.
+
+#let stepbox(title, body, fill: white) = block(
+  width: 100%, inset: 6pt, radius: 3pt, stroke: 0.6pt + luma(140), fill: fill, breakable: false,
+  align(left, stack(dir: ttb, spacing: 4pt,
+    text(weight: "bold", size: 9pt, title),
+    par(justify: false, leading: 0.5em, text(size: 8.5pt, body)))),
+)
+#let down = align(center, text(size: 10pt, fill: luma(110))[↓])
+#let costs(s) = text(size: 8pt, fill: rgb("#7a2e2e"), s)
+#let same = rgb("#f4f4f4")
+#let worse = rgb("#fbe9e7")
+#let better = rgb("#e8f3ec")
+
+#figure(
+  grid(
+    columns: (1fr, 1fr), column-gutter: 8pt, row-gutter: 2pt,
+    grid.cell(colspan: 2, stepbox(fill: same, [1. A trigger key arrives], [Space, Enter, or `| ; < > ] )`. No abbreviations: insert the key, as before.])),
+    grid.cell(colspan: 2, down),
+    grid.cell(colspan: 2, stepbox(fill: same, [2. Find the word], [Scan back from the cursor to a space or `[ ] ( ) { } | ; < >`, and forward too for Enter. Bytes only, so its cost is the word's length.])),
+    down, down,
+    stepbox(fill: worse, [3. Could it match? --- _not in the first version_], [Every word goes on to step 4.]),
+    stepbox(fill: better, [3. Could it match?], [Compare the `abbrWord` words and match the `abbrRegex` ones. No match: insert the key and stop, without looking at tokens. #costs[About 0.1 µs.]]),
+    down, down,
+    stepbox(fill: worse, [4. Lex the line up to the word], [A new `Lexer` and a new `[]Token` for the text up to the word, and each token copied into `before`. #costs[1.3 / 15.6 / 240 µs, 6 / 17 / 63 allocations, including step 5.]]),
+    stepbox(fill: better, [4. Read the cached tokens], [The previous key's paint lexed this same line (@fig-cache). #costs[No time, no allocations.]]),
+    down, down,
+    stepbox(fill: same, [5. Walk the tokens before the word], [A stack of open brackets, the last `|` outside them, the first and last tokens. Gives command position, the command the word is an argument of, or neither.]),
+    stepbox(fill: same, [5. Walk the tokens before the word], [The same walk, on indices into the cached tokens instead of copies. #costs[0.1 / 0.24 / 5.1 µs, no allocations.]]),
+    grid.cell(colspan: 2, down),
+    grid.cell(colspan: 2, stepbox(fill: same, [6. Try the abbreviations, newest first], [The first with `matches(word)` and `appliesAt(site)`: `abbrText` gives its text; `abbrFunc` runs the quote on an `AbbrInfo`, stopped after 1 second (about 8 µs for a short quote). Replace the word, then insert the key or move to the cursor marker.])),
+    grid.cell(colspan: 2, down),
+    stepbox(fill: worse, [7. Paint: lex the whole line again], [`Tokenize` with a new `[]Token` each time, which the paint drops when it is done. #costs[1.5 / 11.2 / 185 µs.]]),
+    stepbox(fill: better, [7. Paint: lex the whole line, once], [Into the cache's buffer, reused from the last edit, without decoding literal values, which painting does not use. The tokens stay for the next key. #costs[0.5 / 4.0 / 80 µs, no allocations.]]),
+    down, down,
+    grid.cell(colspan: 2, stepbox(fill: same, [8. Paint: style, lay out, write], [Style spans from the tokens, widths, rows, escape sequences. #costs[0.4 / 0.6 / 8 µs now; 0.6 / 1.4 / 13 µs in the first version, which also paid the garbage collector for its lexes.]])),
+  ),
+  kind: image,
+  caption: [One trigger key. Left: the first version. Right: now. Red boxes cost more than they need to, green ones are the change.],
+) <fig-key-steps>
+
+#let tbox(body, fill: white) = box(
+  width: 100%, inset: 4pt, radius: 2pt, stroke: 0.5pt + luma(140), fill: fill,
+  align(center, text(size: 7.5pt, body)),
+)
+#let rarr = align(center + horizon, text(size: 9pt, fill: luma(110))[→])
+
+#figure(
+  grid(
+    columns: (1fr, auto, 1fr, auto, 1fr, auto, 1fr, auto, 1fr),
+    column-gutter: 2pt, align: horizon,
+    tbox(fill: better)[Key $n-1$ edits the line to `L`],
+    rarr,
+    tbox(fill: better)[Paint lexes `L` once: cache holds `L` and its tokens],
+    rarr,
+    tbox[Key $n$: Space. Lookup reads the cache (the line is still `L`)],
+    rarr,
+    tbox[Replace the word, insert the key: the line is now `L'`],
+    rarr,
+    tbox(fill: better)[Paint lexes `L'` once: the cache holds `L'`],
+  ),
+  kind: image,
+  caption: [Where the lookup's tokens come from. The cache is keyed by the line's text, so an edit that the paint has not seen yet (keys typed faster than the screen repaints) only means one lex on the first read. There is one lex per edit, whoever asks first.],
+) <fig-cache>
+
+#let cLookup = rgb("#d1495b")
+#let cWalk = rgb("#edae49")
+#let cPaintLex = rgb("#00798c")
+#let cReused = rgb("#66a182")
+#let cRest = luma(175)
+#let cOld = rgb("#30638e")
+#let swatch(c, label) = box[#box(width: 8pt, height: 8pt, fill: c, baseline: 1pt) #text(size: 8pt, label)#h(8pt)]
+#let costbar(scale, parts) = stack(dir: ltr, ..parts.map(p => box(width: p.at(0) * scale, height: 10pt, fill: p.at(1))))
+#let barchart(title, scale, rows) = {
+  align(left, text(size: 9pt, weight: "bold", title))
+  v(-4pt)
+  grid(
+    columns: (2.7cm, 10.6cm, auto), row-gutter: 5pt, column-gutter: 6pt,
+    align: (right + horizon, left + horizon, left + horizon),
+    ..rows.map(r => (text(size: 8.5pt, r.at(0)), costbar(scale, r.at(1)), text(size: 8.5pt, r.at(2)))).flatten(),
+  )
+}
+
+#figure(
+  {
+    barchart([Medium line, 101 B], 0.36cm, (
+      ([`main`, alias map], ((0.2, cOld), (11.2, cPaintLex), (1.4, cRest)), [12.4 µs, 10 allocs]),
+      ([first version], ((15.6, cLookup), (11.2, cPaintLex), (1.4, cRest)), [28.8 µs, 27 allocs]),
+      ([now], ((0.1, cWalk), (4.0, cReused), (1.2, cRest)), [5.3 µs, 0 allocs]),
+    ))
+    v(6pt)
+    barchart([Long line, 1.9 KB], 0.0235cm, (
+      ([`main`, alias map], ((1.5, cOld), (185, cPaintLex), (12.9, cRest)), [194 µs, 52 allocs]),
+      ([first version], ((240, cLookup), (185, cPaintLex), (12.9, cRest)), [443 µs, 115 allocs]),
+      ([now], ((0.1, cWalk), (79.6, cReused), (13.1, cRest)), [93 µs, 0 allocs]),
+    ))
+    v(4pt)
+    swatch(cOld)[alias lookup (`main`)]
+    swatch(cLookup)[lookup: own lex and walk]
+    swatch(cWalk)[lookup: could it match?]
+    swatch(cPaintLex)[paint: `Tokenize`]
+    swatch(cReused)[paint: lex into reused buffer]
+    swatch(cRest)[paint: the rest]
+  },
+  kind: image,
+  caption: [One Space key, to the end of preparing the repaint. The segments are from benchmarks of each step; the totals on the right were measured over the whole key.
+  The word matches nothing, so now the lookup stops at step 3. The short line is 2.4 µs on `main`, 5.0 µs in the first version and 1.3 µs now.],
+) <fig-key-costs>
+
+Three things stand out in @fig-key-costs:
+
+- The paint's lex is most of a key press already, on `main`: 89% of the paint on the medium line, 93% on the long one.
+  The first version added a second lex of nearly the whole line to every trigger key, which more than doubled its cost.
+- Of each lex, most of the time is not lexing: `Tokenize` grows a new `[]Token` (72 bytes a token) each time, and the garbage collector scans it.
+  Lexing into a buffer kept from the last edit is 2.3--2.9 times faster with the same tokens.
+- With one lex per edit, a trigger key is cheaper than a plain key is on `main` today: the lookup's walk is small, and the paint gets the faster lex.
+
+#decision[
+*Lex once per edit, and share the tokens.*
+The editor keeps the current line's tokens in one cache, lexed as painting needs them (white space and comments emitted, unterminated strings allowed),
+keyed by the line's text, with its own `Lexer` and a `[]Token` that is reused from edit to edit.
+The paint and the abbreviation lookup both read it; whichever asks first after an edit lexes.
+A lex error stops the lexer, so the cache keeps the tokens before the error and where it was: the paint shows the line unstyled, as now,
+and the lookup gives up only when the error is before the word's end.
+
+Two other readers lex the line, and do not use the cache:
+Tab completion lexes up to the cursor, without white space, once per Tab press;
+Enter's parser lexes the line in its own mode, once per line.
+Neither runs on every key, so sharing would add rules without saving anything that shows.
+]
+
+#decision[
+*The word's token is the token on the screen.*
+Reading the whole line's tokens, rather than lexing up to the word, changes one thing: the word's own token is lexed with what follows it.
+Where the word ends inside a longer token, the lookup now sees that token.
+For example, with the cursor between `$` and `"` in `$"a"`, the word `$` is the start of a string, as its color shows, and does not expand;
+and with the cursor inside `99999999999999999999999`, the digits before it are part of a number too large to read, so they do not expand,
+where lexing only up to the cursor saw a small number.
+
+`TestAbbrSiteFromLineTokens` checks that nothing else changes. It keeps the first version as a reference and compares the two
+on random lines built from words, brackets, quotes, comments, numbers too large to read, combining marks and wide characters,
+at every cursor and for both Space and Enter.
+They may differ only where the word ends inside a token of the whole line: the line's token at the word's last byte runs past it, or a lex error starts in the word.
+Run once over 200,000 lines (6.3 million cases), they differ in 178,106 (2.8%), every one of that kind; the test in the suite runs 10,000 lines.
+The tokens before the word, which decide the position, never differ.
+]
+
+== No allocations per key
+
+A key goes through four steps: read it, handle it, find the history suggestion, repaint.
+The first version allocated about 5 times a key on that path, and 4 of them were not the abbreviations' doing:
+
+- *`Tokenize`* grew a new `[]Token` on every repaint. The cache lexes into a slice it keeps (`Lexer.TokenizeInto`).
+  It keeps room for 4,096 tokens, or twice the line, whichever is more, so one huge paste does not hold a huge buffer for the rest of the session.
+- *Literal values.* The lexer decodes each string literal into a value; for highlighting it skips that (`Lexer.skipValues`).
+- *The line's text.* The line is a Go string, so each edit, `a + new + b`, made a new one, and so did the line with its history suggestion.
+  Both now come from `lineArena` (`CommandBuffers.go`): 64 KB chunks that are only ever appended to.
+  A string handed out is never written again, so the strings are as immutable as any other, the cache can compare them, and nothing can see one change.
+  A new chunk is an allocation every few thousand edits of a short line. Lines over 8 KB are made as before.
+- A string kept for long keeps its whole chunk alive, so whatever keeps the line past the next few edits takes a copy:
+  the line run on Enter (history and the evaluator keep it), a word `PathBinManager.Lookup` caches, the line given to Tab completion, and the `AbbrInfo` given to a quote.
+  The width cache already copied what it keeps.
+
+`TestKeyPathAllocations` types lines through the whole path, with and without abbreviations and a history suggestion, and onto the medium and long lines; none allocates.
+`BenchmarkKeyPath` gives the cost per key:
+
+#table(
+  columns: (auto, auto, auto, auto),
+  inset: 4pt,
+  table.header([*Typing, per key*], [*`main`*], [*first version*], [*now*]),
+  [a short line], [3.2 µs, 5 allocs], [3.2 µs, 5 allocs], [1.5 µs, 0],
+  [`nomatch` onto the medium line], [13.5 µs, 10], [16.0 µs, 12], [5.7 µs, 0],
+  [`nomatch` onto the long line], [199 µs, 52], [237 µs, 60], [99 µs, 0],
+  [a short line, 2,000 history entries], [9.4 µs, 6], [9.4 µs, 6], [7.6 µs, 0],
+)
+
+#note[
+Two costs on the same path are not the abbreviations' doing and are tracked on their own:
+the history suggestion scans the whole history on every key (issue \#371; 23 µs a key with 8,000 entries, 2 µs if it resumes from the last match),
+and the interactive shell fsyncs its debug log before every key (issue \#372; 0.35 µs on tmpfs, 49 µs to 1.6 ms on a disk).
+]
+
 = Implementation plan
 
 + *Types.* Add the declarations to the built-in declarations (`builtinDeclSource` in `Prompt.go`, or a new `Abbr.go` whose source is joined to it).
@@ -565,6 +754,10 @@ The shell ships with no abbreviations (fish issue \#9462 asks for defaults; that
 + *Expanding.* One function that the Space, separator and Enter handlers call, replacing the two copies in `Main.go`.
   It runs quotations through the prompt's runner (`evalCancel`, killing commands it runs), with its own 1 second limit beside `promptTimeout`, and without the prompt's Ctrl-C handling (section 6.6).
 + *Completion* in the completion code. Painting is a separate change (section 6.7).
++ *Lexing once* (section 9). `lineTokens`, a per-edit token cache on the editor, with its own `Lexer` and reused `[]Token`, that the paint fills and the abbreviation lookup reads.
+  The lookup finds the word (`abbrWordAt`), checks that some abbreviation could match it, and walks the cached tokens by index (`findAbbrSite`).
+  Tested against the first version by `TestAbbrSiteFromLineTokens`.
++ *No allocations per key* (section 9.1). `lineArena` for the line's text, copies where the line is kept, and `TestKeyPathAllocations` and `BenchmarkKeyPath`.
 + *Tests.*
   - Go: the word and position table (start, list heads, nested lists, `|` on command and code lines, strings, paths, comments, `!!`, `..`, mid-line cursor, Enter in the middle of a word, a no-break space, a combining mark after `[`, an `abbrWord` with an accent); precedence and `none` falling through; the cursor marker with each trigger.
   - Go: a word after `<` and `>` on a command line has no command; positions compared in order.

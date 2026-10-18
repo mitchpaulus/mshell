@@ -225,7 +225,7 @@ func (state *TermState) prepareCommandDisplay(startCol, columns Cells, measure f
 	state.displaySource = state.currentCommand
 	state.displaySuggestion = 0
 	if suffix := state.suggestionSuffix(); len(suffix) > 0 {
-		state.displaySource += suffix
+		state.displaySource = SourceText(state.lineArena.concat(string(state.currentCommand), string(suffix), ""))
 		state.displaySuggestion = len(suffix)
 	}
 	state.displayStyles = state.commandStyleSpansInto(state.displayStyles[:0], state.currentCommand)
@@ -528,23 +528,14 @@ func (state *TermState) displayFrameCurrent() bool {
 		state.displaySource[len(state.currentCommand):] == suffix
 }
 
-// commandStyleSpansInto tokenizes the command for syntax highlighting. Tokens
-// tile the input when whitespace and comments are emitted, so byte offsets
-// accumulate from lexeme lengths. A lex error leaves the command unstyled.
+// commandStyleSpansInto styles the command's tokens, lexed once per edit
+// (lineTokens), for syntax highlighting. Tokens tile the input when
+// whitespace and comments are emitted, so byte offsets accumulate from
+// lexeme lengths. A lex error leaves the command unstyled.
 func (s *TermState) commandStyleSpansInto(dst []styleSpan, command SourceText) []styleSpan {
 	if len(command) == 0 { return dst }
-	if s.l == nil { s.l = NewLexer("", &TokenFile{"REPL"}) }
-	s.l.allowUnterminatedString = true
-	s.l.emitWhitespace = true
-	s.l.emitComments = true
-	s.l.resetInput(string(command))
-	defer func() {
-		s.l.allowUnterminatedString = false
-		s.l.emitWhitespace = false
-		s.l.emitComments = false
-	}()
-	tokens, err := s.l.Tokenize()
-	if err != nil { return dst }
+	tokens := s.lineTokens.get(command)
+	if s.lineTokens.errAt >= 0 { return dst }
 
 	commandLiteralIndex := -1
 	firstTokenIsBinary := false

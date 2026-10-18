@@ -1075,6 +1075,10 @@ type TermState struct {
 	// (Abbr.go).
 	abbrProblem string
 	abbrMessage string
+	// lineArena holds the command line's strings, and lineTokens its
+	// tokens, lexed once per edit (CommandBuffers.go).
+	lineArena  lineArena
+	lineTokens lineTokens
 	// What the prompt quote is told about the last line that was not empty
 	// (Prompt.go): whether it ran without an error, the exit code of the
 	// last process it ran, and how long it took.
@@ -2740,7 +2744,7 @@ func (state *TermState) replaceText(newText string, replaceStart ByteOffset, rep
 		replaceStart = graphemeFloor(state.currentCommand, replaceStart)
 		replaceEnd = graphemeCeil(state.currentCommand, replaceEnd)
 	}
-	state.currentCommand = state.currentCommand[:replaceStart] + SourceText(newText) + state.currentCommand[replaceEnd:]
+	state.currentCommand = SourceText(state.lineArena.concat(string(state.currentCommand[:replaceStart]), newText, string(state.currentCommand[replaceEnd:])))
 	state.index = graphemeCeil(state.currentCommand, replaceStart + ByteOffset(len(newText)))
 	state.resetHistorySearch()
 }
@@ -3860,8 +3864,9 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	state.tabCompletions0 = state.tabCompletions0[:0]
 	state.tabCompletions1 = state.tabCompletions1[:0]
 
-	// Add command to history
-	currentCommandStr := string(state.currentCommand)
+	// Add command to history. History and the evaluator keep the line, so
+	// it is copied out of the editor's arena.
+	currentCommandStr := strings.Clone(string(state.currentCommand))
 
 	// Park the cursor after the last byte so the final echo leaves the
 	// terminal cursor on the command's last painted row. The newline below
@@ -4571,7 +4576,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 			state.resetTabCycle()
 
-			state.l.resetInput(string(state.currentCommand[0:state.index]))
+			// Completion definitions may keep their arguments, so they get
+			// a copy of the line rather than the editor's arena.
+			state.l.resetInput(strings.Clone(string(state.currentCommand[0:state.index])))
 			tokens, err := state.l.Tokenize()
 			if err != nil {
 				return false, nil
