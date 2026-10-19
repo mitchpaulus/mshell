@@ -2003,7 +2003,7 @@ func orLiteralKind(t TokenType) (TokenType, bool) {
 	switch t {
 	case STRING, SINGLEQUOTESTRING:
 		return STRING, true
-	case INTEGER, PATH:
+	case INTEGER, PATH, RUNE:
 		return t, true
 	}
 	return t, false
@@ -2023,7 +2023,7 @@ func (parser *MShellParser) parseMatchOrLiterals() (MShellParseItem, error) {
 			break
 		}
 		if kind != firstKind {
-			return nil, fmt.Errorf("%d:%d: Literals in a match arm OR pattern must all be the same kind (all strings, all ints, or all paths), but found %s after %s.", parser.curr.Line, parser.curr.Column, parser.curr.Lexeme, tokens[len(tokens)-1].Lexeme)
+			return nil, fmt.Errorf("%d:%d: Literals in a match arm OR pattern must all be the same kind (all strings, all ints, all paths, or all runes), but found %s after %s.", parser.curr.Line, parser.curr.Column, parser.curr.Lexeme, tokens[len(tokens)-1].Lexeme)
 		}
 		tokens = append(tokens, parser.curr)
 		parser.NextToken()
@@ -2317,15 +2317,15 @@ func formatPatternItem(it MShellParseItem) string {
 }
 
 // isTypeKeywordToken reports whether tok is one of the match type-keyword
-// patterns: int, float, str, bool, list, dict, path, datetime, quotation,
-// maybe, binary.
+// patterns: int, float, str, bool, list, dict, path, datetime, rune,
+// quotation, maybe, binary.
 func isTypeKeywordToken(tok Token) bool {
 	switch tok.Type {
 	case TYPEINT, TYPEFLOAT, STR, TYPEBOOL:
 		return true
 	case LITERAL:
 		switch tok.Lexeme {
-		case "list", "dict", "path", "datetime", "quotation", "maybe", "binary":
+		case "list", "dict", "path", "datetime", "rune", "quotation", "maybe", "binary":
 			return true
 		}
 	}

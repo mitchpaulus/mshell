@@ -1771,7 +1771,7 @@ func (state *TermState) resetLastArgCycle() {
 
 func isAltDotWordToken(tokenType TokenType) bool {
 	switch tokenType {
-	case LITERAL, STRING, SINGLEQUOTESTRING, PATH, INTEGER, FLOAT, DATETIME, FORMATSTRING, TRUE, FALSE:
+	case LITERAL, STRING, SINGLEQUOTESTRING, PATH, INTEGER, FLOAT, DATETIME, RUNE, FORMATSTRING, TRUE, FALSE:
 		return true
 	case VARRETRIEVE, VARSTORE, ENVRETREIVE, ENVSTORE, ENVCHECK, POSITIONAL, TILDEEXPANSION:
 		return true
@@ -4914,7 +4914,7 @@ func htmlBaseTypeName(tokens []Token, i int) bool {
 		return false
 	}
 	switch tokens[i].Lexeme {
-	case "path", "datetime", "binary", "null":
+	case "path", "datetime", "rune", "binary", "null":
 	default:
 		return false
 	}

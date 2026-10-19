@@ -37,6 +37,10 @@
             "match": "2>&1|1>&2"
         },
         {
+            "name": "constant.character.mshell",
+            "match": "(?<![^\\s\\[\\](){}])(r'[^'\\n]*'|U\\+[0-9A-Fa-f]{4,6}(?![^\\s\\[\\](){}]))"
+        },
+        {
             "name": "string.quoted.single.mshell",
             "begin": "'",
             "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.mshell" } },

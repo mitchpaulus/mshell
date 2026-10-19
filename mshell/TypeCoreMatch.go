@@ -60,6 +60,8 @@ func (c *coreChecker) patternKind(tok Token) (valueKind, bool) {
 			return valueKind{code: uint32(TidPath)}, true
 		case "datetime":
 			return valueKind{code: uint32(TidDateTime)}, true
+		case "rune":
+			return valueKind{code: uint32(TidRune)}, true
 		case "quotation":
 			return valueKind{code: kindQuote}, true
 		case "maybe":
@@ -463,7 +465,7 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 			a.boolLit = 1
 		case p.Type == FALSE:
 			a.boolLit = 2
-		case p.Type == INTEGER, p.Type == FLOAT, p.Type == STRING, p.Type == SINGLEQUOTESTRING, p.Type == PATH:
+		case p.Type == INTEGER, p.Type == FLOAT, p.Type == STRING, p.Type == SINGLEQUOTESTRING, p.Type == PATH, p.Type == RUNE:
 			// A value pattern tests equality; it narrows nothing.
 		default:
 			k, ok := c.patternKind(*p)

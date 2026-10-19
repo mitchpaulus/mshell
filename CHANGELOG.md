@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Words in strings, paths and comments never expand.
 - Functions for abbreviations
   - `abbrAdd`, `abbrErase`, `abbrRename` and `abbrList` manage them.
+- Runes: the type `rune` is one Unicode code point, written `r'a'`, or by number as `U+001B`.
+  A rune is never a string. `r'abc'` is an error that says single-quoted strings are already raw.
+  `=` compares runes, `<` and the other comparisons order them by code point, and `str`, `wl` and `w` give the character.
+  `rune` is a match pattern, and rune literals are value patterns.
+- Functions for runes
+  - `runes` splits a string into its runes.
+  - `toRune` makes a rune from a code point or a one-character string, giving `none` otherwise.
+  - `toInt` gives a rune's code point.
 
 ### Changed
 

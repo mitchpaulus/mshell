@@ -702,6 +702,26 @@ and parse a string in a given base with `fromBase` / `parseHex` / `parseOctal` /
 "644" parseOctal # Some 420
 ```
 
+### Runes
+
+A rune is one Unicode code point (U+0000 to U+10FFFF, without the surrogates U+D800 to U+DFFF). Its type is `rune`, which is never a `str`.
+`r'…'` holds exactly one code point and has no escapes; `U+` and 4 to 6 hex digits gives one by number.
+Write the apostrophe, control characters and combining marks with `U+`.
+`r` is not a raw-string prefix: `r'abc'` is a lexer error.
+
+```mshell
+r'a'            # a rune
+U+001B          # Escape
+'héllo' runes   # [r'h' r'é' r'l' r'l' r'o']
+r'a' toInt      # 97
+97 toRune       # Just(a): Maybe[rune]
+r'a' str        # "a"
+```
+
+`str`, `w` and `wl` give the character; inside a list a rune prints as `r'a'` or `U+XXXX`, so the list reads back.
+`toJson` gives a one-character string.
+`=` and `!=` compare runes, and `<`, `<=`, `>`, `>=` order them by code point.
+
 ## Type System
 
 Every script is type-checked before it runs; if the check fails, nothing runs.
@@ -1084,7 +1104,7 @@ Value, type, and OR tests remain part of normal `match` syntax.
 
 ### Value Matching
 
-Literal values (integers, floats, strings, booleans, paths) match
+Literal values (integers, floats, strings, booleans, paths, runes) match
 if the subject equals the pattern value.
 
 ```mshell
@@ -1096,7 +1116,7 @@ end wl # Output: greeting
 ```
 
 An arm may list several strings, integers, or paths in a row; it matches if the subject equals any of them.
-All alternatives in one arm must be the same kind: all strings, all integers, or all paths.
+All alternatives in one arm must be the same kind: all strings, all integers, all paths, or all runes.
 Other types are not allowed. For strings, they must be quoted, they cannot be literals.
 
 ```mshell
@@ -1121,7 +1141,7 @@ end wl # Output: 3
 ### Type Matching
 
 Type keywords match based on the subject's type:
-`int`, `float`, `str`, `bool`, `list`, `dict`, `path`, `datetime`, `quotation`, `maybe`, `binary`, `null`.
+`int`, `float`, `str`, `bool`, `list`, `dict`, `path`, `datetime`, `rune`, `quotation`, `maybe`, `binary`, `null`.
 
 A `null` arm matches the JSON null value (the `null` type), which is distinct from a `none` arm (the empty case of a `Maybe`).
 For a union such as `int | null`, the `int` and `null` arms cover it exhaustively with no wildcard needed.
@@ -1269,17 +1289,18 @@ end wl # Output: 11
 - `rot`: Rotate the top three items, `( a b c -- b c a )`
 - `-rot`: Rotate the top three items in the opposite direction `( a b c -- c a b )`
 - `nip`: Remove second item, `( a b -- b )`
-- `w`: Write to stdout (str|int|binary -- ). Other types must be converted with `str` first.
-- `wl`: Write line to stdout (str|int -- ). Binary is not allowed because trailing newlines after raw bytes are rarely intended; use `w` for binary output. Other types must be converted with `str` first.
-- `we`: Write error to stderr (str|int|binary -- ).
-- `wle`: Write error line stderr (str|int -- ).
+- `w`: Write to stdout (str|int|rune|binary -- ). Other types must be converted with `str` first.
+- `wl`: Write line to stdout (str|int|rune -- ). Binary is not allowed because trailing newlines after raw bytes are rarely intended; use `w` for binary output. Other types must be converted with `str` first.
+- `we`: Write error to stderr (str|int|rune|binary -- ).
+- `wle`: Write error line stderr (str|int|rune -- ).
 - `len`: Length of a string (byte length), list, dictionary, path, binary (byte count), `Grid`/`GridView` (row count), or `GridRow` (column count). `([a] -- int)` / `(str -- int)` / `(binary -- int)`
 - `args`: List of string arguments. Does not include the name of the executing file. `( -- [str])`
 - `glob`: Run glob against string/literal on top of the stack. Leaves a list of paths on the stack. Relies on golang's [filepath.Glob](https://pkg.go.dev/path/filepath#Glob), which in the current implementation, the response is sorted. `(str -- [path])`
 - `/`: Divide numbers or join paths. `(numeric numeric -- numeric)` treats the top of stack as divisor. `(path path -- path)` joins the paths using the OS separator.
 - `x`: Interpret/execute quotation `(quote -- )`
 - `toFloat`: Convert to float. A `str` is parsed and returns `Maybe[float]` (`none` on parse failure); an `int`/`float` returns a plain `float`. `(str -- Maybe[float])` / `(numeric -- float)`
-- `toInt`: Convert to int. A `str` is parsed and returns `Maybe[int]` (`none` on parse failure); an `int`/`float` returns a plain `int` (floats truncate toward zero). `(str -- Maybe[int])` / `(numeric -- int)`
+- `toInt`: Convert to int. A `str` is parsed and returns `Maybe[int]` (`none` on parse failure); an `int`/`float` returns a plain `int` (floats truncate toward zero); a `rune` gives its code point. `(str -- Maybe[int])` / `(numeric -- int)` / `(rune -- int)`
+- `toRune`: Convert to a rune. An int that is not a Unicode scalar value, or a string that is not exactly one code point, gives `none`. `(int -- Maybe[rune])` / `(str -- Maybe[rune])`
 - `toBase`: Format an integer in the given base (2–36) as bare digits (no `0o`/`0x`/`0b` prefix). `(int int -- str)`
 - `fromBase`: Parse a string as an integer in the given base (2–36), returning `none` on failure. Whitespace, an optional sign, and a redundant matching `0o`/`0x`/`0b` prefix are accepted. `(str int -- Maybe[int])`
 - `toHex` / `toOctal` / `toBin`: Format an int as a bare hex/octal/binary string (`16`/`8`/`2 toBase`). `(int -- str)`
@@ -1444,6 +1465,7 @@ end wl # Output: 11
 - `take`: Take first n characters from string using the same indexing logic as string slicing. `(str int -- str)`
 - `base64encode`: Encode binary data as base64. `(binary -- str)`
 - `base64decode`: Decode base64 string into binary data. `(str -- binary)`
+- `runes`: Split a string into its code points. `(str -- [rune])`
 - `utf8Str`: Decode UTF-8 bytes into a string. `(binary -- str)`
 - `utf8Bytes`: Encode a string as UTF-8 bytes. `(str -- binary)`
 
@@ -1888,6 +1910,7 @@ The current object types supported by `mshell` are:
 10. Dictionary
 11. Maybe
 12. Enum values
+13. Rune
 
 ## LLM Notes
 

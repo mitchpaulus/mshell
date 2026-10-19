@@ -16,6 +16,9 @@ contexts:
     - match: '"'
       scope: punctuation.definition.string.begin.mshell
       push: double_string
+    # A rune: r'a' or U+0061.
+    - match: "(?<![^\\s\\[\\](){}])(r'[^'\\n]*'|U\\+[0-9A-Fa-f]{4,6}(?![^\\s\\[\\](){}]))"
+      scope: constant.character.mshell
     - match: "'"
       scope: punctuation.definition.string.begin.mshell
       push: single_string
@@ -32,7 +35,7 @@ contexts:
       scope: keyword.other.mshell
     - match: '\b(true|false|none)\b'
       scope: constant.language.mshell
-    - match: '\b(int|float|bool|str)\b(?!!)'
+    - match: '\b(int|float|bool|str|rune)\b(?!!)'
       scope: storage.type.mshell
     - match: '\b[A-Z][A-Za-z0-9_]*\b'
       scope: storage.type.mshell

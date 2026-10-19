@@ -66,7 +66,7 @@ Between the two forms every rune can be written, so `r'…'` needs no escapes.
   [type `rune`, its own kind], [`rune | NamedKey | ModifiedKey` is a legal union, and `str` is not in it],
   [`r'a'`, `U+0301`], [the two literal forms (section 5)],
   [`runes`, `toRune`, `toInt`, `str`], [conversion to and from strings and integers (section 9)],
-  [`=`, `<`, `sort`, `match`], [comparison by code point; value and type patterns (section 7)],
+  [`=`, `<`, `match`], [comparison by code point; value and type patterns (section 7)],
 )
 
 = Why a code point
@@ -231,6 +231,8 @@ all mark the same span.
   [`r'é'` as e + U+0301], [`r'é' holds 2 code points (U+0065 U+0301) that display as one character. A rune is one code point. Use U+00E9, or write the runes separately: r'e' U+0301.`],
   [`r'👨‍👩‍👧'`], [The same message, listing the five code points, without a one-code-point suggestion.],
   [`r''`], [`empty rune literal: a rune holds exactly one code point.`],
+  [`r'` and a tab `'`], [`r'…' holds a control character: write it as U+0009.`],
+  [`r'a` and a newline], [`Unterminated rune literal: r' needs its closing quote on the same line.`],
   [`r'''`], [`a rune literal cannot contain ': write the apostrophe as U+0027.`],
   [`r'a` (end of input)], [`unterminated rune literal.`],
   [`U+41`, `U+0000041`], [`U+41: a code point needs 4 to 6 hex digits, as in U+0041.`],
@@ -269,7 +271,8 @@ So `rune | str` and `rune | NamedKey | ModifiedKey` are legal unions, and a `mat
 `=` gains the overload `(rune rune -- bool)`.
 `r'a' 'a' =` is a type error, as `1 "1" =` is today:
 "no matching overload for '=': the stack has (rune str)".
-`<`, `<=`, `>`, `>=` and `sort` order runes by code point.
+`<`, `<=`, `>`, `>=` order runes by code point.
+`sort` is not extended: it turns every element into a string first, and a rune's string sorts by code point anyway, since UTF-8 byte order is code point order.
 Code-point order is not alphabetical order for any language; it is the only order that needs no locale.
 
 == Patterns
@@ -381,7 +384,7 @@ and a property test that `str` of a random `[rune]` lexes back to the same list 
 + *Lexer.* `RUNE` and `UNFINISHEDRUNE` tokens; `r'` and `U+` at token start in `scanTokenAll`;
   the error messages of section 6.
 + *Parser and objects.* `MShellRune` holding a Go `rune`; equality, ordering, `str`, source form, `toJson`.
-+ *Type checker.* The `rune` base type and kind; `=`, `<` and `sort` overloads; value and type patterns in `match`.
++ *Type checker.* The `rune` base type and kind; `=` and `<` overloads; value and type patterns in `match`.
 + *Builtins.* `runes`, `toRune`, the `toInt` overload, in `Evaluator.go` and `BuiltInList.go`.
 + *Syntax.* `ai/msh.sublime-syntax` and the VS Code grammar in `code/` highlight both literal forms.
 + *Docs.* A "Runes" section beside Integers and Floats in `doc/`, `doc/mshell.md`, the String Functions list,

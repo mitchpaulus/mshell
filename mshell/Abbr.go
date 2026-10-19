@@ -386,12 +386,13 @@ type abbrSite struct {
 	HasCommand bool
 }
 
-// isAbbrTextToken reports whether a token is a string, path or comment,
-// where a word is data and never expands.
+// isAbbrTextToken reports whether a token is a string, rune, path or
+// comment, where a word is data and never expands.
 func isAbbrTextToken(t TokenType) bool {
 	switch t {
 	case STRING, SINGLEQUOTESTRING, FORMATSTRING, FORMATSTRINGSTART, FORMATSTRINGMID, FORMATSTRINGEND,
-		UNFINISHEDSTRING, UNFINISHEDFORMATSTRING, UNFINISHEDSINGLEQUOTESTRING, PATH, UNFINISHEDPATH, LINECOMMENT:
+		UNFINISHEDSTRING, UNFINISHEDFORMATSTRING, UNFINISHEDSINGLEQUOTESTRING, PATH, UNFINISHEDPATH, LINECOMMENT,
+		RUNE, UNFINISHEDRUNE:
 		return true
 	}
 	return false

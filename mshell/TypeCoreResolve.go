@@ -265,6 +265,8 @@ func (r *coreResolver) resolveNamed(n *TypeNamed) TypeId {
 		return TidPath
 	case "datetime":
 		return TidDateTime
+	case "rune":
+		return TidRune
 	case "Grid":
 		return ar.MakeGridOf(TKGrid, r.unknownSchema())
 	case "GridView":

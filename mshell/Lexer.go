@@ -9,6 +9,9 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/rivo/uniseg"
+	"golang.org/x/text/unicode/norm"
 )
 
 
@@ -121,6 +124,8 @@ const (
 	FAIL_KEYWORD
 	PURE
 	TRYAS // tryAs: validate a value against a type at runtime
+	RUNE          // r'a' or U+0061: one Unicode scalar value
+	UNFINISHEDRUNE // r'a with no closing quote yet (interactive input only)
 )
 
 func (t TokenType) String() string {
@@ -319,6 +324,10 @@ func (t TokenType) String() string {
 		return "PURE"
 	case TRYAS:
 		return "TRYAS"
+	case RUNE:
+		return "RUNE"
+	case UNFINISHEDRUNE:
+		return "UNFINISHEDRUNE"
 	default:
 		return "UNKNOWN"
 	}
@@ -523,6 +532,10 @@ func literalValue(tokenType TokenType, lexeme string) MShellObject {
 		return MShellFloat{floatVal}
 	case DATETIME:
 		return parseDateTimeLiteral(lexeme)
+	case RUNE:
+		if r, ok := runeLiteralValue(lexeme); ok {
+			return MShellRune{r}
+		}
 	}
 	return nil
 }
@@ -971,6 +984,16 @@ func (l *Lexer) scanTokenAll() Token {
 		return l.parseNumberOrStartIndexer()
 	case '\'':
 		return l.parseSingleQuoteString()
+	case 'r':
+		if l.peek() == '\'' {
+			return l.parseRune()
+		}
+		return l.parseLiteralOrKeyword()
+	case 'U':
+		if l.peek() == '+' && isHexDigit(l.peekNext()) {
+			return l.parseCodePoint()
+		}
+		return l.parseLiteralOrKeyword()
 	case '[':
 		if l.peek() == '|' {
 			l.advance()
@@ -1131,6 +1154,145 @@ func (l *Lexer) parseSingleQuoteString() Token {
 	}
 
 	return l.makeToken(SINGLEQUOTESTRING)
+}
+
+// parseRune lexes r'…', which holds exactly one code point. It reads to the
+// closing quote on the same line, as a single-quoted string does, so a wrong
+// literal is one error token that says what is wrong with all of it.
+func (l *Lexer) parseRune() Token {
+	// When this is called, we've consumed the 'r'.
+	l.advance() // the opening quote
+	n := strings.IndexAny(l.input[l.current:], "'\n")
+	if n < 0 {
+		l.skip(len(l.input) - l.current)
+		if l.allowUnterminatedString {
+			return l.makeToken(UNFINISHEDRUNE)
+		}
+		return l.makeErrorToken(fmt.Sprintf("%d:%d: Unterminated rune literal.", l.startLine, l.startCol+1))
+	}
+	content := l.input[l.current : l.current+n]
+	l.skip(n)
+	if l.peek() == '\n' {
+		return l.makeErrorToken(fmt.Sprintf("%d:%d: Unterminated rune literal: r' needs its closing quote on the same line.", l.startLine, l.startCol+1))
+	}
+	l.advance() // the closing quote
+	if content == "" && l.peek() == '\'' {
+		l.advance()
+		return l.makeErrorToken(fmt.Sprintf("%d:%d: A rune literal cannot contain ': write the apostrophe as U+0027.", l.startLine, l.startCol+1))
+	}
+	if msg := runeLiteralError(content); msg != "" {
+		return l.makeErrorToken(fmt.Sprintf("%d:%d: %s", l.startLine, l.startCol+1, msg))
+	}
+	return l.makeToken(RUNE)
+}
+
+// parseCodePoint lexes U+ and 4 to 6 hex digits. The whole word is read, so
+// U+0041x is one error rather than a rune followed by a bare word.
+func (l *Lexer) parseCodePoint() Token {
+	// When this is called, we've consumed the 'U', and '+' and a hex digit follow.
+	l.scanLiteralChars()
+	lexeme := l.curLexeme()
+	if msg := codePointLiteralError(lexeme); msg != "" {
+		return l.makeErrorToken(fmt.Sprintf("%d:%d: %s", l.startLine, l.startCol+1, msg))
+	}
+	return l.makeToken(RUNE)
+}
+
+func isHexDigit(c rune) bool {
+	return ('0' <= c && c <= '9') || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F')
+}
+
+// runeLiteralError says what is wrong with the text between the quotes of
+// r'…', or "" when it is one code point a rune can hold.
+func runeLiteralError(content string) string {
+	count := utf8.RuneCountInString(content)
+	if count == 0 {
+		return "Empty rune literal: a rune holds exactly one code point."
+	}
+	if count == 1 {
+		r, size := utf8.DecodeRuneInString(content)
+		if r == utf8.RuneError && size == 1 {
+			return "Invalid UTF-8 encoding. mshell source must be UTF-8."
+		}
+		if unicode.IsControl(r) {
+			return fmt.Sprintf("r'…' holds a control character: write it as %s.", codePointName(r))
+		}
+		return ""
+	}
+	points := codePointNames(content)
+	if uniseg.GraphemeClusterCount(content) > 1 {
+		return fmt.Sprintf("r'%s' is a rune literal and holds exactly one code point. r is not a raw-string prefix: single-quoted strings are already raw, so write '%s'.", content, content)
+	}
+	msg := fmt.Sprintf("r'%s' holds %d code points (%s) that display as one character. A rune is one code point.", content, count, points)
+	if composed := norm.NFC.String(content); utf8.RuneCountInString(composed) == 1 {
+		r, _ := utf8.DecodeRuneInString(composed)
+		msg += fmt.Sprintf(" Use %s, or write the runes separately: %s.", codePointName(r), runeSequenceSource(content))
+	} else {
+		msg += fmt.Sprintf(" Write the runes separately: %s.", runeSequenceSource(content))
+	}
+	return msg
+}
+
+// codePointLiteralError says what is wrong with a U+ literal, or "" when it
+// names a Unicode scalar value.
+func codePointLiteralError(lexeme string) string {
+	digits := lexeme[2:]
+	for _, c := range digits {
+		if !isHexDigit(c) {
+			return fmt.Sprintf("%s: expected 4 to 6 hex digits after U+, then a space or delimiter.", lexeme)
+		}
+	}
+	if len(digits) < 4 || len(digits) > 6 {
+		return fmt.Sprintf("%s: a code point needs 4 to 6 hex digits, as in U+0041.", lexeme)
+	}
+	v, _ := strconv.ParseUint(digits, 16, 32)
+	if v > unicode.MaxRune {
+		return fmt.Sprintf("%s is above U+10FFFF, the last code point.", lexeme)
+	}
+	if 0xD800 <= v && v <= 0xDFFF {
+		return fmt.Sprintf("%s is a surrogate: it exists only inside UTF-16 and is not a character. Write the character's own code point, such as U+1F600.", lexeme)
+	}
+	return ""
+}
+
+// runeLiteralValue decodes the lexeme of a valid RUNE token.
+func runeLiteralValue(lexeme string) (rune, bool) {
+	if strings.HasPrefix(lexeme, "r'") {
+		r, size := utf8.DecodeRuneInString(lexeme[2:])
+		return r, size > 1 || (size == 1 && r != utf8.RuneError)
+	}
+	v, err := strconv.ParseUint(lexeme[2:], 16, 32)
+	return rune(v), err == nil
+}
+
+// codePointName writes r in the Unicode standard's notation, U+0041.
+func codePointName(r rune) string {
+	return fmt.Sprintf("U+%04X", r)
+}
+
+// codePointNames lists the code points of s, as in "U+0065 U+0301".
+func codePointNames(s string) string {
+	var sb strings.Builder
+	for i, r := range []rune(s) {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(codePointName(r))
+	}
+	return sb.String()
+}
+
+// runeSequenceSource writes the runes of s as rune literals, one per code
+// point: r'e' U+0301.
+func runeSequenceSource(s string) string {
+	var sb strings.Builder
+	for i, r := range []rune(s) {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(runeSource(r))
+	}
+	return sb.String()
 }
 
 func (l *Lexer) consumeLiteral() Token {

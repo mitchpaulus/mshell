@@ -8,6 +8,7 @@
     <li><a href="#data-type-list">List</a></li>
     <li><a href="#data-type-string">String</a></li>
     <li><a href="#data-type-format-string">Format String</a></li>
+    <li><a href="#data-type-rune">Rune</a></li>
     <li><a href="#data-type-int-and-float">Integer</a></li>
     <li><a href="#data-type-int-and-float">Float</a></li>
     <li><a href="#data-type-path">Path</a></li>
@@ -218,6 +219,62 @@ A <code>}</code> outside an interpolation is literal, so escaping it is optional
 In short, if you stick to UTF-8 encoded strings and data, you should have a good time.
 If you have strings in other encodings, your results might have subtle differences.
 </p>
+
+<h1 id="data-type-rune">Rune <a class="section-link" href="#data-type-rune" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
+
+<p>
+A rune is one Unicode code point: any value from U+0000 to U+10FFFF except the surrogates, U+D800 to U+DFFF, which are not characters.
+Its type is <code>rune</code>.
+A rune is never a string, and a string is never a rune.
+</p>
+
+<p>
+There are two ways to write one.
+<code>r'…'</code> holds exactly one code point and, like a single-quoted string, has no escapes.
+<code>U+</code> and 4 to 6 hex digits gives a code point by number, as the Unicode standard writes it.
+Use it for the apostrophe, control characters, and combining marks, which would join the quote before them.
+</p>
+
+<pre>
+<code><span class="mshellRUNE">r&#39;a&#39;</span>      <span class="mshellLINECOMMENT"># a rune you can see</span>
+<span class="mshellRUNE">r&#39; &#39;</span>      <span class="mshellLINECOMMENT"># the space</span>
+<span class="mshellRUNE">U+001B</span>    <span class="mshellLINECOMMENT"># Escape, given by its code point</span>
+<span class="mshellRUNE">U+0301</span>    <span class="mshellLINECOMMENT"># a combining accent, which would join the quote</span>
+<span class="mshellRUNE">U+0027</span>    <span class="mshellLINECOMMENT"># the apostrophe</span></code>
+</pre>
+
+<p>
+The <code>r</code> is not a raw-string prefix: single-quoted strings are already raw.
+<code>r'abc'</code> is an error that says so, and <code>r'é'</code> written as <code>e</code> and a combining accent is an error that lists its two code points.
+</p>
+
+<p>
+<code>str</code> and <code>wl</code> give the character.
+Inside a list, a rune prints as source that reads back as the same rune.
+<code>toJson</code> gives a one-character string.
+Runes compare with <code>=</code>, and <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code> and <code>&gt;=</code> order them by code point.
+</p>
+
+<pre>
+<code><span class="mshellSINGLEQUOTESTRING">&#39;héllo&#39;</span> <span class="mshellLITERAL">runes</span>   <span class="mshellLINECOMMENT"># [r&#39;h&#39; r&#39;é&#39; r&#39;l&#39; r&#39;l&#39; r&#39;o&#39;]</span>
+<span class="mshellRUNE">r&#39;a&#39;</span> <span class="mshellLITERAL">toInt</span>      <span class="mshellLINECOMMENT"># 97</span>
+<span class="mshellINTEGER">97</span> <span class="mshellLITERAL">toRune</span>       <span class="mshellLINECOMMENT"># Just(a)</span>
+<span class="mshellSINGLEQUOTESTRING">&#39;ab&#39;</span> <span class="mshellLITERAL">toRune</span>     <span class="mshellLINECOMMENT"># None: not one code point</span>
+<span class="mshellRUNE">r&#39;a&#39;</span> <span class="mshellSTR">str</span>        <span class="mshellLINECOMMENT"># &#34;a&#34;</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;a&#39;</span> <span class="mshellRUNE">U+0301</span> <span class="mshellRUNE">r&#39; &#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTR">str</span>  <span class="mshellLINECOMMENT"># &#34;[r&#39;a&#39; U+0301 r&#39; &#39;]&#34;</span></code>
+</pre>
+
+<p>
+<code>rune</code> is a type pattern in <code>match</code>, and rune literals are value patterns.
+</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@c</span> <span class="mshellMATCH">match</span>
+    <span class="mshellRUNE">r&#39;(&#39;</span> <span class="mshellRUNE">r&#39;[&#39;</span> <span class="mshellRUNE">r&#39;{&#39;</span> <span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;open&#39;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellRUNE">r&#39;)&#39;</span> <span class="mshellRUNE">r&#39;]&#39;</span> <span class="mshellRUNE">r&#39;}&#39;</span> <span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;close&#39;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">_</span>              <span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;other&#39;</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span></code>
+</pre>
 
 <h1 id="data-type-path">Path <a class="section-link" href="#data-type-path" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 <p> Since paths are such a common object to deal with in shell scripts, mshell has a dedicated type. </p>

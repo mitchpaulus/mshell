@@ -1,0 +1,5 @@
+enum ModKey = keyCtl Key | keyMeta Key end
+type Key = rune | ModKey
+def takeKeys ([Key] -- ) drop end
+[r'x' keyCtl r'e' keyCtl] takeKeys
+[r'x' ctlr] takeKeys

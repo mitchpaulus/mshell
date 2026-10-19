@@ -533,7 +533,7 @@ const (
 // Typing.v. Bottom, unknown, unions, aliases and type variables have none.
 func (r *Relations) kindOf(t TypeId) (valueKind, bool) {
 	switch t {
-	case TidBool, TidInt, TidFloat, TidStr, TidBytes, TidPath, TidDateTime, TidNull:
+	case TidBool, TidInt, TidFloat, TidStr, TidBytes, TidPath, TidDateTime, TidNull, TidRune:
 		return valueKind{code: uint32(t)}, true
 	}
 	n := r.arena.Node(t)
@@ -922,7 +922,7 @@ func (r *Relations) Immutable(t TypeId) bool {
 
 func (r *Relations) immutable(t TypeId, visiting []TypeId) bool {
 	switch t {
-	case TidBool, TidInt, TidFloat, TidStr, TidBytes, TidPath, TidDateTime, TidNull, TidBottom:
+	case TidBool, TidInt, TidFloat, TidStr, TidBytes, TidPath, TidDateTime, TidNull, TidRune, TidBottom:
 		return true
 	case TidUnknown, TidNothing:
 		return false
@@ -971,7 +971,7 @@ func (r *Relations) Checkable(t TypeId) bool {
 // types, where it is substituted away before validation).
 func (r *Relations) checkable(t TypeId, params bool, visiting []TypeId) bool {
 	switch t {
-	case TidBool, TidInt, TidFloat, TidStr, TidBytes, TidPath, TidDateTime, TidNull, TidBottom, TidUnknown:
+	case TidBool, TidInt, TidFloat, TidStr, TidBytes, TidPath, TidDateTime, TidNull, TidRune, TidBottom, TidUnknown:
 		return true
 	case TidNothing:
 		return false

@@ -632,7 +632,7 @@ type EnumMemberInfo struct {
 func isPatternWord(word string) bool {
 	switch word {
 	case "_", "just", "none", "null", "list", "dict",
-		"path", "datetime", "quotation", "maybe", "binary",
+		"path", "datetime", "rune", "quotation", "maybe", "binary",
 		"Maybe", "Json", "HtmlNode", "is":
 		return true
 	}
@@ -1948,7 +1948,7 @@ func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, 
 	// Value literals were decoded once at lex time.
 	if p.Value != nil {
 		switch p.Type {
-		case INTEGER, FLOAT, STRING, SINGLEQUOTESTRING:
+		case INTEGER, FLOAT, STRING, SINGLEQUOTESTRING, RUNE:
 			eq, err := subject.Equals(p.Value)
 			if err != nil {
 				return false, SimpleSuccess()
@@ -1992,6 +1992,9 @@ func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, 
 			return ok, SimpleSuccess()
 		case "datetime":
 			_, ok := subject.(*MShellDateTime)
+			return ok, SimpleSuccess()
+		case "rune":
+			_, ok := subject.(MShellRune)
 			return ok, SimpleSuccess()
 		case "quotation":
 			_, ok := subject.(*MShellQuotation)
@@ -6791,6 +6794,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						fmt.Fprint(writer, topTyped.Content)
 					case MShellInt:
 						fmt.Fprint(writer, topTyped.Value)
+					case MShellRune:
+						fmt.Fprint(writer, string(topTyped.Value))
 					case MShellBinary:
 						if t.Lexeme == "wl" || t.Lexeme == "wle" {
 							return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot write a binary with a newline. You are allowed to write contents directly with `w` or `we`.\n", t.Line, t.Column))
@@ -7331,8 +7336,34 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						stack.Push(obj)
 					case MShellFloat:
 						stack.Push(MShellInt{int(objTyped.Value)})
+					case MShellRune:
+						stack.Push(MShellInt{int(objTyped.Value)})
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot convert a %s to an int.\n", t.Line, t.Column, obj.TypeName()))
+					}
+				case "toRune":
+					// (int -- Maybe[rune]) a Unicode scalar value, or none.
+					// (str -- Maybe[rune]) the string's one code point, or none.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toRune' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					switch objTyped := obj.(type) {
+					case MShellInt:
+						if objTyped.Value < 0 || objTyped.Value > unicode.MaxRune || !utf8.ValidRune(rune(objTyped.Value)) {
+							stack.Push(&Maybe{obj: nil})
+						} else {
+							stack.Push(&Maybe{obj: MShellRune{rune(objTyped.Value)}})
+						}
+					case MShellString:
+						r, size := utf8.DecodeRuneInString(objTyped.Content)
+						if size == 0 || size != len(objTyped.Content) || (r == utf8.RuneError && size == 1) {
+							stack.Push(&Maybe{obj: nil})
+						} else {
+							stack.Push(&Maybe{obj: MShellRune{r}})
+						}
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot convert a %s to a rune.\n", t.Line, t.Column, obj.TypeName()))
 					}
 				case "toBase":
 					// (int:value int:base -- str) Format an integer in the given
@@ -12013,6 +12044,23 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 
 					stack.Push(newBinary(decoded))
+				case "runes":
+					// (str -- [rune]) the code points of a string.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'runes' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					strObj, ok := obj.(MShellString)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'runes' operation on a %s (%s).\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+					}
+					newList := NewList(utf8.RuneCountInString(strObj.Content))
+					i := 0
+					for _, r := range strObj.Content {
+						newList.Items[i] = MShellRune{r}
+						i++
+					}
+					stack.Push(newList)
 				case "utf8Str":
 					// Convert MShellBinary on the top of the stack to a UTF-8 string
 					obj, err := stack.Pop()
@@ -13345,8 +13393,16 @@ func (state *EvalState) evalGreaterLessEqualToken(t *Token, stack *MShellStack, 
 
 		obj1Date, ok1 := obj1.(*MShellDateTime)
 		obj2Date, ok2 := obj2.(*MShellDateTime)
+		obj1Rune, isRune1 := obj1.(MShellRune)
+		obj2Rune, isRune2 := obj2.(MShellRune)
 
-		if ok1 && ok2 {
+		if isRune1 && isRune2 {
+			if t.Type == GREATERTHANOREQUAL {
+				stack.Push(MShellBool{obj2Rune.Value >= obj1Rune.Value})
+			} else {
+				stack.Push(MShellBool{obj2Rune.Value <= obj1Rune.Value})
+			}
+		} else if ok1 && ok2 {
 			if t.Type == GREATERTHANOREQUAL {
 				stack.Push(MShellBool{obj2Date.Time.After(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
 			} else {
@@ -13486,6 +13542,16 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 				}
 			default:
 				return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot %s a datetime (%s) to a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+		case MShellRune:
+			obj2Rune, ok := obj2.(MShellRune)
+			if !ok {
+				return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot %s a rune (%s) to a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+			if t.Type == GREATERTHAN {
+				stack.Push(MShellBool{obj2Rune.Value > obj1.(MShellRune).Value})
+			} else {
+				stack.Push(MShellBool{obj2Rune.Value < obj1.(MShellRune).Value})
 			}
 		default:
 			return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot do a %s operation with a %s (%s) and a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))

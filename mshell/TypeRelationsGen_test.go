@@ -106,8 +106,10 @@ func (g *typeGen) leaf(underCtor, inAlias bool) TypeId {
 	switch g.rng.Intn(12) {
 	case 0, 1, 2:
 		return TidInt
-	case 3, 4:
+	case 3:
 		return TidStr
+	case 4:
+		return TidRune
 	case 5:
 		return TidBool
 	case 6:
