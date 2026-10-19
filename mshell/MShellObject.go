@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -540,6 +541,98 @@ func (obj *MShellDateTime) Equals(other MShellObject) (bool, error) {
 
 func (obj *MShellDateTime) CastString() (string, error) {
 	return "", fmt.Errorf("Cannot cast a DateTime to a string.\n")
+}
+
+// }}}
+
+// Rune {{{
+
+// MShellRune is one Unicode scalar value: a code point that is not a
+// surrogate. Only the lexer and toRune make one, and both check.
+type MShellRune struct {
+	Value rune
+}
+
+func (obj MShellRune) TypeName() string {
+	return "Rune"
+}
+
+func (obj MShellRune) IsCommandLineable() bool {
+	return true
+}
+
+func (obj MShellRune) IsNumeric() bool {
+	return false
+}
+
+func (obj MShellRune) FloatNumeric() float64 {
+	return 0
+}
+
+func (obj MShellRune) CommandLine() string {
+	return string(obj.Value)
+}
+
+func (obj MShellRune) DebugString() string {
+	return runeSource(obj.Value)
+}
+
+func (obj MShellRune) Index(index int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot index into a rune.\n")
+}
+
+func (obj MShellRune) SliceStart(start int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a rune.\n")
+}
+
+func (obj MShellRune) SliceEnd(end int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a rune.\n")
+}
+
+func (obj MShellRune) Slice(startInc int, endExc int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a rune.\n")
+}
+
+// ToJson writes a one-character string: JSON has no character type.
+func (obj MShellRune) ToJson() string {
+	escBytes, _ := json.Marshal(string(obj.Value))
+	return string(escBytes)
+}
+
+func (obj MShellRune) ToString() string {
+	return string(obj.Value)
+}
+
+func (obj MShellRune) IndexErrStr() string {
+	return ""
+}
+
+func (obj MShellRune) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate a rune. Use 'str' to make it a string.\n")
+}
+
+func (obj MShellRune) Equals(other MShellObject) (bool, error) {
+	asRune, ok := other.(MShellRune)
+	if !ok {
+		return false, fmt.Errorf("Cannot compare a rune with a %s.\n", other.TypeName())
+	}
+	return obj.Value == asRune.Value, nil
+}
+
+func (obj MShellRune) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a rune to a string. Use 'str'.\n")
+}
+
+// runeSource writes r as source that lexes back to it: r'a' when r is a
+// character that can be seen on its own, otherwise U+XXXX. The space bar's
+// U+0020 is r' '; the other spaces look the same inside quotes, so they are
+// written by number, as are marks (they would join the quote), controls,
+// the apostrophe, and code points with no character assigned.
+func runeSource(r rune) string {
+	if r == ' ' || (r != '\'' && unicode.IsGraphic(r) && !unicode.Is(unicode.M, r) && !unicode.Is(unicode.Zs, r)) {
+		return "r'" + string(r) + "'"
+	}
+	return codePointName(r)
 }
 
 // }}}

@@ -593,6 +593,7 @@ Proof.
   - constructor.
   - constructor.
   - constructor.
+  - constructor.
   - apply tw_load. apply lookup_esubst; auto.
   - apply tw_store. apply lookup_esubst; auto.
   - (* quote: every frame *)

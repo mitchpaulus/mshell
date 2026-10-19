@@ -272,6 +272,9 @@ func (v *validator) visit(value MShellObject, t TypeId) (bool, error) {
 		case TidDateTime:
 			_, ok := value.(*MShellDateTime)
 			return ok, nil
+		case TidRune:
+			_, ok := value.(MShellRune)
+			return ok, nil
 		case TidBytes:
 			_, ok := value.(MShellBinary)
 			return ok, nil
@@ -627,6 +630,8 @@ func (v *validator) runtimeKind(value MShellObject) (valueKind, bool) {
 		return valueKind{code: uint32(TidPath)}, true
 	case *MShellDateTime:
 		return valueKind{code: uint32(TidDateTime)}, true
+	case MShellRune:
+		return valueKind{code: uint32(TidRune)}, true
 	case MShellBinary:
 		return valueKind{code: uint32(TidBytes)}, true
 	case MShellNull:

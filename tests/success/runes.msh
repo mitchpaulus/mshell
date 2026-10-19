@@ -1,0 +1,38 @@
+r'a' wl
+r'a' str wl
+U+0041 str wl
+[r'a' U+0301 r'😀' r' ' U+00A0 U+0027 U+0009 r'\'] str wl
+[r'a' r'b'] toJson wl
+r'a' r'a' = str wl
+r'a' r'b' = str wl
+r'a' r'b' < str wl
+r'b' r'a' > str wl
+r'a' r'a' <= str wl
+r'a' toInt str wl
+97 toRune str wl
+55296 toRune str wl
+1114112 toRune str wl
+'é' toRune str wl
+'ab' toRune str wl
+'' toRune str wl
+'héllo' runes str wl
+'' runes str wl
+r'x' typeof wl
+r'(' match
+    r'(' r'[' r'{' : 'open',
+    r')' r']' r'}' : 'close',
+    _ : 'other',
+end wl
+U+0009 match
+    rune r : $"rune {@r toInt}",
+    _ : 'not a rune',
+end wl
+[echo r'a' U+0062] ; 
+def keyName (rune | str -- str)
+    match
+        rune r : 'rune',
+        str s : 'str',
+    end
+end
+r'x' keyName wl
+'x' keyName wl

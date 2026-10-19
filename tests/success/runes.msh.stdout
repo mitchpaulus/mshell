@@ -1,0 +1,25 @@
+a
+a
+A
+[r'a' U+0301 r'😀' r' ' U+00A0 U+0027 U+0009 r'\']
+["a", "b"]
+true
+false
+true
+true
+true
+97
+Just(a)
+None
+None
+Just(é)
+None
+None
+[r'h' r'é' r'l' r'l' r'o']
+[]
+Rune
+open
+rune 9
+a b
+rune
+str

@@ -215,6 +215,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		"(int int -- bool)",
 		"(float float -- bool)",
 		"(datetime datetime -- bool)",
+		"(rune rune -- bool)",
 	}
 	// `+` on two grids is in TypeCoreGrid.go.
 	b.regTok(PLUS, append(arithmetic, "(str str -- str)", "([t] [t] -- [t])", "(path path -- path)", "(binary binary -- binary)")...)
@@ -238,6 +239,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		"(binary binary -- bool)",
 		"(path path -- bool)",
 		"(datetime datetime -- bool)",
+		"(rune rune -- bool)",
 		"(null null -- bool)",
 	}
 	b.regTok(EQUALS, equality...)
@@ -260,7 +262,10 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("random", "( -- float)")
 	b.reg("randomFixed", "( -- float)")
 
-	b.reg("toInt", "(str -- Maybe[int])", "(float -- int)", "(int -- int)")
+	b.reg("toInt", "(str -- Maybe[int])", "(float -- int)", "(int -- int)", "(rune -- int)")
+	// An int that is not a Unicode scalar value, or a str that is not one
+	// code point, gives none.
+	b.reg("toRune", "(int -- Maybe[rune])", "(str -- Maybe[rune])")
 	b.reg("toFloat", "(str -- Maybe[float])", "(int -- float)", "(float -- float)")
 	// Value below, base (2 to 36) on top.
 	b.reg("toBase", "(int int -- str)")
@@ -307,6 +312,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	b.reg("base64encode", "(binary -- str)")
 	b.reg("base64decode", "(str -- binary)")
+	b.reg("runes", "(str -- new [rune])")
 	b.reg("utf8Str", "(binary -- str)")
 	b.reg("utf8Bytes", "(str -- binary)")
 	b.reg("hexDecode", "(str -- binary)")
@@ -535,6 +541,9 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// Old below, new on top.
 	b.reg("abbrRename", "(AbbrMatch AbbrMatch -- )")
 	b.reg("abbrList", "( -- new [Abbr])")
+	b.reg("bindingAdd", "(Binding -- )")
+	b.reg("bindingErase", "([Key] -- )")
+	b.reg("bindingList", "( -- new [Binding])")
 	// Name below, value on top.
 	b.reg("setenv", "(str | path str | path -- )")
 	b.reg("unsetenv", "(str | path -- )")
@@ -582,12 +591,12 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// A cycle is a checked error.
 	b.reg("deepCopy", "(a -- new a)")
 
-	// Writes to stdout (w, wl) or stderr (we, wle). Only str and int are
-	// printed; wl and wle add a newline and refuse binary.
-	b.reg("w", "(str | int | binary -- )")
-	b.reg("we", "(str | int | binary -- )")
-	b.reg("wl", "(str | int -- )")
-	b.reg("wle", "(str | int -- )")
+	// Writes to stdout (w, wl) or stderr (we, wle). Only str, int and rune
+	// are printed; wl and wle add a newline and refuse binary.
+	b.reg("w", "(str | int | rune | binary -- )")
+	b.reg("we", "(str | int | rune | binary -- )")
+	b.reg("wl", "(str | int | rune -- )")
+	b.reg("wle", "(str | int | rune -- )")
 
 	// ---- New entries ----
 

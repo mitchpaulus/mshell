@@ -976,6 +976,8 @@ func (c *coreChecker) token(tok Token) {
 		c.push(TidPath, true)
 	case DATETIME:
 		c.push(TidDateTime, true)
+	case RUNE:
+		c.push(TidRune, true)
 	case VARRETRIEVE:
 		c.load(tok)
 	case ENVRETREIVE:
@@ -1696,7 +1698,7 @@ func (c *coreChecker) equatable(t TypeId, inDict bool) bool {
 // isScalarTid reports whether t is a base type other than null.
 func isScalarTid(t TypeId) bool {
 	switch t {
-	case TidInt, TidFloat, TidStr, TidBool, TidBytes, TidPath, TidDateTime:
+	case TidInt, TidFloat, TidStr, TidBool, TidBytes, TidPath, TidDateTime, TidRune:
 		return true
 	}
 	return false
@@ -1704,7 +1706,7 @@ func isScalarTid(t TypeId) bool {
 
 func (c *coreChecker) equatableIn(t TypeId, inDict bool, visiting []TypeId) bool {
 	switch t {
-	case TidInt, TidFloat, TidStr, TidBool, TidBytes, TidPath, TidDateTime, TidNull, TidBottom:
+	case TidInt, TidFloat, TidStr, TidBool, TidBytes, TidPath, TidDateTime, TidRune, TidNull, TidBottom:
 		return true
 	}
 	n := c.arena.nodes[t]

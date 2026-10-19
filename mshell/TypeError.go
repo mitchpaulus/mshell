@@ -218,6 +218,8 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return "path"
 	case TidDateTime:
 		return "datetime"
+	case TidRune:
+		return "rune"
 	case TidBottom:
 		// ⊥ in a message is a type nothing has fixed yet (a variable left
 		// unsolved reads as ⊥), printed like one (plan question 25).

@@ -190,6 +190,7 @@ Space and the characters <code>|</code>, <code>;</code>, <code>&lt;</code>, <cod
 so <code>[s]</code> gives <code>[git status -u]</code>.
 Enter tries the word the cursor is in or at the end of, then runs the line, so a line runs expanded even if it would not parse unexpanded.
 Ctrl-Space inserts a space without expanding; to run a word as typed, press Ctrl-Space and then Enter.
+These keys are <a href="#getting-started-key-bindings">key bindings</a>, so other keys can be made to expand too.
 Tab completion, history and pasted text do not expand.
 History gets the expanded line.
 </p>
@@ -251,6 +252,336 @@ and the interactive shell prints a warning about it.
 
 <p>
 Tab in command position offers the words of abbreviations that expand there.
+</p>
+
+<p>
+These types and their members are built in, so their names cannot be used for your own types, members or definitions.
+</p>
+
+<h1 id="getting-started-key-bindings">Key bindings <a class="section-link" href="#getting-started-key-bindings" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
+
+<p>
+Every key the interactive shell reacts to is a key binding: a sequence of keys, and what it does.
+The shell starts with the <a href="#getting-started-default-keys">default keymap</a>,
+and <code>init.msh</code> adds to it with <code>bindingAdd</code>, which takes a <code>Binding</code>.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;j&#39;</span> <span class="mshellRUNE">r&#39;f&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">editAccept</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">bindingOps</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">within</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">150</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">bindingAdd</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;v&#39;</span> <span class="mshellRUNE">r&#39;l&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">editClearScreen</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">bindingOps</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">within</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">150</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">idleBefore</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">150</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">bindingAdd</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;x&#39;</span> <span class="mshellLITERAL">keyCtrl</span> <span class="mshellRUNE">r&#39;e&#39;</span> <span class="mshellLITERAL">keyCtrl</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">editInEditor</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">editRunOps</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">bindingOps</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">bindingAdd</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">keyF1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">lf</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellEXECUTE">;</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">editRun</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">bindingOps</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">bindingAdd</span>
+
+<span class="mshellLINECOMMENT"># Put `sudo ` in front of the line, keeping the cursor where it was in the text.</span>
+<span class="mshellDEF">def</span> <span class="mshellLITERAL">sudoLine</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">EditState</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">new</span> <span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">EditOp</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellVARSTORE">s!</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellFORMATSTRINGSTART">$&#34;sudo {</span><span class="mshellVARRETRIEVE">@s</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">before</span><span class="mshellQUESTION">?</span><span class="mshellFORMATSTRINGEND">}&#34;</span> <span class="mshellVARRETRIEVE">@s</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">after</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">editSetLine</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">just</span>
+<span class="mshellEND">end</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;s&#39;</span> <span class="mshellLITERAL">keyAlt</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">sudoLine</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">bindingFunc</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">description</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;sudo the line&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">bindingAdd</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+With these, <code>j</code> and then <code>f</code> runs the line,
+<code>v</code> and <code>l</code> typed as a quick pair clears the screen,
+Ctrl-X Ctrl-E edits the line in your editor,
+F1 runs <code>lf</code> without losing what you had typed,
+and Alt-S puts <code>sudo</code> in front of the line.
+</p>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Key</th> <th>Type</th> <th>Description</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>keys</code></td> <td><code>[Key]</code></td> <td>The keys to press, in order, at most 8.</td> </tr>
+        <tr> <td><code>action</code></td> <td><code>BindingAction</code></td> <td>What the keys do: <code>bindingOps [EditOp]</code>, a fixed list of editor operations, or <code>bindingFunc (EditState -- Maybe[[EditOp]])</code>, a quotation that is given the line and returns the operations to run, or <code>none</code> to decline.</td> </tr>
+        <tr> <td><code>mode</code> (optional)</td> <td><code>EditMode</code></td> <td>The keymap the binding is in: <code>modeInsert</code>, the default, or <code>modeComplete</code>, while Tab cycles through matches.</td> </tr>
+        <tr> <td><code>within</code> (optional)</td> <td><code>int</code></td> <td>The longest time, in milliseconds, between two of its keys.</td> </tr>
+        <tr> <td><code>idleBefore</code> (optional)</td> <td><code>int</code></td> <td>The shortest time, in milliseconds, with no key before its first key.</td> </tr>
+        <tr> <td><code>description</code> (optional)</td> <td><code>str</code></td> <td>A note for yourself, which <code>bindingList</code> gives back.</td> </tr>
+    </tbody>
+</table>
+
+<h2 id="getting-started-keys">Keys</h2>
+
+<p>
+A <code>Key</code> is one of three things.
+</p>
+
+<ul>
+  <li>A <a href="data-types.html#data-type-rune">rune</a>, for a key that types text, named by the text it types:
+      <code>r'j'</code>, <code>r'J'</code>, <code>r';'</code>, <code>r'é'</code>, and <code>r' '</code> for the space bar.</li>
+  <li>A <code>NamedKey</code>, for a key that types no text:
+      <code>keyEnter</code>, <code>keyTab</code>, <code>keyBackspace</code>, <code>keyEscape</code>, <code>keyDelete</code>, <code>keyInsert</code>, <code>keyUp</code>, <code>keyDown</code>, <code>keyLeft</code>, <code>keyRight</code>, <code>keyHome</code>, <code>keyEnd</code>, <code>keyPageUp</code>, <code>keyPageDown</code>, <code>keyF1</code>, <code>keyF2</code>, <code>keyF3</code>, <code>keyF4</code>, <code>keyF5</code>, <code>keyF6</code>, <code>keyF7</code>, <code>keyF8</code>, <code>keyF9</code>, <code>keyF10</code>, <code>keyF11</code>, <code>keyF12</code>, <code>keyF13</code>, <code>keyF14</code>, <code>keyF15</code>, <code>keyF16</code>, <code>keyF17</code>, <code>keyF18</code>, <code>keyF19</code>, <code>keyF20</code>, <code>keyF21</code>, <code>keyF22</code>, <code>keyF23</code>, <code>keyF24</code>, <code>keyF25</code>, <code>keyF26</code>, <code>keyF27</code>, <code>keyF28</code>, <code>keyF29</code>, <code>keyF30</code>, <code>keyF31</code>, <code>keyF32</code>, <code>keyF33</code>, <code>keyF34</code> and <code>keyF35</code>.</li>
+  <li>A <code>ModifiedKey</code>, a key held with <code>keyCtrl</code>, <code>keyAlt</code>, <code>keyShift</code> or <code>keySuper</code>.
+      The modifier comes after the key, as with any enum member that holds a value:
+      <code>r'x' keyCtrl</code> is Ctrl-X, <code>r'r' keyShift keyAlt</code> is Alt-Shift-R, and <code>keyLeft keyAlt keyCtrl</code> is Ctrl-Alt-Left.</li>
+</ul>
+
+<p>
+A misspelled key is a type error: <code>[r'x' ctlr]</code> is not a <code>[Key]</code>.
+How a key is spelled does not matter.
+The order of the modifiers does not, and a repeated modifier counts once.
+A letter with Shift and nothing else is the capital letter, so <code>r'j' keyShift</code> is <code>r'J'</code>.
+With Ctrl, Alt or Super, a capital letter is the letter with Shift, so <code>r'W' keyAlt</code> is <code>r'w' keyShift keyAlt</code>.
+Shift on a key that is not a letter, such as <code>r';' keyShift</code>, never fires:
+the terminal sends the text the key types, <code>r':'</code>, and which key that is depends on your keyboard layout.
+</p>
+
+<p>
+Which keys the shell can tell apart depends on the terminal.
+Most terminals send keys in an old encoding in which some keys are the same:
+Tab is Ctrl-I, Enter is Ctrl-M, many terminals send Ctrl-H for Ctrl-Backspace,
+and Ctrl with Shift on a letter is Ctrl alone.
+Escape followed by a key is Alt with that key:
+when that Alt key is bound it runs, and otherwise the key acts on its own, so an Escape pressed out of habit loses nothing.
+So a lone Escape is not a key in this encoding, and Escape waits for the next key to know what it is.
+</p>
+
+<p>
+Terminals that implement the kitty keyboard protocol (kitty, foot, ghostty, WezTerm, alacritty, iTerm2 and others) send every key distinctly.
+The shell asks the terminal for it when it starts, uses it while you edit a line, and turns it off before running anything.
+With it, Escape is <code>keyEscape</code>, Ctrl-I is not Tab, Ctrl-Shift-X can be bound,
+and Ctrl and Alt bindings follow the key's place on a US keyboard, so <code>r'w' keyCtrl</code> works on other layouts too.
+Set the environment variable <code>MSH_KITTY_KEYS</code> to <code>0</code> to keep the old encoding, for a terminal that implements the protocol badly.
+A binding for a key a terminal cannot send is not an error; it never fires there.
+</p>
+
+<p>
+<code>msh keys</code> shows each key you press as a binding writes it, with the bytes the terminal sent and the time since the key before.
+Use it when a binding does not fire.
+Ctrl-C twice, or Ctrl-D, ends it.
+</p>
+
+<pre>
+<code>Reading keys (legacy encoding). Ctrl-C twice, or Ctrl-D, ends.
+r'x' keyCtrl                             18
+r':'                                     3a                       +401 ms
+keyLeft keyAlt                           1b 5b 31 3b 33 44        +960 ms
+r'x' keyAlt  (or r'x' alone, when that is not bound) 1b 78                    +512 ms</code>
+</pre>
+
+<h2 id="getting-started-edit-ops">Editor operations</h2>
+
+<p>
+An <code>EditOp</code> is one thing the editor does.
+The operations of a binding run in order, and the line is drawn once after the last.
+The first group only changes the line and the cursor; these are <em>edits</em>.
+</p>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Operation</th> <th>Does</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>editInsert str</code></td> <td>Insert the text at the cursor, with no abbreviation or binding.</td> </tr>
+        <tr> <td><code>editSelfInsert</code></td> <td>Insert the text of the last key of the sequence.</td> </tr>
+        <tr> <td><code>editSetLine str str</code></td> <td>Make the line the two strings joined, with the cursor between them.</td> </tr>
+        <tr> <td><code>editLeft</code>, <code>editRight</code></td> <td>Move the cursor one character.</td> </tr>
+        <tr> <td><code>editWordLeft</code>, <code>editWordRight</code></td> <td>Move the cursor one word.</td> </tr>
+        <tr> <td><code>editLineStart</code>, <code>editLineEnd</code></td> <td>Move the cursor to the start or end of the line.</td> </tr>
+        <tr> <td><code>editBackspace</code>, <code>editDelete</code></td> <td>Delete the character before or under the cursor.</td> </tr>
+        <tr> <td><code>editDeleteWordLeft</code></td> <td>Delete the word before the cursor.</td> </tr>
+        <tr> <td><code>editDeleteToStart</code>, <code>editDeleteToEnd</code></td> <td>Delete from the cursor to the start or end of the line.</td> </tr>
+        <tr> <td><code>editExpandAbbr</code></td> <td>Expand the <a href="#getting-started-abbreviations">abbreviation</a> that ends at the cursor, if one applies.</td> </tr>
+    </tbody>
+    <tbody>
+        <tr> <td><code>editAccept</code></td> <td>Expand the abbreviation at the cursor and run the line. It must be the last operation.</td> </tr>
+        <tr> <td><code>editExit</code></td> <td>Leave the shell. It must be the last operation.</td> </tr>
+        <tr> <td><code>editRun ( -- )</code></td> <td>Run the quotation with the terminal, and keep the line (below).</td> </tr>
+        <tr> <td><code>editRunOps (EditState -- Maybe[[EditOp]])</code></td> <td>Run the quotation with the terminal, then run the operations it returns on the line (below).</td> </tr>
+        <tr> <td><code>editForward</code></td> <td>Move right, or at the end of the line accept the history suggestion.</td> </tr>
+        <tr> <td><code>editAcceptSuggestion</code></td> <td>Accept the history suggestion.</td> </tr>
+        <tr> <td><code>editHistoryPrev</code>, <code>editHistoryNext</code></td> <td>Go to the previous or next line in history.</td> </tr>
+        <tr> <td><code>editHistorySearchBack</code>, <code>editHistorySearchForward</code></td> <td>Search history backward or forward for lines that start with the text typed, ignoring case.</td> </tr>
+        <tr> <td><code>editLastArg</code></td> <td>Insert the last argument of the previous line; pressed again, of the line before that.</td> </tr>
+        <tr> <td><code>editComplete</code>, <code>editCompleteBack</code></td> <td>Complete the word at the cursor. With several matches, the shell enters <code>modeComplete</code>.</td> </tr>
+        <tr> <td><code>editCompleteNext</code>, <code>editCompletePrev</code></td> <td>Go to the next or previous match.</td> </tr>
+        <tr> <td><code>editCompleteLeft</code>, <code>editCompleteRight</code></td> <td>Go to the match in the column to the left or right.</td> </tr>
+        <tr> <td><code>editCompleteAccept</code></td> <td>Keep the match on the line and stop cycling.</td> </tr>
+        <tr> <td><code>editClearScreen</code></td> <td>Clear the screen.</td> </tr>
+        <tr> <td><code>editRemeasure</code></td> <td>Forget the measured widths of text and measure again. Use it after reattaching, changing fonts, or when the line looks wrong.</td> </tr>
+        <tr> <td><code>editMessage str</code></td> <td>Show the text below the line.</td> </tr>
+    </tbody>
+</table>
+
+<p>
+<code>editRun</code> runs a quotation as a command line runs: with the terminal, in the foreground, and with no time limit,
+so it can start an interactive program such as <code>lf</code> or <code>fzf</code>.
+It runs on its own stack, which it must leave empty, and it can change the directory.
+When it ends, the prompt is drawn again with the line and cursor as they were.
+It is not added to history, and the prompt still reports on the last line you ran.
+To have a key run something that goes into history, have it set and run a line instead: <code>['git status' '' editSetLine editAccept]</code>.
+</p>
+
+<p>
+<code>editRunOps</code> is the same, but its quotation is given the line as an <code>EditState</code>, and returns the operations to run on it afterwards, or <code>none</code> to keep it.
+The standard library's <code>editInEditor</code>, on Ctrl-G, is one:
+it opens the line in <code>$EDITOR</code> (<code>vi</code> when that is not set) as a <code>.msh</code> file, and puts what you saved on the line, without running it.
+If the editor fails, the line is kept.
+To run the edited line at once, bind <code>[(editInEditor) editRunOps editAccept]</code>.
+</p>
+
+<h2 id="getting-started-binding-func">Quotations</h2>
+
+<p>
+A <code>bindingFunc</code> quotation is given an <code>EditState</code>, and returns <code>just</code> the operations to run, or <code>none</code> to decline.
+When it declines, the keys act as if the binding were not there.
+</p>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Key</th> <th>Type</th> <th>Description</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>before</code></td> <td><code>str</code></td> <td>The line before the cursor, as it was before the first key of the binding.</td> </tr>
+        <tr> <td><code>after</code></td> <td><code>str</code></td> <td>The line from the cursor on.</td> </tr>
+        <tr> <td><code>keys</code></td> <td><code>[Key]</code></td> <td>The keys that ran the binding, so one quotation can serve several keys.</td> </tr>
+        <tr> <td><code>mode</code></td> <td><code>EditMode</code></td> <td>The mode the keys were pressed in.</td> </tr>
+    </tbody>
+</table>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Run a quotation only when the line is empty; elsewhere the keys are typed as they are.</span>
+<span class="mshellDEF">def</span> <span class="mshellLITERAL">onEmptyLine</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">EditState</span> <span class="mshellLEFT_PAREN">(</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellRIGHT_PAREN">)</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">new</span> <span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">EditOp</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellVARSTORE">s!</span><span class="mshellCOMMA">,</span> <span class="mshellVARSTORE">q!</span>
+    <span class="mshellVARRETRIEVE">@s</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">before</span><span class="mshellQUESTION">?</span> <span class="mshellVARRETRIEVE">@s</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">after</span><span class="mshellQUESTION">?</span> <span class="mshellPLUS">+</span> <span class="mshellSINGLEQUOTESTRING">&#39;&#39;</span> <span class="mshellEQUALS">=</span> <span class="mshellIF">if</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellVARRETRIEVE">@q</span> <span class="mshellLITERAL">editRun</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">just</span> <span class="mshellELSE">else</span> <span class="mshellLITERAL">none</span> <span class="mshellEND">end</span>
+<span class="mshellEND">end</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;;&#39;</span> <span class="mshellRUNE">r&#39;r&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">lf</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellEXECUTE">;</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">onEmptyLine</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">bindingFunc</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">bindingAdd</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+The quotation runs while you type, so it should be quick: like an abbreviation's quotation, it runs on its own stack and is stopped after 1 second.
+If it fails or is stopped, it declines, and the error is shown below the line, once while it keeps failing the same way.
+What it prints is not shown.
+Anything slow or interactive belongs in an <code>editRun</code> it returns.
+Operations it returns after <code>editAccept</code> or <code>editExit</code> are not run.
+</p>
+
+<p>
+A binding is tested like any other definition, in a script, with an <code>EditState</code> made by hand.
+With <code>sudoLine</code> from the first example:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">before</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;ab&#39;</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">after</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;cd&#39;</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;s&#39;</span> <span class="mshellLITERAL">keyAlt</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">mode</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">modeInsert</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">sudoLine</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<h2 id="getting-started-key-sequences">Sequences and timing</h2>
+
+<p>
+Typing is never delayed.
+A key that begins a longer binding acts at once, so with <code>[r'j' r'f']</code> bound, <code>j</code> appears as soon as it is typed.
+If <code>f</code> follows, the line goes back to what it was before the <code>j</code>, and the binding runs on that.
+Any other key after the <code>j</code> types itself as usual.
+A key that types nothing, such as Ctrl-X at the start of Ctrl-X Ctrl-E, shows the keys so far below the line (<code>r'x' keyCtrl -</code>),
+and a key that does not continue the sequence then acts on its own.
+When bindings of different lengths end at the same key, the longest one runs.
+Pasted text is never part of a binding, and ends any sequence.
+</p>
+
+<p>
+Only edits can be taken back.
+A binding with any other operation, or with a quotation, runs as soon as its last key comes, so it cannot also be the start of a longer binding:
+Ctrl-X bound to <code>[editClearScreen]</code> and Ctrl-X Ctrl-E cannot both work.
+The same holds when its keys come in the middle of the longer binding, as <code>[r';' r'r']</code> does in <code>[r'x' r';' r'r' r'q']</code>.
+When two bindings conflict like this, the newer one wins, and the older one is kept but never fires.
+Since <code>init.msh</code> runs after the defaults are added, your bindings win over them.
+Edits never conflict: Space can expand abbreviations and <code>[r' ' r' ']</code> can still be bound.
+</p>
+
+<p>
+A sequence has no time limit unless its binding gives one.
+With <code>within: 150</code>, <code>v</code>, a pause, and <code>l</code> types <code>vl</code>.
+With <code>idleBefore: 150</code>, the <code>vl</code> in <code>devlog</code> does not fire when typed at speed.
+Fast typists' keys come about 120 ms apart, so for a pair of letters, 150 for both is a reasonable start.
+Over ssh, times under about 100 ms are not reliable.
+Choosing keys that do not occur in what you type is surer than any time.
+</p>
+
+<h2 id="getting-started-binding-modes">Modes</h2>
+
+<p>
+A binding is in one of two keymaps, an <code>EditMode</code>.
+<code>modeInsert</code> is the normal one, and the mode of a binding that does not give one.
+<code>modeComplete</code> is the one while Tab cycles through several matches:
+a key bound there does what it does there, and any other key stops cycling and acts as in <code>modeInsert</code>.
+</p>
+
+<h2 id="getting-started-default-keys">The default keymap</h2>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Keys (<code>modeInsert</code>)</th> <th>Operations</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>keyEnter</code></td> <td><code>[editAccept]</code></td> </tr>
+        <tr> <td><code>r' '</code>, <code>r'|'</code>, <code>r';'</code>, <code>r'&lt;'</code>, <code>r'&gt;'</code>, <code>r']'</code>, <code>r')'</code></td> <td><code>[editExpandAbbr editSelfInsert]</code></td> </tr>
+        <tr> <td><code>r' ' keyCtrl</code></td> <td><code>[' ' editInsert]</code></td> </tr>
+        <tr> <td><code>keyTab</code></td> <td><code>[editComplete]</code></td> </tr>
+        <tr> <td><code>keyTab keyShift</code></td> <td><code>[editCompleteBack]</code></td> </tr>
+        <tr> <td><code>keyLeft</code>, <code>r'b' keyCtrl</code></td> <td><code>[editLeft]</code></td> </tr>
+        <tr> <td><code>keyRight</code></td> <td><code>[editRight]</code></td> </tr>
+        <tr> <td><code>r'f' keyCtrl</code></td> <td><code>[editForward]</code></td> </tr>
+        <tr> <td><code>r'b' keyAlt</code>, <code>r'f' keyAlt</code></td> <td><code>[editWordLeft]</code>, <code>[editWordRight]</code></td> </tr>
+        <tr> <td><code>keyHome</code>, <code>r'a' keyCtrl</code></td> <td><code>[editLineStart]</code></td> </tr>
+        <tr> <td><code>keyEnd</code>, <code>r'e' keyCtrl</code></td> <td><code>[editLineEnd]</code></td> </tr>
+        <tr> <td><code>keyBackspace</code>, <code>keyDelete</code></td> <td><code>[editBackspace]</code>, <code>[editDelete]</code></td> </tr>
+        <tr> <td><code>r'w' keyCtrl</code>, <code>r'h' keyCtrl</code>, <code>keyBackspace keyCtrl</code></td> <td><code>[editDeleteWordLeft]</code></td> </tr>
+        <tr> <td><code>r'u' keyCtrl</code>, <code>r'k' keyCtrl</code></td> <td><code>[editDeleteToStart]</code>, <code>[editDeleteToEnd]</code></td> </tr>
+        <tr> <td><code>keyUp</code>, <code>keyDown</code></td> <td><code>[editHistoryPrev]</code>, <code>[editHistoryNext]</code></td> </tr>
+        <tr> <td><code>r'p' keyCtrl</code>, <code>r'n' keyCtrl</code></td> <td><code>[editHistorySearchBack]</code>, <code>[editHistorySearchForward]</code></td> </tr>
+        <tr> <td><code>r'y' keyCtrl</code></td> <td><code>[editAcceptSuggestion]</code></td> </tr>
+        <tr> <td><code>r'.' keyAlt</code></td> <td><code>[editLastArg]</code></td> </tr>
+        <tr> <td><code>r'l' keyCtrl</code></td> <td><code>[editClearScreen]</code></td> </tr>
+        <tr> <td><code>r'o' keyCtrl</code></td> <td><code>[('.' mshFileManager) editRun editClearScreen]</code></td> </tr>
+        <tr> <td><code>r'g' keyCtrl</code></td> <td><code>[(editInEditor) editRunOps]</code></td> </tr>
+        <tr> <td><code>r'r' keyShift keyAlt</code></td> <td><code>[editRemeasure]</code></td> </tr>
+        <tr> <td><code>r'c' keyCtrl</code>, <code>r'd' keyCtrl</code>, <code>r'o' keyAlt</code></td> <td><code>[editExit]</code></td> </tr>
+    </tbody>
+</table>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Keys (<code>modeComplete</code>)</th> <th>Operations</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>keyTab</code>, <code>keyDown</code>, <code>r'n' keyCtrl</code></td> <td><code>[editCompleteNext]</code></td> </tr>
+        <tr> <td><code>keyTab keyShift</code>, <code>keyUp</code>, <code>r'p' keyCtrl</code></td> <td><code>[editCompletePrev]</code></td> </tr>
+        <tr> <td><code>keyLeft</code>, <code>keyRight</code></td> <td><code>[editCompleteLeft]</code>, <code>[editCompleteRight]</code></td> </tr>
+        <tr> <td><code>keyEnter</code></td> <td><code>[editCompleteAccept]</code></td> </tr>
+    </tbody>
+</table>
+
+<p>
+The abbreviation keys are bindings like the others, so any key can be made to expand abbreviations,
+and a pair of keys can be replaced as you type, the way an abbreviation is replaced at Space:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;|&#39;</span> <span class="mshellRUNE">r&#39;|&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;| less&#39;</span> <span class="mshellLITERAL">editInsert</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">bindingOps</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">bindingAdd</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;,&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">editExpandAbbr</span> <span class="mshellLITERAL">editSelfInsert</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">bindingOps</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">bindingAdd</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<h2 id="getting-started-binding-builtins">Adding, removing and listing</h2>
+
+<p>
+<code>bindingAdd</code> replaces a binding with the same keys in the same mode.
+<code>bindingErase</code> takes a list of keys and removes the bindings with those keys, in both modes, defaults included;
+a key that types text then types it again, and any other key does nothing.
+<code>bindingList</code> gives every binding, oldest first, so the defaults come first.
+<code>mode</code> is always present.
+</p>
+
+<p>
+None of these fails on a value of the right type.
+A binding that can never fire is added but stays inert, and the interactive shell prints a warning about it:
+one with no keys or more than 8, a <code>within</code> or <code>idleBefore</code> that is not more than 0,
+an operation after <code>editAccept</code> or <code>editExit</code>, or one that a newer binding conflicts with.
 </p>
 
 <p>

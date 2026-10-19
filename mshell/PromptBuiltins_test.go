@@ -103,6 +103,13 @@ func TestPromptTablesCoverBuiltinEnums(t *testing.T) {
 		"AbbrMatch":     nil,
 		"AbbrPosition":  nil,
 		"AbbrExpansion": nil,
+		// The key binding enums; Bindings.go and Keys.go read their
+		// members by name, which TestBindingEnumsMatch checks.
+		"NamedKey":      nil,
+		"ModifiedKey":   nil,
+		"EditMode":      nil,
+		"EditOp":        nil,
+		"BindingAction": nil,
 	}
 	enums := builtinEnums(t)
 	for name, d := range enums {

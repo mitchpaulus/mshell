@@ -216,7 +216,7 @@ List patterns are limited to 256 positions, and dictionary patterns are limited 
 
 <p>
 An arm may list several strings, integers, or paths in a row; it matches if the subject equals any of them.
-All alternatives in one arm must be the same kind: all strings, all integers, or all paths.
+All alternatives in one arm must be the same kind: all strings, all integers, all paths, or all runes.
 Other types are not allowed. For strings, they must be quoted, they cannot be literals.
 </p>
 
@@ -243,7 +243,7 @@ Other types are not allowed. For strings, they must be quoted, they cannot be li
 <p>
 Match against a type name.
 Supported type patterns: <code>int</code>, <code>float</code>, <code>str</code>, <code>bool</code>,
-<code>list</code>, <code>dict</code>, <code>path</code>, <code>datetime</code>,
+<code>list</code>, <code>dict</code>, <code>path</code>, <code>datetime</code>, <code>rune</code>,
 <code>quotation</code>, <code>maybe</code>, <code>binary</code>,
 and the name of a declared <a href="#control-flow-enum-patterns"><code>enum</code></a>.
 </p>

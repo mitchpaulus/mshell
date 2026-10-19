@@ -50,6 +50,7 @@ Fixpoint cval (f : nat) (H : heap) (P : list (loc * ty)) (v : val) (t : ty) {str
   match t with
   | TInt => Some (match v with VInt _ => true | _ => false end)
   | TStr => Some (match v with VStr _ => true | _ => false end)
+  | TRune => Some (match v with VRune _ => true | _ => false end)
   | TBool => Some (match v with VBool _ => true | _ => false end)
   | TBot | TParam _ | TVar _ | TRV _ => Some false
   | TTop => Some true
@@ -187,6 +188,7 @@ Proof.
   - destruct v; try discriminate. apply (dtyped_nonloc sigs) in D. subst. constructor.
   - destruct v; try discriminate. apply (dtyped_nonloc sigs) in D. subst. constructor.
   - destruct v; try discriminate. apply (dtyped_nonloc sigs) in D. subst. constructor.
+  - destruct v; try discriminate. apply (dtyped_nonloc sigs) in D. subst. constructor.
   - discriminate.
   - apply dt_top with (t := t); exact D.
   - destruct v; try discriminate.
@@ -239,6 +241,7 @@ Proof.
   - destruct v; try discriminate. split; [constructor | reflexivity].
   - destruct v; try discriminate. split; [constructor | reflexivity].
   - destruct v; try discriminate. split; [constructor | reflexivity].
+  - destruct v; try discriminate. split; [constructor | reflexivity].
   - apply andb_true_iff in Hi as [H1 H2].
     destruct (cval f H P v u1) as [[|]|] eqn:E1; try discriminate.
     + destruct (IH P u1 v t V E1 H1). split; [apply vt_unionl|]; auto.
@@ -279,6 +282,7 @@ Proof.
   - destruct (vt_int_inv _ _ _ V) as [? ->]. discriminate.
   - destruct (vt_str_inv _ _ _ V) as [? ->]. discriminate.
   - destruct (vt_bool_inv _ _ _ V) as [? ->]. discriminate.
+  - destruct (vt_rune_inv _ _ _ V) as [? ->]. discriminate.
   - exfalso. exact (vt_bot _ _ _ V).
   - discriminate.
   - destruct (vt_list_inv _ _ _ _ V) as (l & a & -> & El & [Hat Hta]).

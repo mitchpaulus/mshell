@@ -95,6 +95,7 @@ Proof.
   - intros; constructor.
   - intros; constructor.
   - intros; constructor.
+  - intros; constructor.
   - intros l a t E Hs. eapply vt_list; [apply K; [exact E | discriminate] | exact Hs].
   - intros l fs r t E Hs. eapply vt_rec; [apply K; [exact E | discriminate] | exact Hs].
   - intros sc e G ins outs E Hc. eapply vt_clo; [apply K; [exact E | discriminate] | exact Hc].

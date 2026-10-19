@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // Phase 10 prep: type-checker keyword reservations.
@@ -333,6 +334,83 @@ func TestUnterminatedFormatString(t *testing.T) {
 
 		if _, err := NewLexer(input, nil).Tokenize(); err == nil {
 			t.Errorf("%q: expected an error without allowUnterminatedString", input)
+		}
+	}
+}
+
+func TestRuneLiterals(t *testing.T) {
+	cases := []struct {
+		input string
+		want  rune   // the value, for a RUNE token
+		err   string // a part of the message, for an ERROR token
+	}{
+		{"r'a'", 'a', ""},
+		{"r' '", ' ', ""},
+		{`r'\'`, '\\', ""},
+		{"r'😀'", 0x1F600, ""},
+		{"r'é'", 0xE9, ""},
+		{"U+001B", 0x1B, ""},
+		{"U+1f600", 0x1F600, ""},
+		{"U+10FFFF", 0x10FFFF, ""},
+		{"r'asdf'", 0, "r is not a raw-string prefix"},
+		{"r'é'", 0, "Use U+00E9, or write the runes separately: r'e' U+0301."},
+		{"r'👨‍👩‍👧'", 0, "holds 5 code points"},
+		{"r''", 0, "Empty rune literal"},
+		{"r'''", 0, "write the apostrophe as U+0027"},
+		{"r'a", 0, "Unterminated rune literal"},
+		{"r'a\n'", 0, "closing quote on the same line"},
+		{"r'\t'", 0, "write it as U+0009"},
+		{"U+41", 0, "4 to 6 hex digits"},
+		{"U+0000041", 0, "4 to 6 hex digits"},
+		{"U+00GG", 0, "expected 4 to 6 hex digits"},
+		{"U+0041x", 0, "expected 4 to 6 hex digits"},
+		{"U+110000", 0, "above U+10FFFF"},
+		{"U+D83D", 0, "is a surrogate"},
+	}
+	for _, tc := range cases {
+		toks, _ := NewLexer(tc.input, nil).Tokenize()
+		tok := toks[0]
+		if tc.err != "" {
+			if tok.Type != ERROR || !strings.Contains(tok.Lexeme, tc.err) {
+				t.Errorf("%q: got %s %q, want an error containing %q", tc.input, tok.Type, tok.Lexeme, tc.err)
+			}
+			continue
+		}
+		v, ok := tok.Value.(MShellRune)
+		if tok.Type != RUNE || !ok || v.Value != tc.want {
+			t.Errorf("%q: got %s %q (%v), want rune %U", tc.input, tok.Type, tok.Lexeme, tok.Value, tc.want)
+		}
+	}
+
+	// Words that only look like the start of a rune stay what they were.
+	for _, input := range []string{"xr'a'", "u+0041", "U+", "Ux", "r"} {
+		toks, _ := NewLexer(input, nil).Tokenize()
+		if toks[0].Type != LITERAL {
+			t.Errorf("%q: got %s, want LITERAL", input, toks[0].Type)
+		}
+	}
+}
+
+func TestUnterminatedRune(t *testing.T) {
+	l := NewLexer("r'a", nil)
+	l.allowUnterminatedString = true
+	toks, _ := l.Tokenize()
+	if toks[0].Type != UNFINISHEDRUNE {
+		t.Errorf("got %s, want UNFINISHEDRUNE", toks[0].Type)
+	}
+}
+
+// Every rune prints in a form that lexes back to the same rune.
+func TestRuneSourceRoundTrip(t *testing.T) {
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if r >= 0xD800 && r <= 0xDFFF {
+			continue
+		}
+		src := runeSource(r)
+		toks, _ := NewLexer(src, nil).Tokenize()
+		v, ok := toks[0].Value.(MShellRune)
+		if len(toks) != 2 || toks[0].Type != RUNE || !ok || v.Value != r {
+			t.Fatalf("%U prints as %q, which lexes to %s %q", r, src, toks[0].Type, toks[0].Lexeme)
 		}
 	}
 }
