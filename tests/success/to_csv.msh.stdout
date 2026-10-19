@@ -11,3 +11,16 @@ x,y
 "a,b","c""d",plain
 "line1
 line2",ok,
+id,"name, full",score,ok
+1,Ada,2.5,true
+2,"B ""Bo""",10,false
+id,"name, full",score,ok
+2,"B ""Bo""",10,false
+a,b
+1,
+2,5
+3,[1 2]
+a,b
+x,y
+1,"a,b"
+3,4

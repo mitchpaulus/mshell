@@ -9317,6 +9317,27 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot extract values from a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
+				case "toCsv":
+					// Write a list of string rows, or a grid with a header row, as CSV.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toCsv' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					var out string
+					switch objTyped := obj.(type) {
+					case *MShellList:
+						out, err = rowsToCsv(objTyped)
+					case *MShellGrid:
+						out, err = gridToCsv(objTyped, nil)
+					case *MShellGridView:
+						out, err = gridToCsv(objTyped.Source, objTyped.Indices)
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toCsv' on a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+					if err != nil {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(MShellString{out})
 				case "toDict":
 					// Convert a GridRow to a dictionary.
 					obj, err := stack.Pop()

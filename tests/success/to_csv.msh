@@ -24,3 +24,19 @@
 
 # toCsv: cells needing escaping
 [["a,b" "c\"d" "plain"] ["line1\nline2" "ok" ""]] toCsv w
+
+# toCsv: grid with int, float, string, and bool columns
+[| id, "name, full", score, ok; 1, "Ada", 2.5, true; 2, "B \"Bo\"", 10.0, false |] g!
+@g toCsv w
+
+# toCsv: grid view keeps only the viewed rows
+@g (:id? 1 >) filter toCsv w
+
+# toCsv: none is an empty cell, just v is v, other values use their str form
+[| a; 1; 2; 3 |] "b" [none 5 just [1 2]] gridAddCol toCsv w
+
+# toCsv: a grid with no rows is just the header
+[| a, b; 1, 2 |] (:a? 5 >) filter gridCompact toCsv w
+
+# toCsv: round trip through parseCsv and toGrid
+"x,y\n1,\"a,b\"\n3,4\n" parseCsv toGrid toCsv w

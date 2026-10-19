@@ -683,6 +683,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		newOut: 1,
 	}})
 	b.reg("parseCsv", "(str | path -- new [[str]])")
+	b.reg("toCsv", append([]string{"([[str]] -- str)"}, gridForms("(G_s -- str)")...)...)
 
 	// The list form of groupBy. The grid form takes a list of aggregation
 	// specs; written at the call, each quote gives its own type and the
