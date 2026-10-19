@@ -355,7 +355,8 @@ Spelling is free (P7). `bindingAdd` turns each key into a 32-bit key code: a cod
 
 - Modifiers are a set: their order does not matter and a repeat counts once.
 - A letter with Shift and no other modifier is the shifted letter: `r'j' keyShift` is `r'J'`.
-  For a non-letter the shell cannot know what Shift types on the user's layout, so `r';' keyShift` alone is inert, and the message says to write the character (`r':'`).
+  For a non-letter the shell cannot know what Shift types on the user's layout. `r';' keyShift` alone is valid and never fires,
+  as Ctrl-I never fires in the legacy encoding: no terminal reports Shift on a key that types text, only the text (`r':'`). `msh keys` (section 10) shows what a key really sends.
 - With Ctrl, Alt or Super, a letter is its lowercase key plus Shift: `r'W' keyAlt` is `r'w' keyShift keyAlt`, as in fish.
   A key with Ctrl or Alt types no text, so the rune names the key, and when the terminal reports alternate keys (section 10) it is the key in the same place on a US layout, so Ctrl-W works on a Cyrillic layout.
 
@@ -503,7 +504,7 @@ In a `bindingOps` program an op after either makes the binding inert. In a progr
 As with the abbreviation builtins, none fails on a value of its type, since `init.msh` is loaded for scripts too.
 A binding that can never fire is added, listed, and *inert*; when the shell is interactive `bindingAdd` writes one line to stderr naming its `keys` and the reason:
 
-- `keys` is empty or has more than 8 keys, or has Shift alone on a rune that is not a letter (section 5.1);
+- `keys` is empty or has more than 8 keys;
 - `within`, `idleBefore` or `idleAfter` is zero or negative;
 - a `bindingOps` program has an op after `editAccept` or `editExit`;
 - it conflicts with a binding in the same mode that is not inert (section 6.3). The newer one wins and the older one becomes inert, so a user's binding always beats a default.
@@ -533,7 +534,7 @@ The shell adds these before `init.msh` runs. They reproduce today's standard and
   [`r'.' keyAlt`], [`[editLastArg]`],
   [`r'l' keyCtrl`], [`[editClearScreen]`],
   [`r'o' keyCtrl`], [`[('.' mshFileManager) editRun editClearScreen]`],
-  [`r'e' keyAlt`], [`[(editInEditor) editRunOps]` (section 7.4)],
+  [`r'g' keyCtrl`], [`[(editInEditor) editRunOps]` (section 7.4)],
   [`r'R' keyAlt`], [`[editRemeasure]`],
   [`r'c' keyCtrl`, `r'd' keyCtrl`, `r'o' keyAlt`], [`[editExit]`],
 )
@@ -613,7 +614,7 @@ A key whose own action is an effect (an unbound named key counts as doing nothin
   So binding `ctrl-x ctrl-e` makes a binding of `ctrl-x` alone inert, and the reverse.
 - A pending key with no action of its own (an unbound `ctrl-x` that begins `ctrl-x ctrl-e`) shows nothing in the line.
   The editor shows the pending keys below the line (`ctrl-x -`), as Emacs does in its echo area, and waits for the next key without a time limit, unless the binding has `within`.
-  Escape or `ctrl-g`, unless bound in the sequence, cancels a pending sequence of such keys.
+  Escape, unless bound in the sequence, cancels a pending sequence of such keys. (Emacs uses Ctrl-G for this; here Ctrl-G edits the line in the user's editor.)
 
 Pure edits never conflict with longer sequences: `space` is bound to `[editExpandAbbr editSelfInsert]`, and `space space` can still be bound.
 
@@ -642,6 +643,8 @@ Typing has bursts too, so no rule is sure; but firmware has found which signals 
 )
 
 A binding with none of them has no time limits: `j`, a coffee, then `f` is still Enter, which is what happens today, and what fish does by default.
+There is no default for any of them, for any kind of sequence: time enters only where a binding declares it (P6).
+zsh (0.4 s) and readline (0.5 s) have a default, but theirs exists to end the wait for a held-back key, which this design does not have.
 
 - `within` makes the keys typeable as text by pausing between them: with `within: 150`, `v`, a pause, `l` is `vl`.
 - `idleBefore` stops a sequence in the middle of a word: fast typists' keys come about 120 ms apart (section 3.4), so with `idleBefore: 150` the `v l` in `devlog` does not fire.
@@ -886,6 +889,20 @@ The survey argues against hurrying: flag 8 turns every key into an escape code, 
 so release order is the weakest of firmware's signals. `idleBefore` and `idleAfter` are the strong ones, and they work in every terminal.
 ]
 
+== Seeing what a key sends: `msh keys`
+
+A binding that never fires is usually a key the terminal does not send the way the user thinks: Shift on `;`, Ctrl-I in the legacy encoding, Alt on a terminal that eats it.
+`msh keys` reads keys with the same decoder and protocol the editor uses, as `fish_key_reader` and kitty's `show_key` do, and prints one line per key:
+the `Key` value to write in a binding, the bytes that arrived, and the milliseconds since the previous key.
+
+```
+r'x' keyCtrl          18            +0 ms
+r':'                  3a          +412 ms
+keyLeft keyAlt        1b 5b 31 3b 33 44   +960 ms
+```
+
+The `Key` column is printed in the source form, so it can be pasted into `init.msh`. Ctrl-C twice in a row, or Ctrl-D, ends it.
+
 = Moving the current bindings
 
 Delete the five hand-written sequences, the F1 and Alt-D cases, and the `tabCycleActive` tests from `HandleToken`. Put this in Mitchell's `init.msh`:
@@ -944,16 +961,13 @@ Two things are checked mechanically, in the style of `ai/terminal-query` and `Te
 + *Modes.* `modeInsert` and `modeComplete`.
 + *`editRun` and `editRunOps`.* Leave the line, run in the foreground, redraw with the line kept or with the returned ops applied. `editInEditor` in `lib/std.msh`.
 + *Kitty protocol.* Query, push and pop around every handoff of the terminal. This touches `ai/terminal-control`, whose model should cover the push and pop.
++ *`msh keys`.* The CLI subcommand of section 10.1, with its shell completions.
 + *Tests.* The oracle test and the model (section 13); `tests/success` for add, replace, erase, list and inert entries; `tests/typecheck_fail` for a `bindingFunc` of the wrong type and an `editRun` that leaves a value or an `editRunOps` that returns the wrong type.
 + *Documentation.* A "Key bindings" section in `getting-started.inc.html` after "Abbreviations", with the default table; the builtins in `functions.inc.html`; the type names in `type_system.inc.html`;
   one line in `mshell.md` that the names are reserved; the key list in `mshell.md` replaced by a pointer; `CHANGELOG.md`.
 
 = Open questions
 
-+ *Ctrl-C exits the shell* today. fish, zsh and bash cancel the line instead. Should the default be `['' '' editSetLine]`?
-+ *Alt-O and Alt-D*: are they defaults for everyone, or personal? The draft keeps Alt-O and moves Alt-D to `init.msh`.
-+ *Default timing* for sequences made only of text keys, so that a pair is typeable unless the user asks otherwise.
-  The draft has none, to keep time out unless declared (P6), as fish does; zsh (0.4 s) and readline (0.5 s) have one, but theirs exists to end the wait for a held-back key, which this design does not have.
 + *A setting for the kitty protocol*, for terminals that implement it badly (section 10). An environment variable, as `MSH_CELL_PIXELS` is for the file manager, or a builtin?
 + *Undo.* A binding's program is one undo step, and a rollback is not an undo step at all; both need the editor to have undo first.
 + *A script builtin that replays keys* (`[{key: Key, ms: int}]` to an `EditState`), so users can test sequences and `within` the way the Go tests do.

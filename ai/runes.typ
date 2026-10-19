@@ -65,7 +65,7 @@ Between the two forms every rune can be written, so `r'…'` needs no escapes.
   [*Adds*], [*What for*],
   [type `rune`, its own kind], [`rune | NamedKey | ModifiedKey` is a legal union, and `str` is not in it],
   [`r'a'`, `U+0301`], [the two literal forms (section 5)],
-  [`runes`, `runesStr`, `toRune`, `toInt`, `str`], [conversion to and from strings and integers (section 9)],
+  [`runes`, `toRune`, `toInt`, `str`], [conversion to and from strings and integers (section 9)],
   [`=`, `<`, `sort`, `match`], [comparison by code point; value and type patterns (section 7)],
 )
 
@@ -302,12 +302,12 @@ which is not a `[Key]` when `Key = rune | NamedKey | ModifiedKey` --- the typo i
   stroke: 0.4pt + luma(180),
   [*Where*], [*Form*],
   [`wl`, `w`, `str`], [the character itself: `r'a' str` is `"a"`; `U+001B wl` writes the Escape byte],
-  [inside a list, record or error message], [source form: `r'a'` when the rune is graphic, not a mark, not whitespace and not `'`; otherwise `U+XXXX` with at least four uppercase digits],
+  [inside a list, record or error message], [source form: `r'a'` when the rune is graphic, not a mark, not `'`, and not a space other than U+0020; otherwise `U+XXXX` with at least four uppercase digits],
   [`toJson`], [a one-character JSON string: `r'a' toJson` is `"a"`. JSON has no character type; parsing it back gives a `str`.],
 )
 
-So `[r'a' U+0301 r'😀' U+0020] str` is `[r'a' U+0301 r'😀' U+0020]`, which reads back as the same list (P5).
-The space is printed as `U+0020` because `r' '` is hard to read in a list of runes.
+So `[r'a' U+0301 r'😀' r' ' U+00A0] str` is `[r'a' U+0301 r'😀' r' ' U+00A0]`, which reads back as the same list (P5).
+The space bar's rune prints as `r' '`. The other spaces (no-break, ideographic, the fixed-width ones) print as `U+XXXX`, because inside quotes they cannot be told from it.
 
 = Builtins
 
@@ -317,7 +317,6 @@ The space is printed as `U+0020` because `r' '` is hard to read in a list of run
   stroke: 0.4pt + luma(180),
   [*Word*], [*Type*], [*Does*],
   [`runes`], [`(str -- [rune])`], [split into code points],
-  [`runesStr`], [`([rune] -- str)`], [join code points into a string, following `utf8Str`],
   [`toRune`], [`(int -- Maybe[rune])`], [`none` above 10FFFF, below 0, or in the surrogates],
   [`toRune`], [`(str -- Maybe[rune])`], [`just` only for a string of exactly one code point],
   [`toInt`], [`(rune -- int)`], [the code point; a plain `int`, as for `float`],
@@ -383,7 +382,7 @@ and a property test that `str` of a random `[rune]` lexes back to the same list 
   the error messages of section 6.
 + *Parser and objects.* `MShellRune` holding a Go `rune`; equality, ordering, `str`, source form, `toJson`.
 + *Type checker.* The `rune` base type and kind; `=`, `<` and `sort` overloads; value and type patterns in `match`.
-+ *Builtins.* `runes`, `runesStr`, `toRune`, the `toInt` overload, in `Evaluator.go` and `BuiltInList.go`.
++ *Builtins.* `runes`, `toRune`, the `toInt` overload, in `Evaluator.go` and `BuiltInList.go`.
 + *Syntax.* `ai/msh.sublime-syntax` and the VS Code grammar in `code/` highlight both literal forms.
 + *Docs.* A "Runes" section beside Integers and Floats in `doc/`, `doc/mshell.md`, the String Functions list,
   the type-pattern keyword list, and a `CHANGELOG` entry.
@@ -391,9 +390,7 @@ and a property test that `str` of a random `[rune]` lexes back to the same list 
 
 = Open questions
 
-+ *Names.* `runesStr` follows `utf8Str`; `join` overloaded on `[rune]` is the alternative.
 + *Character classes.* Which words, and with which Unicode version's tables (Go's `unicode` package follows the Go release).
 + *`in`.* Whether `(str rune -- bool)` is worth an overload, or `str in` is enough.
 + *Byte indexing of strings* (section 11): its own design.
-+ *Printing whitespace.* `U+0020` for space in source form is unambiguous but heavy; `r' '` is the other choice.
 + *`Key` names.* The binding design's named keys use the `key` prefix because member names are global; `keyCtrl` and `keyEnter` are proposed above.
