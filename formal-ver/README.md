@@ -138,6 +138,7 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Caching their answers | `subq_set_sound`, `rsubq_set_sound`, `chk_confirmed`; `cache_early` |
 | Joins that meet a recursive alias (never widened inside) | `ajoin` in `Join.v`; `join_*` in `Recursive.v` |
 | `map` with a literal body | `WMap`; `tw_map`, `tw_map_imm` (fresh only when the results are immutable) |
+| Runes (`ai/runes.typ`): their own kind, so `rune \| str` is a union a kind pattern separates, and a string never passes for a rune | `TRune`, `KRune`, `WRune`, `VRune`; `str_not_rune`, `typo_not_rune_list`, `rune_kind_then`, `rune_kind_else`, `rune_prog_typed`, `rune_prog_runs` in `Examples.v` |
 | `take`, `skip`, index slices | `WTake`, `WSkip`, `WSlice`; `tw_slice` (fresh when the input was fresh or the elements are immutable); `inv_slice_dp` in `Slice.v` |
 | Objects nothing can reach (the input list a fresh `take` consumed) | `HDead` in the store typing, `live`; `dead_unreachable`, `vtyped_live` in `Slice.v` |
 | The built-in `Maybe` | the enum `EMaybe` (`TMaybe t` is `TEnum EMaybe [t]`); `just`, `none`, `?` are `wjust`, `wnone`, `wunwrap`, a constructor and a one-arm match; the environment declares it (`maybe_ok`); their typings `tw_wjust`, `tw_wnone`, `tw_wunwrap` |

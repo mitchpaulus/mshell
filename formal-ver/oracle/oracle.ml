@@ -68,6 +68,7 @@ let param_of = function
 let rec ty_of = function
   | Atom "int" -> TInt
   | Atom "str" -> TStr
+  | Atom "rune" -> TRune
   | Atom "bool" -> TBool
   | Atom "bot" -> TBot
   | Atom "top" -> TTop
@@ -110,6 +111,7 @@ let string_of_variance = function VCo -> "co" | VContra -> "contra" | VInv -> "i
 let rec string_of_ty = function
   | TInt -> "int"
   | TStr -> "str"
+  | TRune -> "rune"
   | TBool -> "bool"
   | TBot -> "bot"
   | TTop -> "top"

@@ -104,6 +104,7 @@ Qed.
 
 Inductive ty : Type :=
 | TInt | TStr | TBool
+| TRune                    (* a Unicode scalar value *)
 | TBot                     (* the empty type; [none : Maybe[Bot]] *)
 | TTop                     (* an unknown type: abstract contents *)
 | TList (t : ty)
@@ -159,7 +160,7 @@ Fixpoint subst (a : list ty) (t : ty) : ty :=
   | TQuote ins outs =>
       TQuote (map (subst a) ins) (match outs with Some o => Some (map (subst a) o) | None => None end)
   | TEnum E args => TEnum E (map (subst a) args)
-  | TInt | TStr | TBool | TBot | TTop | TVar _ | TMu _ | TRV _ => t
+  | TInt | TStr | TBool | TRune | TBot | TTop | TVar _ | TMu _ | TRV _ => t
   end
 with fsubst (a : list ty) (f : fstat) : fstat :=
   match f with
@@ -177,7 +178,7 @@ Fixpoint tsub (th : nat -> ty) (t : ty) : ty :=
   | TQuote ins outs =>
       TQuote (map (tsub th) ins) (match outs with Some o => Some (map (tsub th) o) | None => None end)
   | TEnum E args => TEnum E (map (tsub th) args)
-  | TInt | TStr | TBool | TBot | TTop | TParam _ | TMu _ | TRV _ => t
+  | TInt | TStr | TBool | TRune | TBot | TTop | TParam _ | TMu _ | TRV _ => t
   end
 with ftsub (th : nat -> ty) (f : fstat) : fstat :=
   match f with
@@ -193,7 +194,7 @@ Fixpoint fvt (t : ty) : list nat :=
   | TUnion x y => fvt x ++ fvt y
   | TQuote ins outs => flat_map fvt ins ++ match outs with Some o => flat_map fvt o | None => [] end
   | TEnum _ args => flat_map fvt args
-  | TInt | TStr | TBool | TBot | TTop | TParam _ | TMu _ | TRV _ => []
+  | TInt | TStr | TBool | TRune | TBot | TTop | TParam _ | TMu _ | TRV _ => []
   end
 with ffvt (f : fstat) : list nat :=
   match f with FReq t | FOpt t | FDict t => fvt t | FAbs | FOpen => [] end.
@@ -204,6 +205,7 @@ Variable P : ty -> Prop.
 Variable Q : fstat -> Prop.
 Hypothesis HInt : P TInt.
 Hypothesis HStr : P TStr.
+Hypothesis HRune : P TRune.
 Hypothesis HBool : P TBool.
 Hypothesis HBot : P TBot.
 Hypothesis HTop : P TTop.
@@ -225,7 +227,7 @@ Hypothesis QOpen : Q FOpen.
 
 Fixpoint ty_ind2 (t : ty) : P t :=
   match t with
-  | TInt => HInt | TStr => HStr | TBool => HBool | TBot => HBot | TTop => HTop
+  | TInt => HInt | TStr => HStr | TBool => HBool | TRune => HRune | TBot => HBot | TTop => HTop
   | TList t' => HList t' (ty_ind2 t')
   | TRec fs r =>
       HRec fs r
@@ -274,7 +276,7 @@ End TyInd.
     every recursion variable is bound, with [d] binders around [t]. *)
 Fixpoint tclosed (d : nat) (t : ty) : bool :=
   match t with
-  | TInt | TStr | TBool | TBot | TTop => true
+  | TInt | TStr | TBool | TRune | TBot | TTop => true
   | TParam _ | TVar _ => false
   | TRV n => n <? d
   | TMu b => tclosed (S d) b
@@ -302,7 +304,7 @@ Fixpoint musubst (k : nat) (s : ty) (t : ty) : ty :=
   | TQuote ins outs =>
       TQuote (map (musubst k s) ins) (match outs with Some o => Some (map (musubst k s) o) | None => None end)
   | TEnum E args => TEnum E (map (musubst k s) args)
-  | TInt | TStr | TBool | TBot | TTop | TParam _ | TVar _ => t
+  | TInt | TStr | TBool | TRune | TBot | TTop | TParam _ | TVar _ => t
   end
 with fmusubst (k : nat) (s : ty) (f : fstat) : fstat :=
   match f with
@@ -314,11 +316,11 @@ with fmusubst (k : nat) (s : ty) (f : fstat) : fstat :=
 Definition tunfold (t : ty) : ty := musubst 0 (TMu t) t.
 
 (** Runtime kinds.  Each enum is its own kind, shared by all its instances. *)
-Inductive kind := KInt | KStr | KBool | KList | KDict | KQuote | KEnum (E : ename).
+Inductive kind := KInt | KStr | KBool | KRune | KList | KDict | KQuote | KEnum (E : ename).
 
 Definition kind_eqb (a b : kind) : bool :=
   match a, b with
-  | KInt, KInt | KStr, KStr | KBool, KBool
+  | KInt, KInt | KStr, KStr | KBool, KBool | KRune, KRune
   | KList, KList | KDict, KDict | KQuote, KQuote => true
   | KEnum x, KEnum y => ename_eqb x y
   | _, _ => false
@@ -344,6 +346,7 @@ Notation TMaybe t := (TEnum EMaybe [t]).
     never copies; copying is the explicit word [WCopy]. *)
 Inductive word : Type :=
 | WInt (n : nat) | WStr (s : string) | WBool (b : bool)
+| WRune (n : nat)                (* a rune literal: r'a' or U+0061 *)
 | WAdd                          (* int int -- int *)
 | WCat                          (* str str -- str *)
 | WDup | WDrop | WSwap
@@ -384,6 +387,7 @@ Notation wunwrap := (WCase EMaybe [("just"%string, [])]).
 (** ** Values and heap *)
 Inductive val : Type :=
 | VInt (n : nat) | VStr (s : string) | VBool (b : bool)
+| VRune (n : nat)                (* a Unicode scalar value *)
 | VLoc (l : loc)                 (* a list or dict object *)
 | VClo (sc : loc) (e : prog)     (* a quote closing over a variable scope *)
 | VCon (E : ename) (c : cname) (pts : list ty) (vs : list val).

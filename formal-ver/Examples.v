@@ -1078,3 +1078,39 @@ Qed.
 
 Example item_use_runs : exists H' st', eval (defs1 "item" item_body) 200 [OScope []] 0 [] item_use = ROk ONormal H' st'.
 Proof. vm_compute. eauto. Qed.
+
+(** ** Runes ([ai/runes.typ])
+
+    A rune is its own kind.  A string is never a rune, so a misspelled key in a
+    list literal (a bare word, which is a string) cannot pass for one, and a kind
+    pattern on [rune | str] separates the two members. *)
+Example str_not_rune : ~ sub TStr TRune.
+Proof. intros Hs. apply sub_unfold in Hs. inversion Hs. Qed.
+
+Example typo_not_rune_list : ~ sub (TList (TUnion TRune TStr)) (TList TRune).
+Proof.
+  intros Hs. apply sub_list_inv in Hs as [Hs _].
+  apply sub_unfold in Hs. inversion Hs; subst.
+  match goal with Hb : subF sub TStr TRune |- _ => inversion Hb end.
+Qed.
+
+Example rune_kind_then : kind_then KRune (TUnion TRune TStr) = Some TRune.
+Proof. reflexivity. Qed.
+
+Example rune_kind_else : kind_else KRune (TUnion TRune TStr) = TStr.
+Proof. reflexivity. Qed.
+
+Definition rune_prog : prog := [WRune 97; WKindIf KRune [WDrop; WInt 1] [WDrop; WInt 0]].
+
+Example rune_prog_typed : T nosigs [] LNone LNone RNone rune_prog [] [(Sh, TInt)].
+Proof.
+  unfold rune_prog.
+  eapply t_cons; [apply tw_rune |].
+  eapply t_cons; [eapply tw_kind; [reflexivity | reflexivity | |] |]; simpl.
+  - eapply t_cons; [apply tw_drop | eapply t_cons; [apply tw_int | apply t_nil]].
+  - eapply t_cons; [apply tw_drop | eapply t_cons; [apply tw_int | apply t_nil]].
+  - apply t_nil.
+Qed.
+
+Example rune_prog_runs : eval (fun _ => None) 10 [OScope []] 0 [] rune_prog = ROk ONormal [OScope []] [VInt 1].
+Proof. reflexivity. Qed.

@@ -53,7 +53,7 @@ Proof.
   - discriminate.
   - destruct t; simpl in Hk; try discriminate; inversion Hk; subst;
       simpl in Ht; inversion Ht; subst.
-    + apply s_refl. + apply s_refl. + apply s_refl.
+    + apply s_refl. + apply s_refl. + apply s_refl. + apply s_refl.
     + apply s_rec. intros k. unfold field_at at 2. simpl. apply fs_open.
     + apply s_top.
   - discriminate.
@@ -201,6 +201,7 @@ Proof.
   intros Hv Hh Hlen. induction Hv; intros Hl.
   - exists TInt, KInt; repeat split; [constructor | apply s_refl].
   - exists TStr, KStr; repeat split; [constructor | apply s_refl].
+  - exists TRune, KRune; repeat split; [constructor | apply s_refl].
   - exists TBool, KBool; repeat split; [constructor | apply s_refl].
   - destruct (loc_obj Σ H R l (HList a) Hh Hlen) as (o & Eo & Ok); try discriminate; auto.
     { apply Hl; apply in_eq. }
@@ -233,6 +234,7 @@ Proof.
   intros D. induction D.
   - exists TInt, KInt; repeat split; [constructor | apply s_refl].
   - exists TStr, KStr; repeat split; [constructor | apply s_refl].
+  - exists TRune, KRune; repeat split; [constructor | apply s_refl].
   - exists TBool, KBool; repeat split; [constructor | apply s_refl].
   - exists (TQuote ins outs), KQuote; repeat split; [constructor; auto | apply s_refl].
   - exists (TList t), KList; repeat split.

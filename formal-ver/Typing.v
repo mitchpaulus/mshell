@@ -108,7 +108,7 @@ Definition tunion (a b : ty) : ty :=
 
 Definition kind_top (k : kind) : option ty :=
   match k with
-  | KInt => Some TInt | KStr => Some TStr | KBool => Some TBool
+  | KInt => Some TInt | KStr => Some TStr | KBool => Some TBool | KRune => Some TRune
   | KDict => Some (TRec [] FOpen)
   | KQuote => Some TTop
   | KList => None           (* needs the abstract rule [tw_kind_list] *)
@@ -117,7 +117,7 @@ Definition kind_top (k : kind) : option ty :=
 
 Definition kind_of_ty (t : ty) : option kind :=
   match t with
-  | TInt => Some KInt | TStr => Some KStr | TBool => Some KBool
+  | TInt => Some KInt | TStr => Some KStr | TBool => Some KBool | TRune => Some KRune
   | TList _ => Some KList
   | TRec _ _ => Some KDict | TQuote _ _ => Some KQuote
   | TEnum E _ => Some (KEnum E)
@@ -199,6 +199,7 @@ Variable G : tenv.
 Inductive TW : lctx -> lctx -> rctx -> word -> sty -> sty -> Prop :=
 | tw_int B C R n s : TW B C R (WInt n) s ((Sh, TInt) :: s)
 | tw_str B C R x s : TW B C R (WStr x) s ((Sh, TStr) :: s)
+| tw_rune B C R n s : TW B C R (WRune n) s ((Sh, TRune) :: s)
 | tw_bool B C R b s : TW B C R (WBool b) s ((Sh, TBool) :: s)
 | tw_add B C R s : TW B C R WAdd ((Sh, TInt) :: (Sh, TInt) :: s) ((Sh, TInt) :: s)
 | tw_cat B C R s : TW B C R WCat ((Sh, TStr) :: (Sh, TStr) :: s) ((Sh, TStr) :: s)

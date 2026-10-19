@@ -39,7 +39,7 @@ and treat a `no` that turns into `yes` with more fuel as "fuel ran out".
 
 | Syntax | Type |
 |---|---|
-| `int`, `str`, `bool` | base types (the model has only these three; others behave the same way) |
+| `int`, `str`, `bool`, `rune` | base types (the model has only these four; others behave the same way) |
 | `bot`, `top` | the empty type; unknown contents |
 | `(maybe T)`, `(list T)` | `Maybe[T]`, `[T]` |
 | `(dict T)` | `{str: T}` (the same as `(rec () (dict T))`) |

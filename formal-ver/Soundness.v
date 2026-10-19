@@ -1668,6 +1668,7 @@ Proof.
   intros Htw HT Iv L. destruct Htw.
   - eapply (w_push_sh n IH) with (t := TInt); [reflexivity | apply vt_int | reflexivity | exact HT | exact Iv | exact L].
   - eapply (w_push_sh n IH) with (t := TStr); [reflexivity | apply vt_str | reflexivity | exact HT | exact Iv | exact L].
+  - eapply (w_push_sh n IH) with (t := TRune); [reflexivity | apply vt_rune | reflexivity | exact HT | exact Iv | exact L].
   - eapply (w_push_sh n IH) with (t := TBool); [reflexivity | apply vt_bool | reflexivity | exact HT | exact Iv | exact L].
   - eapply w_add; eauto.
   - eapply w_cat; eauto.

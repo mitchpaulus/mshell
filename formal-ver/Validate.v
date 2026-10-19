@@ -155,6 +155,7 @@ Proof.
   - destruct v; try discriminate. apply dtyped_nonloc in D. subst. constructor.
   - destruct v; try discriminate. apply dtyped_nonloc in D. subst. constructor.
   - destruct v; try discriminate. apply dtyped_nonloc in D. subst. constructor.
+  - destruct v; try discriminate. apply dtyped_nonloc in D. subst. constructor.
   - discriminate.
   - apply dt_top with (t := t); exact D.
   - destruct v; try discriminate.
@@ -198,6 +199,7 @@ Lemma validate_imm Σ H : forall f u v t,
 Proof.
   induction f as [|f IH]; intros u v t V Hv Hi; [discriminate|].
   destruct u; simpl in Hv, Hi; try discriminate.
+  - destruct v; try discriminate. split; [constructor | reflexivity].
   - destruct v; try discriminate. split; [constructor | reflexivity].
   - destruct v; try discriminate. split; [constructor | reflexivity].
   - destruct v; try discriminate. split; [constructor | reflexivity].
