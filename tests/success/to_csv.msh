@@ -40,3 +40,13 @@
 
 # toCsv: round trip through parseCsv and toGrid
 "x,y\n1,\"a,b\"\n3,4\n" parseCsv toGrid toCsv w
+
+# toCsv: a date-time column is written in its ISO 8601 form
+[| when, n; 2024-01-02T03:04:05, 1; 2025-11-30, 2 |] toCsv w
+
+# toCsv: round trip of more rows than the size estimate samples
+100 seq (i! [@i str "a,\"b\""]) map rows!
+@rows toCsv parseCsv toJson @rows toJson = str wl
+[["n" "s"]] @rows + toGrid big!
+@big toCsv lines len wl
+@big toCsv parseCsv toGrid toCsv @big toCsv = str wl

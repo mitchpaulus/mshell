@@ -516,9 +516,30 @@ func (obj *MShellDateTime) ToString() string {
 }
 
 func (obj *MShellDateTime) Iso8601() string {
-	year, month, day := obj.Time.Date()
-	hour, min, sec := obj.Time.Clock()
-	return fmt.Sprintf("%d-%02d-%02dT%02d:%02d:%02d", year, month, day, hour, min, sec)
+	return string(appendIso8601(nil, obj.Time))
+}
+
+// appendIso8601 appends t to b as YYYY-MM-DDTHH:MM:SS, the year with as many
+// digits as it needs.
+func appendIso8601(b []byte, t time.Time) []byte {
+	year, month, day := t.Date()
+	hour, min, sec := t.Clock()
+	b = strconv.AppendInt(b, int64(year), 10)
+	b = append(b, '-')
+	b = appendTwoDigits(b, int(month))
+	b = append(b, '-')
+	b = appendTwoDigits(b, day)
+	b = append(b, 'T')
+	b = appendTwoDigits(b, hour)
+	b = append(b, ':')
+	b = appendTwoDigits(b, min)
+	b = append(b, ':')
+	return appendTwoDigits(b, sec)
+}
+
+// appendTwoDigits appends v, which is from 0 to 99, as two digits.
+func appendTwoDigits(b []byte, v int) []byte {
+	return append(b, byte('0'+v/10), byte('0'+v%10))
 }
 
 func (obj *MShellDateTime) IndexErrStr() string {

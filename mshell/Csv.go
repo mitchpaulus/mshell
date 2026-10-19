@@ -10,7 +10,7 @@ import (
 // quotes and doubles embedded quotes when s holds a comma, a double quote, or a
 // newline.
 func writeCsvCell(sb *strings.Builder, s string) {
-	if !strings.ContainsAny(s, ",\"\n") {
+	if !csvNeedsQuotes(s) {
 		sb.WriteString(s)
 		return
 	}
@@ -28,11 +28,41 @@ func writeCsvCell(sb *strings.Builder, s string) {
 	sb.WriteByte('"')
 }
 
+// csvNeedsQuotes reports whether s holds a comma, a double quote, or a newline.
+// A plain loop is faster here than strings.ContainsAny, which builds a lookup
+// table on every call for strings longer than 8 bytes.
+func csvNeedsQuotes(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case ',', '"', '\n':
+			return true
+		}
+	}
+	return false
+}
+
+// csvSampleRows is how many rows are written before the output's size is
+// estimated from them.
+const csvSampleRows = 64
+
+// growForRemainingRows reserves room for the rows not yet written, estimated
+// as the average length of the first csvSampleRows rows plus an eighth. Past
+// the estimate the builder grows by doubling as usual. The string made from the
+// builder keeps all the reserved room, so a sample of unusually long rows
+// holds on to the excess.
+func growForRemainingRows(sb *strings.Builder, sampleStart int, remaining int) {
+	perRow := (sb.Len() - sampleStart) / csvSampleRows
+	sb.Grow(perRow * remaining * 9 / 8)
+}
+
 // rowsToCsv writes a list of string rows as CSV: cells joined with `,`, each
 // row ending in `\n`.
 func rowsToCsv(rows *MShellList) (string, error) {
 	var sb strings.Builder
-	for _, rowObj := range rows.Items {
+	for r, rowObj := range rows.Items {
+		if r == csvSampleRows {
+			growForRemainingRows(&sb, 0, len(rows.Items)-r)
+		}
 		row, ok := rowObj.(*MShellList)
 		if !ok {
 			return "", fmt.Errorf("Expected a list of rows, found a %s (%s).\n", rowObj.TypeName(), rowObj.DebugString())
@@ -64,12 +94,16 @@ func gridToCsv(g *MShellGrid, indices []int) (string, error) {
 		writeCsvCell(&sb, col.Name)
 	}
 	sb.WriteByte('\n')
+	headerLen := sb.Len()
 
 	rowCount := g.RowCount
 	if indices != nil {
 		rowCount = len(indices)
 	}
 	for r := 0; r < rowCount; r++ {
+		if r == csvSampleRows {
+			growForRemainingRows(&sb, headerLen, rowCount-r)
+		}
 		row := r
 		if indices != nil {
 			row = indices[r]
@@ -87,6 +121,10 @@ func gridToCsv(g *MShellGrid, indices []int) (string, error) {
 				sb.Write(num)
 			case COL_STRING, COL_DICT_STRING:
 				writeCsvCell(&sb, col.StringAt(row))
+			case COL_DATETIME:
+				// Written as `str` writes a date-time, without making one.
+				num = appendIso8601(num[:0], col.DateTimeData[row])
+				sb.Write(num)
 			default:
 				if err := writeCsvValue(&sb, col.Get(row)); err != nil {
 					return "", fmt.Errorf("Cannot write row %d of column '%s' to CSV. %s", r, col.Name, err.Error())
