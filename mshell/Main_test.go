@@ -146,13 +146,16 @@ func TestQueuedInputLookahead(t *testing.T) {
 		},
 	}
 
-	token, err := state.readInputToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	end, err := state.HandleToken(token)
-	if err != nil || end {
-		t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+	// Queued keys are handled, in order, before the terminal is read.
+	for range 2 {
+		token, err := state.readInputToken()
+		if err != nil {
+			t.Fatal(err)
+		}
+		end, err := state.HandleToken(token)
+		if err != nil || end {
+			t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+		}
 	}
 
 	if got := string(state.currentCommand); got != "jx" {
@@ -162,10 +165,10 @@ func TestQueuedInputLookahead(t *testing.T) {
 		t.Fatal("consumed queue was not reset")
 	}
 	if state.stdInState.i != 0 {
-		t.Fatal("lookahead consumed terminal input before queued input")
+		t.Fatal("terminal input was read before queued input")
 	}
 
-	token, err = state.readInputToken()
+	token, err := state.readInputToken()
 	if err != nil || token != (AsciiToken{Char: 'z'}) {
 		t.Fatalf("next token = %v, err=%v; want z", token, err)
 	}
@@ -1067,8 +1070,8 @@ func TestInteractiveLexerDeleteRequiresTilde(t *testing.T) {
 		{"end vt220", "\x1b[4~", KEY_END},
 		{"home rxvt", "\x1b[7~", KEY_HOME},
 		{"end rxvt", "\x1b[8~", KEY_END},
-		{"home ctrl xterm", "\x1b[1;5H", KEY_HOME},
-		{"end shift xterm", "\x1b[1;2F", KEY_END},
+		{"home ctrl xterm", "\x1b[1;5H", KeyToken{Code: NamedHome | KeyModCtrl}},
+		{"end shift xterm", "\x1b[1;2F", KeyToken{Code: NamedEnd | KeyModShift}},
 		{"alt b", "\x1bb", KEY_ALT_B},
 		{"cursor report", "\x1b[3;5R", CsiToken{FinalChar: 'R', Params: []byte("3;5")}},
 		{"incomplete report parameters", "\x1b[3R", CsiToken{FinalChar: 'R', Params: []byte("3")}},
@@ -1099,19 +1102,21 @@ func TestInteractiveLexerDeleteRequiresTilde(t *testing.T) {
 	}
 }
 
-// A lone Escape has no binding. The byte after it is lexed as its own key
-// instead of being swallowed as an unknown Alt chord.
-func TestInteractiveLexerLoneEscapeKeepsNextKey(t *testing.T) {
+// ESC and a key is Alt and the key, which remembers the key, so that it
+// acts on its own when Alt and it has no binding (TestEscapeThenUnboundKey).
+// The byte after ESC is never swallowed.
+func TestInteractiveLexerEscapeThenKey(t *testing.T) {
 	tests := []struct {
 		name string
 		input string
 		want []TerminalToken
 	}{
-		{"letter", "\x1bax", []TerminalToken{AsciiToken{Char: 'a'}, AsciiToken{Char: 'x'}}},
-		{"tab", "\x1b\tx", []TerminalToken{AsciiToken{Char: '\t'}, AsciiToken{Char: 'x'}}},
-		{"enter", "\x1b\rx", []TerminalToken{AsciiToken{Char: '\r'}, AsciiToken{Char: 'x'}}},
-		{"multibyte", "\x1b\xe4\xb8\x96x", []TerminalToken{MutliByteToken{Char: '世'}, AsciiToken{Char: 'x'}}},
-		{"double escape then arrow", "\x1b\x1b[Ax", []TerminalToken{KEY_UP, AsciiToken{Char: 'x'}}},
+		{"letter", "\x1bax", []TerminalToken{KeyToken{Code: 'a' | KeyModAlt, EscOf: 'a'}, AsciiToken{Char: 'x'}}},
+		{"upper case letter", "\x1bAx", []TerminalToken{KeyToken{Code: 'a' | KeyModAlt | KeyModShift, EscOf: 'A'}, AsciiToken{Char: 'x'}}},
+		{"tab", "\x1b\tx", []TerminalToken{KeyToken{Code: NamedTab | KeyModAlt, EscOf: NamedTab}, AsciiToken{Char: 'x'}}},
+		{"enter", "\x1b\rx", []TerminalToken{KeyToken{Code: NamedEnter | KeyModAlt, EscOf: NamedEnter}, AsciiToken{Char: 'x'}}},
+		{"multibyte", "\x1b\xe4\xb8\x96x", []TerminalToken{KeyToken{Code: '世' | KeyModAlt, EscOf: '世'}, AsciiToken{Char: 'x'}}},
+		{"double escape then arrow", "\x1b\x1b[Ax", []TerminalToken{KeyToken{Code: NamedUp | KeyModAlt, EscOf: NamedUp}, AsciiToken{Char: 'x'}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

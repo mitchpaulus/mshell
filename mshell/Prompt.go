@@ -19,8 +19,9 @@ import (
 // lays the prompt out exactly, as it does command text.
 
 // builtinDeclSource declares the types of the prompt builtins, the
-// Cipher that encrypt and decrypt take (Crypto.go), and the types of the
-// abbreviation builtins (Abbr.go). They are
+// Cipher that encrypt and decrypt take (Crypto.go), the types of the
+// abbreviation builtins (Abbr.go), and the types of the key binding
+// builtins (Bindings.go). They are
 // part of the binary: the type checker and the runtime declare them before
 // any file, and no file can declare their names again.
 const builtinDeclSource = `
@@ -73,6 +74,40 @@ type AbbrInfo = {word: str, command: Maybe[str], line: str}
 enum AbbrExpansion = abbrText str | abbrFunc (AbbrInfo -- Maybe[str]) end
 
 type Abbr = {abbr: AbbrMatch, expansion: AbbrExpansion, position?: AbbrPosition, cursorMarker?: str, description?: str}
+
+enum NamedKey =
+      keyEnter | keyTab | keyBackspace | keyEscape | keyDelete | keyInsert
+    | keyUp | keyDown | keyLeft | keyRight | keyHome | keyEnd | keyPageUp | keyPageDown
+    | keyF1 | keyF2 | keyF3 | keyF4 | keyF5 | keyF6 | keyF7 | keyF8 | keyF9 | keyF10
+    | keyF11 | keyF12 | keyF13 | keyF14 | keyF15 | keyF16 | keyF17 | keyF18 | keyF19 | keyF20
+    | keyF21 | keyF22 | keyF23 | keyF24 | keyF25 | keyF26 | keyF27 | keyF28 | keyF29 | keyF30
+    | keyF31 | keyF32 | keyF33 | keyF34 | keyF35
+end
+
+enum ModifiedKey = keyCtrl Key | keyAlt Key | keyShift Key | keySuper Key end
+
+type Key = rune | NamedKey | ModifiedKey
+
+enum EditMode = modeInsert | modeComplete end
+
+type EditState = {before: str, after: str, keys: [Key], mode: EditMode}
+
+enum EditOp =
+      editInsert str | editSelfInsert | editSetLine str str
+    | editLeft | editRight | editWordLeft | editWordRight | editLineStart | editLineEnd
+    | editBackspace | editDelete | editDeleteWordLeft | editDeleteToStart | editDeleteToEnd
+    | editExpandAbbr
+    | editAccept | editExit | editRun ( -- ) | editRunOps (EditState -- Maybe[[EditOp]])
+    | editForward | editAcceptSuggestion
+    | editHistoryPrev | editHistoryNext | editHistorySearchBack | editHistorySearchForward
+    | editLastArg | editComplete | editCompleteBack
+    | editCompleteNext | editCompletePrev | editCompleteLeft | editCompleteRight | editCompleteAccept
+    | editClearScreen | editRemeasure | editMessage str
+end
+
+enum BindingAction = bindingOps [EditOp] | bindingFunc (EditState -- Maybe[[EditOp]]) end
+
+type Binding = {keys: [Key], action: BindingAction, mode?: EditMode, within?: int, idleBefore?: int, description?: str}
 `
 
 // builtinDeclFile is the file the built-in declarations' tokens name.

@@ -71,10 +71,10 @@ Four ideas carry it. Each is argued from first principles in section 4.
 + *Effects wait; edits do not.* What a key does is either a _pure edit_ (it changes only the line and cursor, and can be undone by restoring them)
   or an _effect_ (it runs code, submits the line, clears the screen).
   Only pure edits are done provisionally. An effect never runs and is then taken back.
-+ *Time is declared, not ambient.* A sequence has no time limits unless its binding gives them:
-  `within` (the longest gap between its keys), `idleBefore` (quiet before its first key) and `idleAfter` (quiet after its last key, before an effect runs).
-  Those are the signals keyboard firmware uses to tell a deliberate burst from typing (section 3.4).
-  Time is the one input a test has to supply; everything else is a function of the keys and the line.
++ *Time is declared, and only looks back.* A sequence has no time limits unless its binding gives them:
+  `within` (the longest gap between its keys) and `idleBefore` (quiet before its first key),
+  two of the signals keyboard firmware uses to tell a deliberate burst from typing (section 3.4).
+  Both compare the times of keys already read, so nothing happens unless a key arrives: the editor is a blocking read and a function of the keys, with no timer.
 
 As far as the survey found, no shell does the second and third: fish, zsh, bash and PSReadLine hold the first key back,
 and Nushell and Elvish have no multi-key bindings yet. Editors do it through plugins (better-escape.nvim, houdini.nvim, evil-escape, a Kakoune hook),
@@ -249,7 +249,7 @@ The same study gives the numbers to set windows against: a mean gap between keys
   [A binding returns what to do (murex), typed], [A binding that calls into the editor (fish `commandline`, zsh widgets, PSReadLine): untyped, and hard to test],
   [Declining, to fall through (murex `Continue`, Atuin rule lists)], [`when` expressions over named context (VS Code): `none` from a quotation does the same with the full language],
   [Showing a pending prefix (Emacs echo area, VS Code status bar)], [—],
-  [Two delays: a short escape delay, sequence times only if asked (fish)], [Vim's 1 s default],
+  [Sequence times only if asked (fish)], [Vim's 1 s default, and any escape delay: a lone Escape is a key only where the kitty protocol makes it one (section 10)],
   [Refusing bad bindings when they are added (fish, Emacs, PSReadLine)], [Silent acceptance (readline, zsh)],
 )
 
@@ -286,8 +286,8 @@ A key whose action is an effect waits for its sequence to be decided.
 ]
 
 #principle(6, "Time is a declared input.")[
-Given the keys and the line, the result is fixed. Time enters only through three optional fields of a binding
-(`within`, `idleBefore`, `idleAfter`, section 6.4) and through the terminal's own escape delay (section 10). A test that gives the arrival times gets the same result every run.
+Given the keys and the line, the result is fixed. Time enters only through two optional fields of a binding
+(`within` and `idleBefore`, section 6.4), and both look only at gaps before the key being handled. A test that gives the arrival times gets the same result every run.
 ]
 
 #principle(7, "A key is a typed value; how it is spelled does not matter.")[
@@ -390,7 +390,7 @@ In the legacy encoding, which every terminal speaks, the bytes are read as:
   [`0x09`], [`keyTab` (never `r'i' keyCtrl`)],
   [`0x0d`], [`keyEnter` (never `r'm' keyCtrl`)],
   [`0x0a`], [`r'j' keyCtrl`],
-  [`0x1b`], [`keyEscape`, when no byte follows within the escape delay (section 10)],
+  [`0x1b` and a key], [that key with `keyAlt`, when `keyAlt` and it has a binding; otherwise the key alone. A lone Escape is not a key here (section 10).],
   [`0x1c`--`0x1f`], [`r'\' keyCtrl`, `r']' keyCtrl`, `r'^' keyCtrl`, `r'_' keyCtrl`],
   [`0x7f`], [`keyBackspace`],
   [`ESC` then a byte], [that key with `keyAlt`: `ESC x` is `r'x' keyAlt`, `ESC X` is `r'x' keyShift keyAlt`, `ESC .` is `r'.' keyAlt`],
@@ -447,7 +447,6 @@ type Binding = {
     mode?: EditMode,           # modeInsert when missing
     within?: int,              # most ms between two keys of the sequence
     idleBefore?: int,          # least ms with no key before the first key
-    idleAfter?: int,           # least ms with no key after the last key, before an effect runs
     description?: str,         # given back by bindingList
 }
 ```
@@ -505,7 +504,7 @@ As with the abbreviation builtins, none fails on a value of its type, since `ini
 A binding that can never fire is added, listed, and *inert*; when the shell is interactive `bindingAdd` writes one line to stderr naming its `keys` and the reason:
 
 - `keys` is empty or has more than 8 keys;
-- `within`, `idleBefore` or `idleAfter` is zero or negative;
+- `within` or `idleBefore` is zero or negative;
 - a `bindingOps` program has an op after `editAccept` or `editExit`;
 - it conflicts with a binding in the same mode that is not inert (section 6.3). The newer one wins and the older one becomes inert, so a user's binding always beats a default.
 
@@ -566,7 +565,6 @@ A binding with sequence $s$ of length $n$ *completes at key* $i$ when
 + $k_(i-n+1) dots k_i = s$;
 + each gap $t_(j+1) - t_j$ in that range is at most the binding's `within`, if it has one;
 + the gap before its first key, $t_(i-n+1) - t_(i-n)$, is at least its `idleBefore`, if it has one (the first key of all has no gap before it, and passes);
-+ the gap after its last key, $t_(i+1) - t_i$, is at least its `idleAfter`, if it has one (no next key passes);
 + no paste comes between its keys;
 + it does not start inside a binding in force: for each binding in force with keys $a dots b$, either $i - n + 1 > b$ or $i - n + 1 <= a$;
 + it is not declined (a `bindingFunc` that returns `none`).
@@ -620,7 +618,7 @@ A key whose own action is an effect (an unbound named key counts as doing nothin
 - Two bindings with the same keys conflict too, whatever they do.
 - A pending key with no action of its own (an unbound `ctrl-x` that begins `ctrl-x ctrl-e`) shows nothing in the line.
   The editor shows the pending keys below the line (`ctrl-x -`), as Emacs does in its echo area, and waits for the next key without a time limit, unless the binding has `within`.
-  Escape, unless bound in the sequence, cancels a pending sequence of such keys. (Emacs uses Ctrl-G for this; here Ctrl-G edits the line in the user's editor.)
+  Any key that does not continue the sequence ends it, and then acts on its own. (Emacs keeps Ctrl-G for this; here Ctrl-G edits the line in the user's editor.)
 
 Pure edits never conflict with longer sequences: `space` is bound to `[editExpandAbbr editSelfInsert]`, and `space space` can still be bound.
 
@@ -631,9 +629,7 @@ An earlier draft let an effect complete while a longer binding was possible, and
 The model (section 13) shows why that is wrong: the longer binding's definition says it replaces the shorter one, which has already run.
 Holding the effect instead makes it wait for a key that may never come. The conflict rule removes the case.
 
-So one thing makes an effect wait after its last key: `idleAfter` (section 6.4), the effect runs only if no key comes for that long.
-It is the only place where the editor acts on time with no key arriving, so it reads with a deadline, as the file manager already does for terminal replies (`ai/terminal-query`).
-While it waits, the keys are on the screen as typed; only the effect is late, by an amount the binding declared.
+So nothing makes an effect wait after its last key: it runs when the key arrives.
 
 == Time
 
@@ -646,7 +642,6 @@ Typing has bursts too, so no rule is sure; but firmware has found which signals 
   table.header([*Field*], [*The binding completes only if*], [*Firmware*]),
   [`within`], [every gap between two of its keys is at most this], [`COMBO_TERM`, `chord_timeout`],
   [`idleBefore`], [no key came for at least this long before its first key], [`require-prior-idle-ms`, Flow Tap],
-  [`idleAfter`], [no key comes for at least this long after its last key], [--- (a shell's addition)],
 )
 
 A binding with none of them has no time limits: `j`, a coffee, then `f` is still Enter, which is what happens today, and what fish does by default.
@@ -656,16 +651,23 @@ zsh (0.4 s) and readline (0.5 s) have a default, but theirs exists to end the wa
 - `within` makes the keys typeable as text by pausing between them: with `within: 150`, `v`, a pause, `l` is `vl`.
 - `idleBefore` stops a sequence in the middle of a word: fast typists' keys come about 120 ms apart (section 3.4), so with `idleBefore: 150` the `v l` in `devlog` does not fire.
   It also means a sequence typed straight after a command (`git status -u` then `j f`) does not fire unless there was a pause, so it suits keys that start something more than keys that end it.
-- `idleAfter` stops a sequence that continues into a word: with `idleAfter: 100` on `j f`, typing `jfk` quickly gives `jfk`, and only `j f` followed by a pause submits.
-  It delays the effect by that much, never the text.
 
 Measured numbers to set them by (Dhakal et al., 136 million keystrokes): a mean gap of 239 ms, about 120 ms for fast typists, a floor near 60 ms.
-For a two-letter sequence, `within` 100--150 with `idleBefore` or `idleAfter` around 150 is a reasonable start; firmware uses 50 ms for keys pressed together.
+For a two-letter sequence, `within` 100--150 with `idleBefore` around 150 is a reasonable start; firmware uses 50 ms for keys pressed together.
 None of this is sure. The only sure way is to choose sequences that do not occur in what you type, and `;r` is a better choice in mshell than in a POSIX shell, where `cmd;rm` is common.
 
 Each key's time is when it was read. Keys that arrive in the same read get the same time, so a paste in a terminal without bracketed paste
-has gaps of zero: it passes `within` but fails `idleBefore` and `idleAfter`, which is a second reason to set one of them.
+has gaps of zero: it passes `within` but fails `idleBefore`, which is a second reason to set it.
 Over ssh, jitter can stretch or squeeze gaps, so values under about 100 ms are not reliable there.
+
+#decision[
+*Nothing happens without a key.*
+An earlier draft had a third field, `idleAfter`: run the binding only if no key comes for a while after its last key, so that `jfk` typed fast stays text.
+It is the one rule that must act when no key arrives, and a blocking read cannot wait for time; it needs a read with a deadline or a timer,
+and every way Go offers one (a poll, a reader goroutine that is left blocked and steals the next program's first key, a non-blocking stdin that child processes share) adds a case to get right.
+Without it the editor is a loop of a blocking read and a pure function of the keys and their times, which the model of section 13 covers whole.
+What it gave is small: a sequence that can continue into a word should not be bound, which is the user's choice to make, and `idleBefore` already guards the first key.
+]
 
 == The algorithm
 
@@ -677,8 +679,7 @@ On each key $k$ at time $t$:
 + Let $W$ be the pending keys and $k$. For each suffix of $W$ from the longest, look it up in the trie; drop matches whose gaps break `within` or `idleBefore`,
   and those that start inside a binding in force.
   Note the longest suffix that is a complete binding.
-+ If one was found: if it has `idleAfter`, read with that deadline; a key that arrives in time abandons the binding (go to step 3 for $k$, then handle the new key).
-  Otherwise restore the snapshot before its first key and run it; if it declines, go to step 3.
++ If one was found, restore the snapshot before its first key and run it; if it declines, try the next shorter one, and with none left go to step 3.
   If it is an effect, clear the pending keys. If it is pure, it comes into force, and the pending keys are trimmed as in step 3.
 + Else: do $k$'s own action, and keep as pending the keys of $W$ from the first one from which a suffix is still a proper prefix of a binding (none: clear them).
   If a pending key has no own action, show the pending keys below the line.
@@ -697,7 +698,6 @@ With `j f` bound to `[editAccept]` and no `within`:
   [`ls` `j` `f`], [`lsj` is shown after `j`; at `f` the line goes back to `ls`, which runs.],
   [`j` `j` `f`], [`j`, then `jj` (the first `j` is committed when the second starts a new sequence); at `f` the line goes back to `j`, which runs. Helix gives `jjf` here (\#2612), since it does not match the failed keys again.],
   [`j` `k`], [`jk`. Nothing was waiting.],
-  [`j` `f` `k` quickly, with `idleAfter: 100`], [`jfk`: `k` came during the wait, so `j f` did not complete.],
   [`j` paste `f`], [The paste is not a key: it breaks the sequence, and `f` is typed.],
 )
 
@@ -772,7 +772,7 @@ I ran this def with `$EDITOR` set to `sed -i s/a/X/g` (the line comes back edite
 
 ```msh
 # Enter, and clear the screen, on letters, as today; `jfk` and `devlog` can still be typed.
-{keys: [r'j' r'f'], action: [editAccept] bindingOps, within: 150, idleAfter: 100} bindingAdd
+{keys: [r'j' r'f'], action: [editAccept] bindingOps, within: 150} bindingAdd
 {keys: [r'v' r'l'], action: [editClearScreen] bindingOps, within: 150, idleBefore: 150} bindingAdd
 
 # Open a file manager on the repos or the jobs directory without losing the line.
@@ -876,13 +876,14 @@ Keys are only as good as the decoder under them. Three changes there, all below 
 
 + *Decode every key, bound or not.* The lexer produces a key value (base key and modifiers) for every key it can read, including the modifiers on Home, End and arrows and every Alt chord.
   Whether a key does anything is the keymap's business. Today the lexer drops what nothing binds.
-+ *An escape delay.* After `ESC` with nothing following, the lexer waits 30 ms (fish's `fish_escape_delay_ms`; tmux uses 10, Neovim 50) for the next byte, and reports `escape` if none comes.
-  Today it waits forever and then discards the Escape. This is a read with a deadline, the same as for terminal replies.
-  The delay is a constant, not a setting: with the kitty protocol it is not used, and the protocol is the way to make it go away.
++ *No escape delay.* In the legacy encoding ESC and a key is Alt and the key, and a lone Escape can be told from it only by waiting for a byte that may not come
+  (fish waits 30 ms, tmux 10, Neovim 50). Here the lexer reads the next byte with a blocking read, as it does today, and makes the pair Alt and the key.
+  When `keyAlt` and that key has no binding, the key acts on its own, so an Escape pressed out of habit loses nothing.
+  So in the legacy encoding a lone Escape is not a key, as Ctrl-I is not; with the kitty protocol it is `CSI 27 u`, a key like any other, with no waiting.
 + *The kitty keyboard protocol, when the terminal has it.* At startup the shell asks (`CSI ? u`, followed by DA1 so that a terminal without it still answers).
   If it does, the editor pushes flags 1 and 4 (`CSI > 5 u`: disambiguate, and report alternate keys, as fish asks for) while it reads a line,
   and pops them (`CSI < u`) before running anything, including `editRun`, so programs inherit the terminal as they expect.
-  Then `escape`, `ctrl-i`, `ctrl-m`, `ctrl-h`, `ctrl-backspace` and `ctrl-shift-x` are all distinct, Escape needs no delay, and Ctrl and Alt bindings follow the key's place on the keyboard across layouts.
+  Then Escape, Ctrl-I, Ctrl-M, Ctrl-H, Ctrl-Backspace and Ctrl-Shift-X are all distinct keys, and Ctrl and Alt bindings follow the key's place on the keyboard across layouts.
   The protocol is listed as implemented by kitty, alacritty, foot, ghostty, iTerm2, Windows Terminal, rio, WezTerm (when enabled), Warp and xterm.js, but not tmux (its \#5615 is open).
   fish's experience says terminals get it partly wrong (it turns the protocol off on Konsole and on old iTerm),
   so the shell needs the same way out: one setting that keeps the legacy encoding.
@@ -894,7 +895,7 @@ must not leave the user's terminal sending escape codes for every key.
 *Chords, later, and probably not.* With flags 2 and 8 the terminal reports releases, so a binding could require its keys to be held down _together_, as firmware combos and keyd's `j+k` do.
 It would be one more optional field (`together?: bool`) with no change to the notation.
 The survey argues against hurrying: flag 8 turns every key into an escape code, tmux discards releases, and fast typists overlap 40--70% of their keys anyway,
-so release order is the weakest of firmware's signals. `idleBefore` and `idleAfter` are the strong ones, and they work in every terminal.
+so release order is the weakest of firmware's signals. `idleBefore` is a strong one, and it works in every terminal.
 ]
 
 == Seeing what a key sends: `msh keys`
@@ -916,9 +917,9 @@ The `Key` column is printed in the source form, so it can be pasted into `init.m
 Delete the five hand-written sequences, the F1 and Alt-D cases, and the `tabCycleActive` tests from `HandleToken`. Put this in Mitchell's `init.msh`:
 
 ```msh
-{keys: [r'j' r'f'], action: [editAccept] bindingOps, idleAfter: 100} bindingAdd
+{keys: [r'j' r'f'], action: [editAccept] bindingOps} bindingAdd
 {keys: [r'v' r'l'], action: [editClearScreen] bindingOps, idleBefore: 150} bindingAdd
-{keys: [r'q' r'q'], action: [editExit] bindingOps, idleBefore: 150, idleAfter: 100} bindingAdd
+{keys: [r'q' r'q'], action: [editExit] bindingOps, idleBefore: 150} bindingAdd
 {keys: [r';' r'r'], action: [(r) editRun] bindingOps} bindingAdd
 {keys: [r';' r'j'], action: [(j) editRun] bindingOps} bindingAdd
 {keys: [keyF1], action: [(lf) editRun] bindingOps} bindingAdd
@@ -946,7 +947,7 @@ The expected cost for an unbound text key is one trie lookup, well under the mic
 Two things are checked mechanically, in the style of `ai/terminal-query` and `TestAbbrSiteFromLineTokens`.
 
 + *A model of resolution* (`ai/key-bindings/KeyResolution.tla`, run with `check.sh`), over a table of six bindings
-  (text keys and a key that types nothing, pure and effect actions, a prefix, a longer pure binding over a shorter one, a conflict, all three timing fields)
+  (text keys and a key that types nothing, pure and effect actions, a prefix, a longer pure binding over a shorter one, a conflict, both timing fields)
   and every input of up to five events, keys and pastes, each 0 or 2 ticks after the one before. Properties:
   - `StepMatches`: after every event, the line, the effects that ran and the bindings in force are those of the definition in section 6.1.
     This is no lag (every key's action is on the line before the next key is read) and exact rollback (a binding runs on the line before its first key) together.
@@ -962,13 +963,13 @@ Two things are checked mechanically, in the style of `ai/terminal-query` and `Te
 = Implementation plan
 
 + *Runes.* The `rune` type and its literals (`ai/runes.typ`), which `Key` needs. Until then the rest can be built with `str` in its place, as the prototype was.
-+ *Decoder.* A key code for every key the lexer can read, with modifiers; the escape delay.
++ *Decoder.* A key code for every key the lexer can read, with modifiers; ESC and a key as Alt and the key.
   Table tests: every legacy byte, every CSI form in `homeEndKey` and the arrows, with each modifier.
 + *Normal form.* A `Key` value to a key code (section 5.1), and back for `EditState`. Table tests for each rule, including the inert cases.
 + *Types and builtins.* The declarations in `builtinDeclSource`, `Key` among them; `bindingAdd`, `bindingErase`, `bindingList` in `Evaluator.go`, `BuiltInList.go` and `TypeCoreBuiltins.go`; inert entries and messages.
 + *Ops.* One function that runs an `[EditOp]` on `TermState`. Each existing case in `HandleToken` becomes an op; the cases themselves go.
 + *Defaults.* The table of section 5.4, added before `init.msh`. `HandleToken` becomes: decode, resolve, run.
-+ *Resolution.* The pending array, snapshots, the trie per mode, the timing fields; the deadline read for `idleAfter`.
++ *Resolution.* The pending array, snapshots, the trie per mode, the timing fields.
 + *Modes.* `modeInsert` and `modeComplete`.
 + *`editRun` and `editRunOps`.* Leave the line, run in the foreground, redraw with the line kept or with the returned ops applied. `editInEditor` in `lib/std.msh`.
 + *Kitty protocol.* Query, push and pop around every handoff of the terminal. This touches `ai/terminal-control`, whose model should cover the push and pop.

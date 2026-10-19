@@ -1,0 +1,22 @@
+# The default keymap is there before any binding is added.
+bindingList len n!
+@n 0 > str wl
+
+# A binding, a replacement of it (same keys), and an erase.
+{keys: [r'j' r'f'], action: [editAccept] bindingOps, within: 150} bindingAdd
+bindingList len @n - str wl
+{keys: [r'j' r'f'], action: [editClearScreen] bindingOps, description: 'clear'} bindingAdd
+bindingList len @n - str wl
+[r'j' r'f'] bindingErase
+bindingList len @n - str wl
+
+# Keys are values: modifiers wrap a rune or a named key.
+[r'x' keyCtrl r'e' keyCtrl keyF1 keyLeft keyAlt keyCtrl] str wl
+
+# A quote binding, tested with no terminal.
+def sudoLine (EditState -- new Maybe[[EditOp]])
+    s!
+    [$"sudo {@s :before?}" @s :after? editSetLine] just
+end
+{keys: [r's' keyAlt], action: (sudoLine) bindingFunc} bindingAdd
+{before: 'ab', after: 'cd', keys: [r's' keyAlt], mode: modeInsert} sudoLine str wl

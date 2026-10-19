@@ -12,10 +12,10 @@ It uses `$TLA2TOOLS_JAR`, or `~/.local/share/tlaplus/tla2tools.jar`.
 ## What is modeled
 
 A table of six bindings over the keys `a`, `b` (which type themselves) and `X` (which types nothing, like Ctrl-X):
-an effect with `idleAfter`, an effect after a key that types nothing, a pure binding with `within`,
+an effect, an effect after a key that types nothing, a pure binding with `within`,
 a one-key effect made inert by a later binding it conflicts with, a pure binding with `idleBefore`, and a pure binding longer than another.
 The input is every sequence of up to five events, keys and pastes, each 0 or 2 ticks after the one before.
-Time is given, not measured: the wait for `idleAfter` is the algorithm looking at the next event's gap, which is what a read with a deadline finds out.
+Time is given, not measured. Every timing rule looks only at gaps before the key being handled, so the editor decides on each key as it is read and never waits for time to pass.
 
 ## Properties
 

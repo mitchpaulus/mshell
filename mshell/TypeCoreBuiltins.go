@@ -541,6 +541,9 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// Old below, new on top.
 	b.reg("abbrRename", "(AbbrMatch AbbrMatch -- )")
 	b.reg("abbrList", "( -- new [Abbr])")
+	b.reg("bindingAdd", "(Binding -- )")
+	b.reg("bindingErase", "([Key] -- )")
+	b.reg("bindingList", "( -- new [Binding])")
 	// Name below, value on top.
 	b.reg("setenv", "(str | path str | path -- )")
 	b.reg("unsetenv", "(str | path -- )")

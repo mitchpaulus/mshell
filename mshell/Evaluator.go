@@ -528,10 +528,16 @@ type EvalState struct {
 	PromptQuote *MShellQuotation
 	CursorShape string
 	// Abbrs are the abbreviations abbrAdd added, oldest first (Abbr.go),
-	// and AbbrWarnings the lines about ones that never expand that the
-	// interactive shell has not printed yet. A script never prints them.
+	// and AbbrWarnings the lines about abbreviations that never expand and
+	// bindings that never fire that the interactive shell has not printed
+	// yet. A script never prints them.
 	Abbrs        []*abbrEntry
 	AbbrWarnings []string
+	// Bindings are the key bindings, oldest first, the defaults first
+	// (Bindings.go), and bindingTries each mode's bindings in force.
+	Bindings             []*bindingEntry
+	bindingTries         [editModeCount]bindingTrie
+	defaultBindingsAdded bool
 	// lastExitCode is the exit code of the last process to finish, when
 	// ranProcess is set.
 	lastExitCode int
@@ -12348,6 +12354,18 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 				case "abbrList":
 					if r := state.evalAbbrList(&t, stack); r != nil {
+						return *r
+					}
+				case "bindingAdd":
+					if r := state.evalBindingAdd(&t, stack); r != nil {
+						return *r
+					}
+				case "bindingErase":
+					if r := state.evalBindingErase(&t, stack); r != nil {
+						return *r
+					}
+				case "bindingList":
+					if r := state.evalBindingList(&t, stack); r != nil {
 						return *r
 					}
 

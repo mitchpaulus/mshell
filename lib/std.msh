@@ -453,6 +453,19 @@ def parseHex (str -- Maybe[int]) 16 fromBase end
 def parseOctal (str -- Maybe[int]) 8 fromBase end
 def parseBin (str -- Maybe[int]) 2 fromBase end
 
+# Edit the line in $EDITOR (vi when unset), for a key binding:
+# {keys: [r'g' keyCtrl], action: [(editInEditor) editRunOps] bindingOps} bindingAdd
+# The edited text replaces the line; it is not run. An editor that fails leaves the line as it was.
+def editInEditor (EditState -- new Maybe[[EditOp]])
+    s!
+    '.msh' tempFileExt f!
+    @s :before? @s :after? + @f writeFile
+    "EDITOR" getEnv "vi" maybe wsplit [@f str] + ? code!
+    @f readFile chomp text!
+    @f rm
+    @code 0 = if [@text '' editSetLine] just else none end
+end
+
 # COMPLETIONS {{{
 # msh {{{
 def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])

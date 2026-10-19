@@ -31,9 +31,9 @@
 (* binding on the line as it is, with its first keys still typed, and must *)
 (* fail StepMatches.                                                       *)
 (*                                                                         *)
-(* Time is given, not measured: each event carries its gap. The wait for   *)
-(* idleAfter is the algorithm looking at the next event's gap, which is    *)
-(* what a read with a deadline finds out.                                  *)
+(* Time is given, not measured: each event carries its gap. Every timing    *)
+(* rule looks only at gaps before the key being handled, so the editor     *)
+(* decides on each key as it is read, and never waits for time to pass.   *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
@@ -49,15 +49,15 @@ Events == [k : Kinds, g : Gaps]
 
 (* The bindings, in the order they were added. kind "pure" replaces the    *)
 (* keys with text; "effect" runs eff: accept submits the line and clears   *)
-(* it, run runs something and keeps the line. within, ib (idleBefore) and  *)
-(* ia (idleAfter) are 0 when not given.                                    *)
+(* it, run runs something and keeps the line. within and ib (idleBefore)   *)
+(* are 0 when not given.                                                   *)
 Table == <<
-    [keys |-> <<"a", "b">>, kind |-> "effect", eff |-> "accept", text |-> "", within |-> 0, ib |-> 0, ia |-> 1],
-    [keys |-> <<"X", "b">>, kind |-> "effect", eff |-> "run", text |-> "", within |-> 0, ib |-> 0, ia |-> 0],
-    [keys |-> <<"a", "a">>, kind |-> "pure", eff |-> "", text |-> "Z", within |-> 1, ib |-> 0, ia |-> 0],
-    [keys |-> <<"b">>, kind |-> "effect", eff |-> "run", text |-> "", within |-> 0, ib |-> 0, ia |-> 0],
-    [keys |-> <<"b", "a", "a">>, kind |-> "pure", eff |-> "", text |-> "W", within |-> 0, ib |-> 1, ia |-> 0],
-    [keys |-> <<"a", "a", "b">>, kind |-> "pure", eff |-> "", text |-> "V", within |-> 0, ib |-> 0, ia |-> 0]
+    [keys |-> <<"a", "b">>, kind |-> "effect", eff |-> "accept", text |-> "", within |-> 0, ib |-> 0],
+    [keys |-> <<"X", "b">>, kind |-> "effect", eff |-> "run", text |-> "", within |-> 0, ib |-> 0],
+    [keys |-> <<"a", "a">>, kind |-> "pure", eff |-> "", text |-> "Z", within |-> 1, ib |-> 0],
+    [keys |-> <<"b">>, kind |-> "effect", eff |-> "run", text |-> "", within |-> 0, ib |-> 0],
+    [keys |-> <<"b", "a", "a">>, kind |-> "pure", eff |-> "", text |-> "W", within |-> 0, ib |-> 1],
+    [keys |-> <<"a", "a", "b">>, kind |-> "pure", eff |-> "", text |-> "V", within |-> 0, ib |-> 0]
 >>
 
 NB == Len(Table)
@@ -113,7 +113,6 @@ Timed(b, s, e) ==
     LET t == Table[b] IN
     /\ t.within = 0 \/ \A j \in s + 1..e : input[j].g <= t.within
     /\ t.ib = 0 \/ s = 1 \/ input[s].g >= t.ib
-    /\ t.ia = 0 \/ e = Len(input) \/ input[e + 1].g >= t.ia
 
 \* A new binding may not start inside one in force: before it, or at or
 \* before its first key (then it replaces it).

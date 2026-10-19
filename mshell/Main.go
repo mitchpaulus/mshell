@@ -602,6 +602,11 @@ func main() {
 		return
 	}
 
+	if len(os.Args) >= 2 && os.Args[1] == "keys" {
+		os.Exit(runKeysCommand(os.Args[2:]))
+		return
+	}
+
 	if len(os.Args) >= 2 && os.Args[1] == "fm" {
 		startDir := ""
 		if len(os.Args) >= 3 {
@@ -1053,6 +1058,11 @@ type TermState struct {
 	// (Abbr.go).
 	abbrProblem string
 	abbrMessage string
+	// keys is what the key resolver keeps between keys, and abbrCursor
+	// where an abbreviation the running program expanded put its cursor
+	// marker (Bindings.go).
+	keys       keyResolver
+	abbrCursor abbrExpansion
 	// lineArena holds the command line's strings, and lineTokens its
 	// tokens, lexed once per edit (CommandBuffers.go).
 	lineArena  lineArena
@@ -1085,6 +1095,10 @@ type TermState struct {
 	// tokenChan chan TerminalToken
 	stdInState *StdinReaderState
 	bracketedPasteEnabled bool
+	// kittyKeys is whether the terminal has the kitty keyboard protocol,
+	// and kittyKeysPushed whether its flags are pushed now (TerminalMode.go).
+	kittyKeys       bool
+	kittyKeysPushed bool
 
 	previousHistory []HistoryItem // Previous history items loaded from file
 
@@ -2067,35 +2081,6 @@ func completionDisplayedCount(layout completionLayout, rows int) int {
 }
 
 // TODO: Why is this necessary.
-func (state *TermState) isTabToken(token TerminalToken) bool {
-	if t, ok := token.(AsciiToken); ok && t.Char == 9 {
-		return true
-	}
-	if t, ok := token.(SpecialKey); ok && t == KEY_SHIFT_TAB {
-		return true
-	}
-	return false
-}
-
-func (state *TermState) isTabCycleNav(token TerminalToken) bool {
-	if state.isTabToken(token) {
-		return true
-	}
-	if t, ok := token.(SpecialKey); ok {
-		if t == KEY_UP || t == KEY_DOWN || t == KEY_LEFT || t == KEY_RIGHT {
-			return true
-		}
-	}
-	if t, ok := token.(AsciiToken); ok {
-		// Tab cycle nav keys: Ctrl-N (14), Ctrl-P (16), Enter (13)
-		// Enter is included so we can accept completion without executing
-		if t.Char == 14 || t.Char == 16 || t.Char == 13 {
-			return true
-		}
-	}
-	return false
-}
-
 func (state *TermState) setTabCompletions(matches []string) {
 	if state.currentTabComplete == 0 {
 		state.tabCompletions0 = append(state.tabCompletions0, matches...)
@@ -3001,6 +2986,8 @@ type StdinReaderState struct {
 	array []byte
 	i     int
 	n     int
+	// record, when not nil, gets every byte read (msh keys).
+	record *[]byte
 }
 
 // UnreadByte pushes back the byte most recently returned by ReadByte so the
@@ -3009,6 +2996,9 @@ type StdinReaderState struct {
 func (state *StdinReaderState) UnreadByte() {
 	if state.i > 0 {
 		state.i--
+		if state.record != nil && len(*state.record) > 0 {
+			*state.record = (*state.record)[:len(*state.record)-1]
+		}
 	}
 }
 
@@ -3030,16 +3020,13 @@ func (state *StdinReaderState) ReadByte() (byte, error) {
 
 		state.n = n
 		state.i = 0
-
-		b := state.array[state.i]
-		state.i++
-		return b, nil
-	} else {
-		// fmt.Fprintf(f, "Reading from buffer at %d..\n", state.i)
-		b := state.array[state.i]
-		state.i++
-		return b, nil
 	}
+	b := state.array[state.i]
+	state.i++
+	if state.record != nil {
+		*state.record = append(*state.record, b)
+	}
+	return b, nil
 }
 
 func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
@@ -3340,6 +3327,8 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						return KEY_HOME, nil
 					} else if c == 90 {
 						return KEY_SHIFT_TAB, nil
+					} else if c == 'P' || c == 'Q' || c == 'S' { // F1, F2, F4 (kitty)
+						return KeyToken{Code: letterKeys[c]}, nil
 					} else {
 						// Unknown escape sequence
 						state.Logf("Unknown escape sequence: ESC [ %d\n", c)
@@ -3370,8 +3359,10 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 								return KEY_CTRL_DELETE, nil
 							} else if c == '~' && params == "3" {
 								return KEY_DELETE, nil
-							} else if key, ok := homeEndKey(c, params); ok {
+							} else if key, ok := homeEndKey(c, params); ok && !strings.Contains(params, ";") {
 								return key, nil
+							} else if key, ok := decodeCsiKey(c, params); ok {
+								return KeyToken{Code: key}, nil
 							} else {
 								// fmt.Fprintf(f, "Sent CSI token: %d %d\n", c, byteArray)
 								return CsiToken{FinalChar: c, Params: byteArray}, nil
@@ -3409,13 +3400,20 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				return KEY_ALT_DOT, nil
 				// Quit
 			} else {
-				// A lone Escape: the next byte is not a CSI, SS3, or bound Alt
-				// chord, so it is an ordinary key typed after Esc. Push it back
-				// and lex it on its own rather than swallowing it. Escape itself
-				// has no binding, so nothing is returned for it.
-				state.Logf("Ignoring lone ESC before byte %d\n", c)
+				// ESC and a key: Alt and the key, as the legacy encoding sends it.
+				// A lone Escape cannot be told from it without waiting for the next
+				// byte, so it is not a key here. When Alt and the key has no
+				// binding, the key acts on its own (HandleToken), so an Escape
+				// pressed out of habit loses nothing.
 				stdinReaderState.UnreadByte()
-				continue
+				inner, err := state.InteractiveLexer(stdinReaderState)
+				if err != nil {
+					return nil, err
+				}
+				if k, ok := keyOfToken(inner); ok {
+					return KeyToken{Code: altKey(k), EscOf: k}, nil
+				}
+				return inner, nil
 			}
 		} else if c >= 192 && c <= 223 { // 192-223 are the first byte of a 2-byte UTF-8 character{
 			// Read the next byte
@@ -3563,6 +3561,11 @@ func (state *TermState) InteractiveMode() error {
 
 	state.l = NewLexer("", &TokenFile{"REPL"})
 	state.p = &MShellParser{lexer: state.l}
+
+	state.detectKittyKeys()
+	if err := state.setKittyKeys(true); err != nil {
+		return fmt.Errorf("Error enabling the kitty keyboard protocol: %s", err)
+	}
 
 	stdLibDefs, err := stdLibDefinitions(&state.stack, state.context, &state.evalState)
 	if err != nil {
@@ -4371,503 +4374,218 @@ func WriteToHistory(command string, directory string, historyFilePath string) er
 	return nil
 }
 
-// Returns boolean on whether to end the CLI. Think CTRL-c/d or other exit command.
+// HandleToken handles one token from the terminal. A paste is inserted as
+// it is; a key goes to the key bindings (Bindings.go). It returns whether
+// the shell should end.
 func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
-	var err error
-
-	if !state.isTabCycleNav(token) {
+	if t, ok := token.(PasteToken); ok {
+		state.keys.event(time.Now())
 		state.resetTabCycle()
-	}
-	if sk, ok := token.(SpecialKey); ok && sk == KEY_ALT_DOT {
-	} else {
 		state.resetLastArgCycle()
-	}
-
-	switch t := token.(type) {
-	case PasteToken:
 		if t.Text != "" {
 			state.replaceText(t.Text, state.index, state.index)
 		}
-	case MutliByteToken:
-		state.PushChars([]rune{t.Char})
-	case AsciiToken:
-		// If the character is a printable ASCII character, handle it.
-		if t.Char > 32 && t.Char < 127 {
-			if t.Char == ';' {
-				// Check next token, if it's a 'r', open REPOs with lf
-				// TODO: Handle EOF token case
-				token, err = state.readInputToken()
-				if err != nil {
-					return false, err
-				}
+		return false, nil
+	}
+	code, ok := keyOfToken(token)
+	if !ok {
+		return false, nil
+	}
+	if t, ok := token.(KeyToken); ok && t.EscOf != 0 && !state.keyUsed(code) {
+		code = t.EscOf
+	}
+	return state.resolveKey(code, time.Now())
+}
 
-				if t, ok := token.(AsciiToken); ok {
-					if t.Char == 'r' {
-						// Open REPOs with lf
-						// fmt.Fprintf(state.f, "Opening REPOs with lf...\n")
-						state.currentCommand = ""
-						state.index = 0
-						state.PushChars([]rune{'r'})
-						shouldExit, _ := state.ExecuteCurrentCommand()
-						return shouldExit, nil
-					} else if t.Char == 'j' {
-						state.currentCommand = ""
-						state.index = 0
-						state.PushChars([]rune{'j'})
-						shouldExit, _ := state.ExecuteCurrentCommand()
-						return shouldExit, nil
-					} else {
-						// Push both tokens
-						state.typeAbbrTrigger(';')
-						state.HandleToken(token)
-					}
-				} else {
-					// Push just the semicolon
-					state.typeAbbrTrigger(';')
-					return state.HandleToken(token)
-				}
-			} else if t.Char == 'j' {
-				token, err = state.readInputToken()
-				if err != nil {
-					return false, err
-				}
+// historyPrev puts the previous history entry on the line, skipping ones
+// equal to the line.
+func (state *TermState) historyPrev() {
+	for state.historyIndex >= 0 && state.historyIndex < len(history) {
+		state.historyIndex++
+		reverseIndex := len(history) - state.historyIndex
+		// Compare current command to history, if the same, skip and continue to search
+		if string(state.currentCommand) == string(history[reverseIndex]) {
+			continue
+		}
+		state.currentCommand = SourceText(history[reverseIndex])
+		state.index = state.commandEnd()
+		state.resetHistorySearch()
+		break
+	}
+}
 
-				if t, ok := token.(AsciiToken); ok {
-					if t.Char == 'f' {
-						return state.HandleToken(AsciiToken{Char: 13})
-					} else {
-						// Push both tokens
-						state.PushChars([]rune{'j'})
-						return state.HandleToken(token)
-					}
-				} else {
-					// Push just the semicolon
-					state.PushChars([]rune{'j'})
-					return state.HandleToken(token)
-				}
-			} else if t.Char == 'v' {
-				// Check if next token is 'l', then clear screen
-				token, err = state.readInputToken()
-				if err != nil {
-					return false, err
-				}
-
-				if t, ok := token.(AsciiToken); ok {
-					if t.Char == 'l' {
-						// Clear screen
-						state.ClearScreen()
-					} else {
-						// Push both tokens
-						state.PushChars([]rune{'v'})
-						return state.HandleToken(token)
-					}
-				} else {
-					// Push just the 'v'
-					state.PushChars([]rune{'v'})
-					return state.HandleToken(token)
-				}
-			} else if t.Char == 'q' {
-				// Check if next token is 'l', then clear screen
-				token, err = state.readInputToken()
-				if err != nil {
-					return false, err
-				}
-
-				if t, ok := token.(AsciiToken); ok {
-					if t.Char == 'q' {
-						state.currentCommand = ""
-						state.index = 0
-						state.PushChars([]rune("0 exit"))
-						shouldExit, _ := state.ExecuteCurrentCommand()
-						return shouldExit, nil
-					} else {
-						// Push both tokens
-						state.PushChars([]rune{'q'})
-						return state.HandleToken(token)
-					}
-				} else {
-					// Push just the 'q'
-					state.PushChars([]rune{'q'})
-					return state.HandleToken(token)
-				}
-			} else if isAbbrTrigger(rune(t.Char)) {
-				state.typeAbbrTrigger(rune(t.Char))
-			} else {
-				state.PushChars([]rune{rune(t.Char)})
-				// state.currentCommand = append(state.currentCommand, rune(t.Char))
-			}
-
-			// // Add chars to current command at current index
-			// // fmt.Fprintf(state.f, "AsciiToken: %d\n", t.Char)
-			// fmt.Fprintf(os.Stdout, "\033[K")
-			// fmt.Fprintf(os.Stdout, "%c", t.Char)
-			// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.legacyCursorColumn()+1)
-
-			// state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(t.Char)}, state.currentCommand[state.index:]...)...)
-			// state.index++
-		} else if t.Char == 0 { // Ctrl-Space
-			state.PushChars([]rune{' '})
-		} else if t.Char == 32 { // Space
-			state.typeAbbrTrigger(' ')
-		} else if t.Char == 1 { // Ctrl-A
-			// Move cursor to beginning of line.
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-			state.index = 0
-		} else if t.Char == 2 { // CTRL-B
-			return state.HandleToken(KEY_LEFT)
-		} else if t.Char == 3 || t.Char == 4 {
-			// Ctrl-C or Ctrl-D
-			fmt.Fprintf(os.Stdout, "\r\n") // Print a nice clean newline.
-			return true, nil
-		} else if t.Char == 5 { // Ctrl-E
-			// Move cursor to end of line
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
-			state.index = state.commandEnd()
-		} else if t.Char == 6 { // Ctrl-F
-			if state.index == state.commandEnd() {
-				state.acceptHistoryCompletion()
-			} else if state.index < state.commandEnd() {
-				return state.HandleToken(KEY_RIGHT)
-			}
-		} else if t.Char == 14 { // Ctrl-N
-			if state.tabCycleActive {
-				state.cycleTabCompletion(1)
-			} else {
-				state.historySearch(1)
-			}
-		} else if t.Char == 16 { // Ctrl-P
-			if state.tabCycleActive {
-				state.cycleTabCompletion(-1)
-			} else {
-				state.historySearch(-1)
-			}
-		} else if t.Char == 8 { // Backspace (or more typically CTRL-Backspace)
-			state.deletePreviousWord()
-		} else if t.Char == 9 { // Tab complete
-			// Get all files in the current directory
-
-			state.l.allowUnterminatedString = true
-			defer func() {
-				state.l.allowUnterminatedString = false
-			}()
-
-			// Short circuit if we are actively in tab completion mode.
-			if state.tabCycleActive && len(state.tabCycleMatches) > 0 {
-				state.cycleTabCompletion(1)
-				return false, nil
-			}
-
-			state.resetTabCycle()
-
-			// Completion definitions may keep their arguments, so they get
-			// a copy of the line rather than the editor's arena.
-			state.l.resetInput(strings.Clone(string(state.currentCommand[0:state.index])))
-			tokens, err := state.l.Tokenize()
-			if err != nil {
-				return false, nil
-			}
-			lastToken := tokens[len(tokens)-1] // EOF when the command has no tokens.
-			if len(tokens) > 1 {
-				lastToken = tokens[len(tokens)-2]
-			}
-			prefix, replaceStart := completionTokenPrefix(state.currentCommand, state.index, lastToken)
-
-			// Check if we are in binary completion
-			binaryToken, binaryCompletion := state.isFirstTokenBinary(tokens)
-
-			completionSource := state.currentCommand
-			replaceEnd := state.index
-
-			state.Logf("Last token: %s %d\n", lastToken, len(tokens))
-			state.Logf("Prefix: %s\n", prefix)
-
-			// Binary specific completions decide what the argument offers.
-			var spec *CompletionSpec
-			if binaryCompletion {
-				isCompletingBinary := prefix != "" && lastToken.Start == binaryToken.Start && lastToken.Line == binaryToken.Line
-				if !isCompletingBinary {
-					defs := state.evalState.CompletionDefinitions[binaryToken.Lexeme]
-					if len(defs) > 0 {
-						args := state.completionArgsFromTokens(string(state.currentCommand[0:state.index]), tokens, prefix)
-						if defSpec, ok := state.runCompletionDefinitions(defs, args); ok {
-							spec = &defSpec
-						}
-					}
-				}
-			}
-
-			// Build completion dependencies from current state
-			variables := make(map[string]struct{}, len(state.context.Variables))
-			for v := range state.context.Variables {
-				variables[v] = struct{}{}
-			}
-
-			definitions := make([]string, len(state.stdLibDefs))
-			for i, def := range state.stdLibDefs {
-				definitions[i] = def.Name
-			}
-
-			deps := CompletionDeps{
-				FS:          OSCompletionFS{Listing: &state.completionListing},
-				Env:         OSCompletionEnv{},
-				Binaries:    state.context.Pbm,
-				Variables:   variables,
-				BuiltIns:    BuiltInList,
-				Definitions: definitions,
-				Abbreviations: state.evalState.commandAbbrWords(),
-			}
-
-			prevTokenType := EOF
-			if len(tokens) > 1 {
-				if replaceStart == state.index {
-					prevTokenType = lastToken.Type
-				} else if len(tokens) >= 3 {
-					prevTokenType = tokens[len(tokens)-3].Type
-				}
-			}
-
-			input := CompletionInput{
-				Prefix:        prefix,
-				LastTokenType: lastToken.Type,
-				PrevTokenType: prevTokenType,
-				NumTokens:     len(tokens),
-				InBinaryMode:  binaryCompletion,
-				Spec:          spec,
-			}
-
-			// Generate completions using the extracted function
-			matches := GenerateCompletions(input, deps)
-			allFileMatches := allMatchesAreFiles(matches)
-
-			var insertString string
-			state.Logf("Len matches: '%d'\n", len(matches))
-
-			if len(matches) < 5 {
-				// Print matches
-				state.Logf("Matches: %s\n", strings.Join(GetMatchTexts(matches), ", "))
-			}
-
-			if len(matches) == 0 {
-				fmt.Fprintf(os.Stdout, "\a")
-			} else if len(matches) == 1 {
-				// Lex the match and check if we have to quote around it
-				insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE)
-
-				// Replace the prefex
-				state.replaceText(insertString, replaceStart, replaceEnd)
-			} else {
-				// Print out the longest common prefix
-				longestCommonPrefix := completionGraphemePrefix(GetMatchTexts(matches))
-				state.Logf("Longest common prefix: '%s'\n", longestCommonPrefix)
-
-				if len(longestCommonPrefix) <= len(prefix) {
-					// Print bell
-					fmt.Fprintf(os.Stdout, "\a")
-				} else {
-					longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, allFileMatches)
-
-					// Replace the prefix
-					state.replaceText(longestCommonPrefix, replaceStart, replaceEnd)
-				}
-
-				tabMatchTexts := GetMatchTexts(matches)
-				state.tabCycleActive = true
-				state.tabCycleIndex = -1
-				state.tabCycleSource = completionSource
-				state.tabCycleStart = replaceStart
-				state.tabCycleEnd = replaceEnd
-				state.tabCycleTokenType = lastToken.Type
-				state.tabCycleAllFiles = allFileMatches
-				state.tabCycleMatches = append(state.tabCycleMatches[:0], tabMatchTexts...)
-				state.setTabCompletions(tabMatchTexts)
-			}
-		} else if t.Char == 11 { // Ctrl-K
-			// Erase to end of line
-			// fmt.Fprintf(os.Stdout, "\033[K")
-			state.replaceText("", state.index, state.commandEnd())
-		} else if t.Char == 12 { // Ctrl-L
-			state.ClearScreen()
-		} else if t.Char == 15 { // Ctrl-O - file manager
-			if err := state.setBracketedPaste(false); err != nil {
-				return false, err
-			}
-			newDir := RunFileManagerInteractive(state.stdInFd, &state.oldState, "")
-			if newDir != "" {
-				state.evalState.ChangeDirectory(newDir, "file manager")
-			}
-			// Refresh terminal size
-			cols, rows, sizeErr := term.GetSize(int(os.Stdout.Fd()))
-			if sizeErr == nil {
-				state.numRows = rows
-				state.numCols = cols
-			}
-			fmt.Fprintf(os.Stdout, "\033[H\033[2J")
+// historyNext puts the next history entry on the line, or an empty line
+// after the newest.
+func (state *TermState) historyNext() {
+	if state.historyIndex <= 0 {
+		state.historyIndex = 0
+		return
+	}
+	if state.historyIndex > len(history) {
+		state.historyIndex = len(history)
+		return
+	}
+	for state.historyIndex > 0 && state.historyIndex <= len(history)+1 {
+		state.historyIndex--
+		if state.historyIndex == 0 {
 			state.currentCommand = ""
 			state.index = 0
-			err = state.printPrompt()
-			if err != nil {
-				return false, err
+			state.resetHistorySearch()
+		} else {
+			reverseIndex := len(history) - state.historyIndex
+			// Compare current command to history, if the same, skip and continue to search
+			if string(state.currentCommand) == string(history[reverseIndex]) {
+				continue
 			}
-		} else if t.Char == 13 { // Enter
-			// If in tab completion mode, accept the completion without executing
-			if state.tabCycleActive {
-				state.resetTabCycle()
-				state.tabCompletions0 = state.tabCompletions0[:0]
-				state.tabCompletions1 = state.tabCompletions1[:0]
-				return false, nil
-			}
-			state.expandAbbrOnEnter()
-			shouldExit, _ := state.ExecuteCurrentCommand()
-			if shouldExit {
-				return true, nil
-			}
-		} else if t.Char == 21 { // Ctrl-U
-			state.replaceText("", 0, state.index)
-		} else if t.Char == 23 { // Ctrl-W
-			state.deletePreviousWord()
-		} else if t.Char == 25 { // Ctrl-Y
-			// Ctrl-y to complete history
-			state.acceptHistoryCompletion()
-		} else if t.Char == 127 { // Backspace
-			// Erase last char
-			if state.index > 0 {
-				if end, err := state.HandleToken(KEY_LEFT); err != nil || end {
-					return end, err
-				}
-				return state.HandleToken(KEY_DELETE)
-
-				// fmt.Fprintf(os.Stdout, "\033[D")
-				// fmt.Fprintf(os.Stdout, "\033[K")
-				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.legacyCursorColumn())
-			}
+			state.currentCommand = SourceText(history[reverseIndex])
+			state.index = state.commandEnd()
+			state.resetHistorySearch()
 		}
-	case SpecialKey:
-		if t == KEY_F1 {
-			// Set state.currentCommand to "lf"
-			state.currentCommand = "lf"
-			state.index = state.commandEnd()
-			shouldExit, _ := state.ExecuteCurrentCommand()
-			if shouldExit {
-				return true, nil
-			}
-		} else if t == KEY_ALT_B {
-			state.index = wordLeft(state.currentCommand, state.index)
-		} else if t == KEY_ALT_F { // Alt-F
-			state.index = wordRight(state.currentCommand, state.index)
-		} else if t == KEY_ALT_O { // Alt-O
-			// Quit
-			fmt.Fprintf(os.Stdout, "\r\n")
-			state.Logf("Exiting mshell using ALT-o...\n")
-			return true, nil
-		} else if t == KEY_ALT_D {
-			dateStr := time.Now().Format("2006-01-02")
-			state.PushChars([]rune(dateStr))
-		} else if t == KEY_ALT_SHIFT_R {
-			// The user's reset for measured widths after a reattach, font change,
-			// or any odd frame: forget every observation and measure again on
-			// the next repaint. There is no automatic epoch tracking.
-			clear(state.widthCache.Entries)
-			state.widthProbesBlocked = false
-		} else if t == KEY_ALT_DOT {
-			state.cycleLastArgument()
-		} else if t == KEY_SHIFT_TAB {
-			if state.tabCycleActive && len(state.tabCycleMatches) > 0 {
-				state.cycleTabCompletion(-1)
-			} else {
-				return state.HandleToken(AsciiToken{Char: 9})
-			}
-		} else if t == KEY_UP {
-			if state.tabCycleActive {
-				state.cycleTabCompletion(-1)
-				return false, nil
-			}
-			// Up arrow
-			for state.historyIndex >= 0 && state.historyIndex < len(history) {
-				state.historyIndex++
-				reverseIndex := len(history) - state.historyIndex
-				// Compare current command to history, if the same, skip and continue to search
-				if string(state.currentCommand) == string(history[reverseIndex]) {
-					continue
-				}
+		break
+	}
+}
 
-				// Clear back to prompt
-				// state.clearToPrompt()
-				// state.printPrompt()
-				// fmt.Fprint(os.Stdout, history[reverseIndex])
-				// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
-				state.currentCommand = SourceText(history[reverseIndex])
-				state.index = state.commandEnd()
-				state.resetHistorySearch()
-				break
-			}
-		} else if t == KEY_DOWN {
-			if state.tabCycleActive {
-				state.cycleTabCompletion(1)
-				return false, nil
-			}
-			if state.historyIndex <= 0 {
-				state.historyIndex = 0
-			} else if state.historyIndex > len(history) {
-				state.historyIndex = len(history)
-			} else {
-				// Down arrow
-				for state.historyIndex > 0 && state.historyIndex <= len(history)+1 {
-					state.historyIndex--
-					// state.clearToPrompt()
-					if state.historyIndex == 0 {
-						// state.printPrompt()
-						// fmt.Fprintf(os.Stdout, "mshell> ")
-						state.currentCommand = ""
-						state.index = 0
-						state.resetHistorySearch()
-					} else {
-						reverseIndex := len(history) - state.historyIndex
-						// Compare current command to history, if the same, skip and continue to search
-						if string(state.currentCommand) == string(history[reverseIndex]) {
-							continue
-						}
-						// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
-						// state.printPrompt()
-						// fmt.Fprint(os.Stdout, history[reverseIndex])
-						state.currentCommand = SourceText(history[reverseIndex])
-						state.index = state.commandEnd()
-						state.resetHistorySearch()
-					}
-					break
+// completeAtCursor completes the token before the cursor: one match
+// replaces it, several replace it with their longest common prefix and
+// start tab cycling.
+func (state *TermState) completeAtCursor() {
+	// Get all files in the current directory
+
+	state.l.allowUnterminatedString = true
+	defer func() {
+		state.l.allowUnterminatedString = false
+	}()
+
+	// Short circuit if we are actively in tab completion mode.
+	if state.tabCycleActive && len(state.tabCycleMatches) > 0 {
+		state.cycleTabCompletion(1)
+		return
+	}
+
+	state.resetTabCycle()
+
+	// Completion definitions may keep their arguments, so they get
+	// a copy of the line rather than the editor's arena.
+	state.l.resetInput(strings.Clone(string(state.currentCommand[0:state.index])))
+	tokens, err := state.l.Tokenize()
+	if err != nil {
+		return
+	}
+	lastToken := tokens[len(tokens)-1] // EOF when the command has no tokens.
+	if len(tokens) > 1 {
+		lastToken = tokens[len(tokens)-2]
+	}
+	prefix, replaceStart := completionTokenPrefix(state.currentCommand, state.index, lastToken)
+
+	// Check if we are in binary completion
+	binaryToken, binaryCompletion := state.isFirstTokenBinary(tokens)
+
+	completionSource := state.currentCommand
+	replaceEnd := state.index
+
+	state.Logf("Last token: %s %d\n", lastToken, len(tokens))
+	state.Logf("Prefix: %s\n", prefix)
+
+	// Binary specific completions decide what the argument offers.
+	var spec *CompletionSpec
+	if binaryCompletion {
+		isCompletingBinary := prefix != "" && lastToken.Start == binaryToken.Start && lastToken.Line == binaryToken.Line
+		if !isCompletingBinary {
+			defs := state.evalState.CompletionDefinitions[binaryToken.Lexeme]
+			if len(defs) > 0 {
+				args := state.completionArgsFromTokens(string(state.currentCommand[0:state.index]), tokens, prefix)
+				if defSpec, ok := state.runCompletionDefinitions(defs, args); ok {
+					spec = &defSpec
 				}
-			}
-		} else if t == KEY_RIGHT {
-			if state.tabCycleActive {
-				state.cycleTabCompletionColumn(1)
-				return false, nil
-			}
-			state.index = graphemeNext(state.currentCommand, state.index)
-		} else if t == KEY_LEFT {
-			if state.tabCycleActive {
-				state.cycleTabCompletionColumn(-1)
-				return false, nil
-			}
-			state.index = graphemePrevious(state.currentCommand, state.index)
-		} else if t == KEY_HOME {
-			// Move cursor to beginning of line.
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-			state.index = 0
-		} else if t == KEY_END {
-			// Move cursor to end of line
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
-			state.index = state.commandEnd()
-		} else if t == KEY_DELETE {
-			if state.index < state.commandEnd() {
-				start := graphemeFloor(state.currentCommand, state.index)
-				end := graphemeNext(state.currentCommand, state.index)
-				state.replaceText("", start, end)
 			}
 		}
 	}
 
-	return false, nil
+	// Build completion dependencies from current state
+	variables := make(map[string]struct{}, len(state.context.Variables))
+	for v := range state.context.Variables {
+		variables[v] = struct{}{}
+	}
+
+	definitions := make([]string, len(state.stdLibDefs))
+	for i, def := range state.stdLibDefs {
+		definitions[i] = def.Name
+	}
+
+	deps := CompletionDeps{
+		FS:          OSCompletionFS{Listing: &state.completionListing},
+		Env:         OSCompletionEnv{},
+		Binaries:    state.context.Pbm,
+		Variables:   variables,
+		BuiltIns:    BuiltInList,
+		Definitions: definitions,
+		Abbreviations: state.evalState.commandAbbrWords(),
+	}
+
+	prevTokenType := EOF
+	if len(tokens) > 1 {
+		if replaceStart == state.index {
+			prevTokenType = lastToken.Type
+		} else if len(tokens) >= 3 {
+			prevTokenType = tokens[len(tokens)-3].Type
+		}
+	}
+
+	input := CompletionInput{
+		Prefix:        prefix,
+		LastTokenType: lastToken.Type,
+		PrevTokenType: prevTokenType,
+		NumTokens:     len(tokens),
+		InBinaryMode:  binaryCompletion,
+		Spec:          spec,
+	}
+
+	// Generate completions using the extracted function
+	matches := GenerateCompletions(input, deps)
+	allFileMatches := allMatchesAreFiles(matches)
+
+	var insertString string
+	state.Logf("Len matches: '%d'\n", len(matches))
+
+	if len(matches) < 5 {
+		// Print matches
+		state.Logf("Matches: %s\n", strings.Join(GetMatchTexts(matches), ", "))
+	}
+
+	if len(matches) == 0 {
+		fmt.Fprintf(os.Stdout, "\a")
+	} else if len(matches) == 1 {
+		// Lex the match and check if we have to quote around it
+		insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE)
+
+		// Replace the prefex
+		state.replaceText(insertString, replaceStart, replaceEnd)
+	} else {
+		// Print out the longest common prefix
+		longestCommonPrefix := completionGraphemePrefix(GetMatchTexts(matches))
+		state.Logf("Longest common prefix: '%s'\n", longestCommonPrefix)
+
+		if len(longestCommonPrefix) <= len(prefix) {
+			// Print bell
+			fmt.Fprintf(os.Stdout, "\a")
+		} else {
+			longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, allFileMatches)
+
+			// Replace the prefix
+			state.replaceText(longestCommonPrefix, replaceStart, replaceEnd)
+		}
+
+		tabMatchTexts := GetMatchTexts(matches)
+		state.tabCycleActive = true
+		state.tabCycleIndex = -1
+		state.tabCycleSource = completionSource
+		state.tabCycleStart = replaceStart
+		state.tabCycleEnd = replaceEnd
+		state.tabCycleTokenType = lastToken.Type
+		state.tabCycleAllFiles = allFileMatches
+		state.tabCycleMatches = append(state.tabCycleMatches[:0], tabMatchTexts...)
+		state.setTabCompletions(tabMatchTexts)
+	}
 }
 
 func UnmodifiedDir(path string) string {
