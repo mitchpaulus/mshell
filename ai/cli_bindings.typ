@@ -567,17 +567,20 @@ A binding with sequence $s$ of length $n$ *completes at key* $i$ when
 + each gap $t_(j+1) - t_j$ in that range is at most the binding's `within`, if it has one;
 + the gap before its first key, $t_(i-n+1) - t_(i-n)$, is at least its `idleBefore`, if it has one (the first key of all has no gap before it, and passes);
 + the gap after its last key, $t_(i+1) - t_i$, is at least its `idleAfter`, if it has one (no next key passes);
-+ none of $k_(i-n+1) dots k_(i-1)$ belongs to a binding that completed earlier;
++ no paste comes between its keys;
++ it does not start inside a binding in force: for each binding in force with keys $a dots b$, either $i - n + 1 > b$ or $i - n + 1 <= a$;
 + it is not declined (a `bindingFunc` that returns `none`).
 
-At each key, of the bindings that complete there the *longest* is used. Then:
+At each key, of the bindings that complete there the *longest* comes into force,
+and replaces the bindings in force that start at or after its first key. Then:
 
-- every key that is part of a used binding has the effect of that binding only, applied to the line as it was before the binding's first key;
+- every key that is part of a binding in force has the effect of that binding only, applied to the line as it was before the binding's first key;
 - every other key has the effect of its own one-key action: its binding of length one, or, for a text key without one, inserting its text;
   a key that is neither (an unbound `ctrl-x`) does nothing.
 
 The longest wins because its first keys were typed, and shown, on the way to it: in `x ; r` with bindings `; r` and `x ; r`, the user typed `x` first.
-A conflict rule (section 6.3) makes "longest" unique, since two bindings that complete at the same key with the same length have the same keys.
+A binding in force can be replaced only by a longer one that contains all of its keys, and the conflict rule (section 6.3) keeps that from happening to an effect,
+which has already run. It also makes "longest" unique, since two bindings that complete at the same key with the same length have the same keys.
 
 == Pure edits act at once
 
@@ -609,23 +612,27 @@ The abbreviation triggers are pure edits too, so in `; r` the `;` expands the wo
 
 A key whose own action is an effect (an unbound named key counts as doing nothing, which is not an effect) cannot be done provisionally.
 
-- If its sequence is a proper prefix of another binding's, the two *conflict*: either the effect would run and then be wrong, or the editor would have to wait to know.
-  Emacs refuses the same thing ("Key sequence ... starts with non-prefix key"). The newer binding wins and the older becomes inert (section 5.3).
+- If its sequence *ends a proper prefix* of another binding's sequence, the two *conflict*: either the effect would run and then be wrong, or the editor would have to wait to know.
+  The plain case is a prefix: `ctrl-x` against `ctrl-x ctrl-e`. Emacs refuses the same thing ("Key sequence ... starts with non-prefix key").
+  The other case is a sequence inside a longer one: `; r` against `x ; r q`, where `; r` would run after `x ; r` and `q` would then complete over it.
+  The newer binding wins and the older becomes inert (section 5.3).
   So binding `ctrl-x ctrl-e` makes a binding of `ctrl-x` alone inert, and the reverse.
+- Two bindings with the same keys conflict too, whatever they do.
 - A pending key with no action of its own (an unbound `ctrl-x` that begins `ctrl-x ctrl-e`) shows nothing in the line.
   The editor shows the pending keys below the line (`ctrl-x -`), as Emacs does in its echo area, and waits for the next key without a time limit, unless the binding has `within`.
   Escape, unless bound in the sequence, cancels a pending sequence of such keys. (Emacs uses Ctrl-G for this; here Ctrl-G edits the line in the user's editor.)
 
 Pure edits never conflict with longer sequences: `space` is bound to `[editExpandAbbr editSelfInsert]`, and `space space` can still be bound.
 
-Two things make an effect wait after its last key, and they wait the same way:
+A pure binding may complete while a longer one is still possible: `| |` bound to `['| less' editInsert]` and `| | x` bound too.
+Then it acts at once, like any pure edit, and stays undoable: if `x` follows, the line goes back to before the first `|` and `| | x` runs.
 
-- `idleAfter` (section 6.4): the effect runs only if no key comes for that long.
-- An *overlap*: a binding that completes while a longer one is still possible, as with `; r` while `x ; r q` is pending after `x ; r`.
-  The `; r` effect is held until the longer one completes or fails: at the next key, or when `x ; r q`'s `within` runs out.
-  `bindingAdd` warns when it creates an overlap.
+An earlier draft let an effect complete while a longer binding was possible, and held it until the longer one completed or failed.
+The model (section 13) shows why that is wrong: the longer binding's definition says it replaces the shorter one, which has already run.
+Holding the effect instead makes it wait for a key that may never come. The conflict rule removes the case.
 
-These are the only places where the editor acts on time with no key arriving, so it reads with a deadline, as the file manager already does for terminal replies (`ai/terminal-query`).
+So one thing makes an effect wait after its last key: `idleAfter` (section 6.4), the effect runs only if no key comes for that long.
+It is the only place where the editor acts on time with no key arriving, so it reads with a deadline, as the file manager already does for terminal replies (`ai/terminal-query`).
 While it waits, the keys are on the screen as typed; only the effect is late, by an amount the binding declared.
 
 == Time
@@ -667,13 +674,14 @@ The keymap of each mode is a trie keyed by the key code of section 5.1 (a code p
 
 On each key $k$ at time $t$:
 
-+ Let $P$ be the pending keys. For each suffix of $P + [k]$ from the longest, look it up in the trie; drop matches whose gaps break `within` or `idleBefore`.
-  Note the longest suffix that is a complete binding, and whether any suffix is a proper prefix of a binding.
-+ If a complete binding was found and no longer binding is still possible: if it has `idleAfter`, read with that deadline;
-  a key that arrives in time abandons the binding (go to step 4 for $k$, then handle the new key).
-  Otherwise restore the snapshot before its first key and run it; if it declines, go to step 4. Clear $P$.
-+ Else if some suffix can still grow: do $k$'s own action now if it is a pure edit, otherwise show it as pending; push $k$ (dropping keys from the front of $P$ that no growing suffix uses).
-+ Else: do $k$'s own action, clear $P$.
++ Let $W$ be the pending keys and $k$. For each suffix of $W$ from the longest, look it up in the trie; drop matches whose gaps break `within` or `idleBefore`,
+  and those that start inside a binding in force.
+  Note the longest suffix that is a complete binding.
++ If one was found: if it has `idleAfter`, read with that deadline; a key that arrives in time abandons the binding (go to step 3 for $k$, then handle the new key).
+  Otherwise restore the snapshot before its first key and run it; if it declines, go to step 3.
+  If it is an effect, clear the pending keys. If it is pure, it comes into force, and the pending keys are trimmed as in step 3.
++ Else: do $k$'s own action, and keep as pending the keys of $W$ from the first one from which a suffix is still a proper prefix of a binding (none: clear them).
+  If a pending key has no own action, show the pending keys below the line.
 
 At most 8 lookups per key, each a walk of at most 8 trie nodes, with no allocation. A key that is not the start of any binding does one lookup and no snapshot.
 This is the longest-match-ending-here search of the definition in section 6.1; section 13 says how the two are checked against each other.
@@ -937,14 +945,17 @@ The expected cost for an unbound text key is one trie lookup, well under the mic
 
 Two things are checked mechanically, in the style of `ai/terminal-query` and `TestAbbrSiteFromLineTokens`.
 
-+ *A model of resolution* (`ai/key-bindings/KeyResolution.tla`), over a small keymap (text keys, a named key, a prefix, pure and effect actions, the three timing fields), keys with times, and pastes. Properties:
-  - `NoLag`: after a key whose own action is a pure edit, the line shown includes it before the next key is read.
-  - `ExactRollback`: a binding's action runs on exactly the line that preceded its first key.
-  - `EffectsNeverUndone`: no effect runs for a key that a later key makes part of a binding.
-  - `PasteInert`: a paste never completes or continues a sequence.
-  - `Bounded`: at most 8 pending keys; the editor waits on a deadline only for `idleAfter` and the overlap case of section 6.3, and never longer than the longest declared time.
-  - `TextNeverLate`: no deadline wait delays the display of a typed key; only effects wait.
-  - `MatchesDefinition`: the final line equals the declarative result of section 6.1.
++ *A model of resolution* (`ai/key-bindings/KeyResolution.tla`, run with `check.sh`), over a table of six bindings
+  (text keys and a key that types nothing, pure and effect actions, a prefix, a longer pure binding over a shorter one, a conflict, all three timing fields)
+  and every input of up to five events, keys and pastes, each 0 or 2 ticks after the one before. Properties:
+  - `StepMatches`: after every event, the line, the effects that ran and the bindings in force are those of the definition in section 6.1.
+    This is no lag (every key's action is on the line before the next key is read) and exact rollback (a binding runs on the line before its first key) together.
+  - `EffectsNeverUndone`: an effect in force is never replaced by a longer binding.
+  - `PasteInert`: no binding's keys span a paste.
+  - `Bounded`: at most 8 pending keys.
+
+  Two broken variants must fail: with every binding active (no conflict rule), `EffectsNeverUndone` fails on `b a a` with `b` an effect and `b a a` a binding;
+  with a binding run on the line as it is rather than its snapshot, `StepMatches` fails. The design passes, 219,345 states.
 + *An oracle test in Go*: the declarative definition written plainly (try every binding at every key) against the trie algorithm,
   on random keymaps and random key streams with random gaps, comparing the line, the cursor and the effects run.
 
@@ -957,7 +968,7 @@ Two things are checked mechanically, in the style of `ai/terminal-query` and `Te
 + *Types and builtins.* The declarations in `builtinDeclSource`, `Key` among them; `bindingAdd`, `bindingErase`, `bindingList` in `Evaluator.go`, `BuiltInList.go` and `TypeCoreBuiltins.go`; inert entries and messages.
 + *Ops.* One function that runs an `[EditOp]` on `TermState`. Each existing case in `HandleToken` becomes an op; the cases themselves go.
 + *Defaults.* The table of section 5.4, added before `init.msh`. `HandleToken` becomes: decode, resolve, run.
-+ *Resolution.* The pending array, snapshots, the trie per mode, the timing fields; the deadline read for `idleAfter` and overlaps.
++ *Resolution.* The pending array, snapshots, the trie per mode, the timing fields; the deadline read for `idleAfter`.
 + *Modes.* `modeInsert` and `modeComplete`.
 + *`editRun` and `editRunOps`.* Leave the line, run in the foreground, redraw with the line kept or with the returned ops applied. `editInEditor` in `lib/std.msh`.
 + *Kitty protocol.* Query, push and pop around every handoff of the terminal. This touches `ai/terminal-control`, whose model should cover the push and pop.
