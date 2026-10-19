@@ -52,9 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `☁` cloud only, `✓` on this device, `●` always keep on this device, `↻` syncing, `✗` sync error.
   Folders show the same status as in Explorer.
   Cloud only files are not previewed, so scrolling past them no longer downloads them.
+- Under WSL, the file manager does not preview cloud only OneDrive files on Windows drives (`/mnt/c`), so scrolling past them does not download them.
 - The file manager shows file sizes in a column next to the file names, in `ls -h` style (`556`, `5.4K`, `41K`, `1.2M`).
   Each unit has its own color: bytes dim, kilobytes plain, megabytes cyan, gigabytes yellow, and larger magenta.
   Directories have no size.
+- The file manager's bottom row summarizes the directory: `3 directories, 12 files, 4.5 MiB`.
+  The total size of the files is shown once every file's size is known without extra work:
+  always on Windows, and on other systems once every file has been on screen.
 - Completion definitions can return a dictionary instead of a list, to choose what Tab offers:
   `values`, files matching glob patterns (`files`), preferred files with a fallback to the rest (`preferredFiles`), directories only (`dirs`), or executables on the path (`binaries`).
 - `\{` and `\}` escapes in double quoted strings and format strings, for literal braces.
