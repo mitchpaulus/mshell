@@ -31,25 +31,22 @@ Everything stays on this branch, including the full implementation (Mitchell, 20
    - Tests: `Bindings_test.go` (enum order, defaults in force, key round trip, CSI decoding, ESC+unbound key, and `TestResolveMatchesDefinition`, the random oracle; mutation-checked), `tests/success/bindings.msh`, `tests/typecheck_fail/binding_*.msh`.
    - Verified by hand in a pty (`/tmp/.../scratchpad/fake_term.py` style harness): `jf` accept with rollback, `;r` editRun keeping the line, Ctrl-X prefix display, `msh keys` in legacy and kitty modes.
 
+4. Docs, CLI and design sync (this commit):
+   - `doc/getting-started.inc.html`: "Key bindings" section after "Abbreviations" (Binding, keys, terminal encodings and kitty, `msh keys`, every EditOp, `editRun`/`editRunOps`/`editInEditor`, quotations, sequences and timing, modes, default keymap, builtins and inert bindings). Example code was run and type checked, and rendered with `msh --html`; the `msh keys` sample is real pty output.
+   - `doc/functions.inc.html` (`bindingAdd`, `bindingErase`, `bindingList`, `editInEditor`), `doc/type_system.inc.html`, `doc/mshell.md` (types and enums named; the old key list replaced by a pointer). Docs rebuilt.
+   - CHANGELOG: Added (key bindings, Ctrl-G, kitty protocol, `msh keys`, functions) and Changed (personal sequences removed; modified keys decoded).
+   - `msh keys` in `--help`, `__mshCompletion`, and the bash/fish/nushell/elvish generators.
+   - Design doc section 10: the kitty push/pop has raw mode's lifetime, which `ai/terminal-control` already models as `terminalMode`; not extended. Open question on the setting closed (`MSH_KITTY_KEYS`).
+
 ## State of the tests
 
-- `tests/test.sh`: all pass. `tests/typecheck_test.sh`: 501 pass.
-- `go test`: all pass **except `TestPromptBuiltinsDocumented`**, which needs the user docs (next step).
-  It requires `doc/mshell.md` to name each new enum in backticks and `doc/getting-started.inc.html` to show every member in `<code>member</code>` (all 49 NamedKey members, all EditOp members, etc.).
+- `tests/test.sh`: all pass. `tests/typecheck_test.sh`: 501 pass. `go test`: all pass.
 
 ## Remaining work
 
-1. **User docs** (makes the failing test pass):
-   - `doc/getting-started.inc.html`: a "Key bindings" section after "Abbreviations": the Binding record, Key values, every EditOp, EditMode, NamedKey (all F keys), ModifiedKey, the default keymap table, `msh keys`, `MSH_KITTY_KEYS`, the conflict rule, `within`/`idleBefore`, `editInEditor`. Generate code blocks with `msh --html`.
-   - `doc/functions.inc.html`: `bindingAdd`, `bindingErase`, `bindingList`, `editInEditor`.
-   - `doc/type_system.inc.html`: the new type names; `doc/mshell.md`: name the enums (agent doc, keep interactive detail minimal); replace the key list in `mshell.md` (~line 430) with a pointer.
-   - Rebuild: `cd doc && msh build.msh`.
-2. **CHANGELOG** (Unreleased/Added): key bindings, `msh keys`, kitty protocol; Functions: `bindingAdd`, `bindingErase`, `bindingList`, `editInEditor`. Changed: the hard-coded `jf`, `vl`, `qq`, `;r`, `;j`, F1, Alt-D bindings are gone (move to init.msh); Escape followed by an unbound key no longer loses... (it acts as the key, as before).
-3. **Shell completions** for `msh keys`: add `'keys'` to `subcommands` in `__mshCompletion` (lib/std.msh), and to the fish/bash/nushell/elvish generators if `runCompletionsCommand` lists subcommands.
-4. **Mitchell's init.msh** (outside the repo, `~/dotfiles/.config/msh/init.msh`): tell him to add the snippet from `ai/cli_bindings.typ` section 11 (jf, vl, qq, ;r, ;j, F1 → lf, Alt-D → date). Do not edit his dotfiles without asking.
-5. **Design doc sync**: section 10 still says the push/pop "belong in the ai/terminal-control model"; it is tied to `enterRawMode`/`leaveRawMode` instead. Decide whether to extend that TLA+ model or just state the pairing.
-6. Optional: VS Code grammar for the `key…`/`edit…` names is not needed (they are ordinary words).
-7. Review: `go vet` is clean apart from the pre-existing `UnreadByte` signature warning (Main.go). `TestKeyPathAllocations` passes (typing stays allocation-free).
+1. **Mitchell's init.msh** (outside the repo, `~/dotfiles/.config/msh/init.msh`): he adds the snippet from `ai/cli_bindings.typ` section 11 himself (jf, vl, qq, ;r, ;j, F1, Alt-D). Not edited by Claude.
+2. Use it for a while in real terminals (kitty-protocol and legacy, inside tmux) before merging; tune `within`/`idleBefore`.
+3. PR to main when Mitchell says so.
 
 ## Useful commands
 

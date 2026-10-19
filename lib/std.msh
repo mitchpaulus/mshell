@@ -471,7 +471,7 @@ end
 def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
     ['-h' '--help' '--html' '--lex' '--parse' '--type-check-only' '--version' '-c' '-'] options!
-    ['lsp' 'bin' 'edit' 'completions'] subcommands!
+    ['lsp' 'bin' 'edit' 'completions' 'keys'] subcommands!
 
     @input len 0 > if
         @input :0: first!

@@ -667,6 +667,7 @@ func main() {
 			fmt.Println("Usage: msh completions <shell>")
 			fmt.Println("Usage: msh lsp")
 			fmt.Println("Usage: msh fm")
+			fmt.Println("Usage: msh keys")
 			fmt.Println("")
 			fmt.Println("Options:")
 			fmt.Println("  --html       Render the input as HTML")
@@ -682,6 +683,7 @@ func main() {
 			fmt.Println("  edit         Edit common msh files")
 			fmt.Println("  completions  Print shell completion script")
 			fmt.Println("  fm           Open the built-in file manager")
+			fmt.Println("  keys         Show each key pressed as a key binding writes it")
 			os.Exit(0)
 			return
 		} else if arg == "--version" {
@@ -4771,7 +4773,7 @@ _msh_completion() {
             COMPREPLY=( $(compgen -W "--html --lex --parse --version --help -h -c" -- "$cur") )
             return 0
         fi
-        COMPREPLY=( $(compgen -W "bin edit lsp completions" -- "$cur") )
+        COMPREPLY=( $(compgen -W "bin edit lsp completions keys" -- "$cur") )
         return 0
     fi
 
@@ -4821,7 +4823,7 @@ func fishCompletionScript() string {
     complete -c $cmd -f -s c -r -d 'Execute INPUT as the program'
     complete -c $cmd -f -s h -l help -d 'Show help'
 
-    complete -c $cmd -f -n '__fish_use_subcommand' -a 'bin edit lsp completions'
+    complete -c $cmd -f -n '__fish_use_subcommand' -a 'bin edit lsp completions keys'
     complete -c $cmd -f -n '__fish_seen_subcommand_from bin' -a 'add remove list path edit audit debug'
     complete -c $cmd -f -n '__fish_seen_subcommand_from edit' -a 'init'
     complete -c $cmd -x -n '__fish_seen_subcommand_from completions' -a 'bash fish nushell elvish'
@@ -4838,7 +4840,7 @@ func nushellCompletionScript() string {
 }
 
 def "msh_commands" [] {
-  [bin edit lsp completions]
+  [bin edit lsp completions keys]
 }
 
 def "msh_bin_subcommands" [] {
@@ -4906,7 +4908,7 @@ export extern "mshell completions" [
 func elvishCompletionScript() string {
 	return `fn _msh_complete { |@args|
   if (== (count $args) 0) {
-    put bin edit lsp completions --html --lex --parse --version --help -h -c
+    put bin edit lsp completions keys --html --lex --parse --version --help -h -c
     return
   }
 

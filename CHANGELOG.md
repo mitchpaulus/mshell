@@ -73,10 +73,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `runes` splits a string into its runes.
   - `toRune` makes a rune from a code point or a one-character string, giving `none` otherwise.
   - `toInt` gives a rune's code point.
+- Key bindings: every key of the interactive shell is a binding, which `init.msh` can add, replace or remove:
+  `{keys: [r'x' keyCtrl r'e' keyCtrl], action: [(editInEditor) editRunOps] bindingOps} bindingAdd`.
+  Keys are typed values (a rune, a named key such as `keyF5`, or either with `keyCtrl`, `keyAlt`, `keyShift`, `keySuper`), so a misspelled key is a type error.
+  A binding runs a list of editor operations (`editAccept`, `editClearScreen`, `editRun`, ...), or a quotation that returns them from the line.
+  A key that starts a longer sequence still types at once, and is taken back if the sequence completes; optional `within` and `idleBefore` times keep a sequence of letters from firing while you type.
+  `editRun` runs a quotation with the terminal, such as a file manager, and keeps the line.
+- Ctrl-G edits the line in `$EDITOR`.
+- The interactive shell uses the kitty keyboard protocol in terminals that have it, so Escape, Ctrl-I and Tab, and Ctrl-Shift chords are distinct keys.
+  Set `MSH_KITTY_KEYS=0` to turn it off.
+- `msh keys` shows each key pressed as a binding writes it, with the bytes the terminal sent.
+- Functions for key bindings
+  - `bindingAdd`, `bindingErase` and `bindingList` manage them.
+  - `editInEditor` edits the line in `$EDITOR`, for `editRunOps`.
 
 ### Changed
 
 - The interactive shell has no built-in aliases; add abbreviations to `init.msh` instead.
+- The interactive shell's personal key sequences are gone: `jf`, `vl`, `qq`, `;r`, `;j`, F1 and Alt-D.
+  Letters typed in those pairs now appear at once, and `vlc` and `qq` can be typed. Add any you want back to `init.msh` with `bindingAdd`.
+- Modifiers on Home, End, the arrows and Delete, and Alt with any key, are now read as keys that can be bound, instead of being dropped.
 - The interactive shell writes a debug log only when started with `--debug`.
   The log is `mshell.log` in the history directory, readable only by you, instead of `/tmp/mshell.log`.
   Without `--debug`, no log file is opened, so a key press no longer waits on an fsync,

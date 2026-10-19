@@ -888,8 +888,11 @@ Keys are only as good as the decoder under them. Three changes there, all below 
   fish's experience says terminals get it partly wrong (it turns the protocol off on Konsole and on old iTerm),
   so the shell needs the same way out: one setting that keeps the legacy encoding.
 
-The push and pop are a new handoff of the terminal, and belong in the `ai/terminal-control` model: a crash or a signal between push and pop
-must not leave the user's terminal sending escape codes for every key.
+The push and pop are part of raw mode: `enterRawMode` pushes after it enables bracketed paste, and `leaveRawMode` pops before it disables it,
+so the flags have exactly the lifetime of raw mode, on every path that leaves it (a command, `editRun`, the file manager, exit).
+The `ai/terminal-control` model covers that lifetime as its `terminalMode` (`shellRaw` / `shellCooked`), and does not model bracketed paste separately either;
+a separate variable would only restate the pairing, so the model is not extended.
+A crash or `SIGKILL` while the editor reads a line leaves the flags pushed, as it leaves raw mode and bracketed paste on; `reset` clears all three.
 
 #note[
 *Chords, later, and probably not.* With flags 2 and 8 the terminal reports releases, so a binding could require its keys to be held down _together_, as firmware combos and keyd's `j+k` do.
@@ -972,7 +975,7 @@ Two things are checked mechanically, in the style of `ai/terminal-query` and `Te
 + *Resolution.* The pending array, snapshots, the trie per mode, the timing fields.
 + *Modes.* `modeInsert` and `modeComplete`.
 + *`editRun` and `editRunOps`.* Leave the line, run in the foreground, redraw with the line kept or with the returned ops applied. `editInEditor` in `lib/std.msh`.
-+ *Kitty protocol.* Query, push and pop around every handoff of the terminal. This touches `ai/terminal-control`, whose model should cover the push and pop.
++ *Kitty protocol.* Query at startup; push and pop with raw mode (section 10).
 + *`msh keys`.* The CLI subcommand of section 10.1, with its shell completions.
 + *Tests.* The oracle test and the model (section 13); `tests/success` for add, replace, erase, list and inert entries; `tests/typecheck_fail` for a `bindingFunc` of the wrong type and an `editRun` that leaves a value or an `editRunOps` that returns the wrong type.
 + *Documentation.* A "Key bindings" section in `getting-started.inc.html` after "Abbreviations", with the default table; the builtins in `functions.inc.html`; the type names in `type_system.inc.html`;
@@ -980,7 +983,7 @@ Two things are checked mechanically, in the style of `ai/terminal-query` and `Te
 
 = Open questions
 
-+ *A setting for the kitty protocol*, for terminals that implement it badly (section 10). An environment variable, as `MSH_CELL_PIXELS` is for the file manager, or a builtin?
++ *A setting for the kitty protocol*, for terminals that implement it badly (section 10). Settled: the environment variable `MSH_KITTY_KEYS=0`, as `MSH_CELL_PIXELS` is for the file manager.
 + *Undo.* A binding's program is one undo step, and a rollback is not an undo step at all; both need the editor to have undo first.
 + *A script builtin that replays keys* (`[{key: Key, ms: int}]` to an `EditState`), so users can test sequences and `within` the way the Go tests do.
 + *More named keys.* The kitty protocol also reports keypad keys, media keys and the modifier keys themselves; they can be added to `NamedKey` when someone binds one.

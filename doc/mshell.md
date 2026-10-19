@@ -425,19 +425,7 @@ Standard input is used when no file or `-c` is given and stdin is not a terminal
 or explicitly with `-` (`some-command | msh - [ARG]..`).
 With `-`, arguments after the `-` are positional arguments to the script.
 
-History search is prefix-based and case-insensitive.
-The prefix is whatever is currently in the input buffer;
-editing the buffer resets the prefix for the next search.
-
-- Ctrl-P: search backward through history by prefix
-- Ctrl-N: search forward through history by prefix
-- Ctrl-Y: accept the inline history completion
-- Ctrl-Space: insert a literal space without expanding abbreviations
-- Alt-.: insert the last argument from history; repeat to cycle older entries
-- Tab: complete the current token; press Tab again to cycle matches and fill the input
-- Shift-Tab: cycle completion backward when matches are active
-- Alt-Shift-R: forget measured text widths and measure again; use it after reattaching, changing fonts, or when the line looks wrong
-- Ctrl-N/Ctrl-P: when cycling completions, move forward/backward through matches
+The interactive shell's keys are bindings set in `init.msh` with `bindingAdd`; see Key bindings in the Getting Started documentation.
 
 ### Definition-based completions
 
@@ -762,9 +750,10 @@ A generic cannot be a union member.
 `match` takes a union apart by kind (`int n :`, `list xs :`), binding the member's own type.
 
 `type Name = T` is an alias, interchangeable with `T`; it may be recursive through a list, dict, field, quotation or enum (`type Person = {name: str, friends: [Person]}`).
-Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {Json}`, what `parseJson` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`, `PromptInfo`, `Abbr`, `AbbrInfo`, `Encrypted` (`{nonce: binary, ciphertext: binary, tag: binary}`); and `UrlEncodable` (`str | path | int | [str | path | int]`), the values `urlEncode` takes in a dict.
+Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {Json}`, what `parseJson` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`, `PromptInfo`, `Abbr`, `AbbrInfo`, `Key` (`rune | NamedKey | ModifiedKey`), `EditState`, `Binding`, `Encrypted` (`{nonce: binary, ciphertext: binary, tag: binary}`); and `UrlEncodable` (`str | path | int | [str | path | int]`), the values `urlEncode` takes in a dict.
 The interactive prompt's enums are built in: `PromptItem`, `Base16Color`, `BaseBrightness`, `TextAttribute`, `CursorShape`; so is `Cipher` (`cipherAesGcm | cipherChaCha20Poly1305 | cipherXChaCha20Poly1305`), which `encrypt` and `decrypt` take.
 The abbreviation enums are built in too: `AbbrMatch`, `AbbrPosition`, `AbbrExpansion`.
+So are the key binding enums: `NamedKey` (`keyEnter`, `keyF1`, ...), `ModifiedKey` (`keyCtrl`, `keyAlt`, `keyShift`, `keySuper`), `EditMode`, `EditOp` (`editAccept`, `editRun`, ...), `BindingAction`.
 Their names and member names (`baseRed`, `attrBold`, `resetStyle`, `cipherAesGcm`, ...) cannot be declared or defined again.
 
 ### New and stored values
