@@ -2034,3 +2034,100 @@ func TestDiagnosticsAfterStartupTopLevel(t *testing.T) {
 		t.Fatalf("init.msh's top level did not run, so its variable is unset: %+v", diags)
 	}
 }
+
+// declarationAt is the locations goto declaration gives at line:char of
+// text, as "uri line:start-end".
+func declarationAt(t *testing.T, s *lspServer, uri protocol.DocumentURI, text string, line, char uint32) []string {
+	t.Helper()
+	doc := &lspDocument{}
+	doc.setText(text)
+	s.documents = map[protocol.DocumentURI]*lspDocument{uri: doc}
+	s.parser = NewMShellParser(NewLexer("", nil))
+	var out []string
+	for _, loc := range s.declaration(protocol.TextDocumentPositionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: line, Character: char},
+	}) {
+		out = append(out, fmt.Sprintf("%s %d:%d-%d", loc.URI, loc.Range.Start.Line, loc.Range.Start.Character, loc.Range.End.Character))
+	}
+	return out
+}
+
+// TestDeclarationInDocument: goto declaration on a type name, an enum
+// name, an enum member and a definition goes to its declaration in the
+// document, counting columns in UTF-16 code units; a word in a string or
+// a builtin type has none.
+func TestDeclarationInDocument(t *testing.T) {
+	uri := protocol.DocumentURI("file:///decl.msh")
+	text := "type P = {a: Shape}\n" +
+		"enum Shape = circle float | dot end\n" +
+		"enum Box[a] = box [a] | empty end\n" +
+		"def area (Box[int] Shape -- P)\n" +
+		"    match circle r : 1, Shape s : 2, end\n" +
+		"end\n" +
+		"\"😀\" 2.0 circle area \"Shape\" as Json\n"
+	cases := []struct {
+		line, char uint32
+		want       string
+	}{
+		{0, 14, "file:///decl.msh 1:5-10"},  // Shape in a type body
+		{3, 10, "file:///decl.msh 2:5-8"},   // Box in Box[int]
+		{3, 20, "file:///decl.msh 1:5-10"},  // Shape in a signature
+		{3, 28, "file:///decl.msh 0:5-6"},   // P in a signature
+		{4, 12, "file:///decl.msh 1:13-19"}, // circle as a pattern
+		{4, 26, "file:///decl.msh 1:5-10"},  // Shape as a type pattern
+		{6, 10, "file:///decl.msh 1:13-19"}, // circle after a non-BMP rune
+		{6, 16, "file:///decl.msh 3:4-8"},   // area, the definition
+		{6, 23, ""},                         // Shape in a string
+		{6, 33, ""},                         // the builtin Json
+	}
+	s := &lspServer{}
+	for _, c := range cases {
+		got := strings.Join(declarationAt(t, s, uri, text, c.line, c.char), ", ")
+		if got != c.want {
+			t.Errorf("%d:%d: got %q, want %q", c.line, c.char, got, c.want)
+		}
+	}
+}
+
+// TestDeclarationInStartupFile: a name declared in a startup file goes to
+// that file, unless the document is that file or one before it.
+func TestDeclarationInStartupFile(t *testing.T) {
+	dir := t.TempDir()
+	stdPath, initPath := filepath.Join(dir, "std.msh"), filepath.Join(dir, "init.msh")
+	stdText := "def stdOne ( -- int) 1 end\n"
+	initText := "# é\nenum Color = red | green end\ntype Pt = {px: int}\n"
+	var files []lspStartupFile
+	for _, f := range []struct{ path, text string }{{stdPath, stdText}, {initPath, initText}} {
+		if err := os.WriteFile(f.path, []byte(f.text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := parseMShellInput(f.text, &TokenFile{f.path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, lspStartupFile{path: f.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items)})
+	}
+	s := &lspServer{startupFiles: files}
+	other := fileURI(filepath.Join(dir, "other.msh"))
+	text := "green stdOne { px: 1 } as Pt Color\n"
+	for _, c := range []struct {
+		char uint32
+		want string
+	}{
+		{1, string(fileURI(initPath)) + " 1:19-24"},
+		{8, string(fileURI(stdPath)) + " 0:4-10"},
+		{26, string(fileURI(initPath)) + " 2:5-7"},
+		{29, string(fileURI(initPath)) + " 1:5-10"},
+	} {
+		got := strings.Join(declarationAt(t, s, other, text, 0, c.char), ", ")
+		if got != c.want {
+			t.Errorf("0:%d: got %q, want %q", c.char, got, c.want)
+		}
+	}
+	// The standard library is checked without the init file, so the init
+	// file's declarations are not its own.
+	if got := declarationAt(t, s, fileURI(stdPath), "green\n", 0, 1); len(got) != 0 {
+		t.Errorf("the standard library itself: %v", got)
+	}
+}
