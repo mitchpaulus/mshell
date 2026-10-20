@@ -2106,7 +2106,7 @@ func TestDeclarationInStartupFile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		files = append(files, lspStartupFile{path: f.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items)})
+		files = append(files, lspStartupFile{path: f.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items), doc: newStartupDoc(f.text)})
 	}
 	s := &lspServer{startupFiles: files}
 	other := fileURI(filepath.Join(dir, "other.msh"))

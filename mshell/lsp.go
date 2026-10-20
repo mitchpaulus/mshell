@@ -280,12 +280,22 @@ func buildHoverIndex(base *CoreBase, stdlibDefs []MShellDefinition) (map[string]
 }
 
 // lspStartupFile is one startup file's definitions and declarations, and
-// its top-level code, which a document is checked after.
+// its top-level code, which a document is checked after. doc is the text
+// they were parsed from, for the positions of their tokens; the tokens'
+// lexemes share its string, so keeping it costs only its lines.
 type lspStartupFile struct {
 	path  string
 	defs  []MShellDefinition
 	decls []MShellParseItem
 	top   *MShellFile
+	doc   *lspDocument
+}
+
+// newStartupDoc is a startup file's text as a document.
+func newStartupDoc(text string) *lspDocument {
+	doc := &lspDocument{}
+	doc.setText(text)
+	return doc
 }
 
 // loadStartupForLSP reads the startup files for their definitions and
@@ -328,16 +338,19 @@ func loadStartupFilesForLSP() ([]lspStartupFile, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed, err := parseMShellInput(string(source), &TokenFile{stdlibSpec.path})
+	text := string(source)
+	parsed, err := parseMShellInput(text, &TokenFile{stdlibSpec.path})
 	if err != nil {
 		return nil, nil, err
 	}
-	files := []lspStartupFile{{path: stdlibSpec.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items), top: startupTopLevel(parsed)}}
+	files := []lspStartupFile{{path: stdlibSpec.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items), top: startupTopLevel(parsed), doc: newStartupDoc(text)}}
 	var startupErrs []string
 	if source, err := os.ReadFile(initSpec.path); err == nil {
 		init := lspStartupFile{path: initSpec.path}
-		if parsed, err := parseMShellInput(string(source), &TokenFile{initSpec.path}); err == nil {
+		text := string(source)
+		if parsed, err := parseMShellInput(text, &TokenFile{initSpec.path}); err == nil {
 			init.defs, init.decls, init.top = parsed.Definitions, declarationItems(parsed.Items), startupTopLevel(parsed)
+			init.doc = newStartupDoc(text)
 		} else {
 			logLSP(fmt.Sprintf("init file %s does not parse (%v); proceeding without it", initSpec.path, err))
 			startupErrs = append(startupErrs, fmt.Sprintf("the init file %s does not parse: %v", initSpec.path, err))
@@ -1900,7 +1913,7 @@ func (s *lspServer) declaration(params protocol.TextDocumentPositionParams) []pr
 
 	s.parser.ResetInput(doc.Text)
 	if file, err := s.parser.ParseFile(); err == nil && file != nil {
-		if tok, ok := findDeclaration(name, file.Definitions, declarationItems(file.Items)); ok {
+		if tok, ok := findDeclaration(name, file.Definitions, file.Items); ok {
 			return []protocol.Location{{URI: params.TextDocument.URI, Range: doc.tokenRange(tok)}}
 		}
 	}
@@ -1912,9 +1925,7 @@ func (s *lspServer) declaration(params protocol.TextDocumentPositionParams) []pr
 	n := startupFilesBefore(documentPath(params.TextDocument.URI), paths...)
 	for _, f := range s.startupFiles[:n] {
 		if tok, ok := findDeclaration(name, f.defs, f.decls); ok {
-			if loc, ok := s.fileLocation(f.path, tok); ok {
-				return []protocol.Location{loc}
-			}
+			return []protocol.Location{{URI: fileURI(f.path), Range: f.doc.tokenRange(tok)}}
 		}
 	}
 	return nil
@@ -1922,7 +1933,7 @@ func (s *lspServer) declaration(params protocol.TextDocumentPositionParams) []pr
 
 // findDeclaration is the token that declares name among defs and decls:
 // a definition's name, a type alias's name, an enum's name, or an enum
-// member's name.
+// member's name. Items in decls other than declarations are skipped.
 func findDeclaration(name string, defs []MShellDefinition, decls []MShellParseItem) (Token, bool) {
 	for _, item := range decls {
 		switch d := item.(type) {
@@ -1949,23 +1960,6 @@ func findDeclaration(name string, defs []MShellDefinition, decls []MShellParseIt
 	return Token{}, false
 }
 
-// fileLocation is the location of a token in the file at path. The file's
-// text is needed to count columns in UTF-16 code units: the open
-// document's, if the file is open, else the file's on disk.
-func (s *lspServer) fileLocation(path string, tok Token) (protocol.Location, bool) {
-	uri := fileURI(path)
-	doc, ok := s.documents[uri]
-	if !ok {
-		text, err := os.ReadFile(path)
-		if err != nil {
-			return protocol.Location{}, false
-		}
-		doc = &lspDocument{}
-		doc.setText(string(text))
-	}
-	return protocol.Location{URI: uri, Range: doc.tokenRange(tok)}, true
-}
-
 // fileURI is the file URI of path; documentPath is its inverse.
 func fileURI(path string) protocol.DocumentURI {
 	p := filepath.ToSlash(path)
@@ -1981,6 +1975,7 @@ func fileURI(path string) protocol.DocumentURI {
 func (d *lspDocument) literalAt(pos protocol.Position) string {
 	lexer := NewLexer(d.Text, nil)
 	lexer.allowUnterminatedString = true
+	lexer.skipValues = true // only lexemes are compared
 	line, col := int(pos.Line), d.runeCol(pos)
 	for {
 		tok := lexer.scanToken()
