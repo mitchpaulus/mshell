@@ -64,3 +64,5 @@ mshell/msh-cover
 mshell/msh.exe
 mshell/mshell
 mshell/mshw.exe
+
+mshell/testdata/toml-test/

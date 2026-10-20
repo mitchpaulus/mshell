@@ -10427,11 +10427,11 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot parse a %s as TOML.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
-					parsedData, err := decodeToml(tomlData)
+					dict, err := decodeToml(tomlData)
 					if err != nil {
 						stack.Push(&Maybe{obj: nil})
 					} else {
-						stack.Push(&Maybe{obj: ParseTomlObjToMshell(parsedData)})
+						stack.Push(&Maybe{obj: dict})
 					}
 				case "parseExcel":
 					obj1, err := stack.Pop()

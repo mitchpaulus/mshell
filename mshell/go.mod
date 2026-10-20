@@ -3,7 +3,6 @@ module github.com/mitchpaulus/mshell
 go 1.25
 
 require (
-	github.com/BurntSushi/toml v1.5.0
 	github.com/cespare/xxhash v1.1.0
 	github.com/creack/pty v1.1.24
 	github.com/rivo/uniseg v0.4.7
