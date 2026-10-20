@@ -1623,12 +1623,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 
 	case *MShellParsePrefixQuote:
 		// `.fn body end` pushes (body), then calls fn.
-		mshellParseQuote := MShellParseQuote{
-			Items:      t.Items,
-			StartToken: t.StartToken,
-			EndToken:   t.EndToken,
-		}
-		stack.Push(&MShellQuotation{Tokens: t.Items, Variables: frame.Context.Variables, MShellParseQuote: &mshellParseQuote})
+		stack.Push(&MShellQuotation{Tokens: t.Items, Variables: frame.Context.Variables, MShellParseQuote: t.Quote})
 
 		// The function name is the lexeme without its trailing '.'.
 		lexeme := t.StartToken.Lexeme
@@ -9359,6 +9354,27 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot extract values from a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
+				case "toCsv":
+					// Write a list of string rows, or a grid with a header row, as CSV.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toCsv' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					var out string
+					switch objTyped := obj.(type) {
+					case *MShellList:
+						out, err = rowsToCsv(objTyped)
+					case *MShellGrid:
+						out, err = gridToCsv(objTyped, nil)
+					case *MShellGridView:
+						out, err = gridToCsv(objTyped.Source, objTyped.Indices)
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toCsv' on a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+					if err != nil {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(MShellString{out})
 				case "toDict":
 					// Convert a GridRow to a dictionary.
 					obj, err := stack.Pop()
@@ -13039,6 +13055,17 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				obj, err := stack.Pop()
 				if err != nil {
 					return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot convert an empty stack to a string.\n", t.Line, t.Column))
+				}
+
+				// Values that hold no other values are written as renderValue
+				// would write them, without setting up a renderer.
+				switch v := obj.(type) {
+				case MShellString:
+					stack.Push(v)
+					return SimpleSuccess()
+				case MShellInt, MShellFloat, MShellBool, MShellPath, *MShellDateTime:
+					stack.Push(MShellString{v.ToString()})
+					return SimpleSuccess()
 				}
 
 				strVal, err := renderOrError(obj, flavorStr)

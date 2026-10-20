@@ -140,6 +140,11 @@ Each column can have optional metadata specified as a dictionary immediately aft
             <td>Extract cell values as row-major lists. The result does not include a header row and does not coerce cell types.</td>
             <td><code>(Grid|GridView -- [[a]])</code></td>
         </tr>
+        <tr id="func-toCsv">
+            <td><code>toCsv</code></td>
+            <td>Write a grid as a CSV string: a header row of the column names, then one line per row, each ending with <code>\n</code>. Cells are escaped as <code>toCsvCell</code> does. <code>none</code> is an empty cell, <code>just v</code> is written as <code>v</code>, and any other value is written in its <code>str</code> form.</td>
+            <td><code>(Grid|GridView -- <span class="sig-type sig-type-str">str</span>)</code></td>
+        </tr>
         <tr id="func-gridSetCell">
             <td><code>gridSetCell</code></td>
             <td>Set a single cell value. Returns the modified grid.</td>

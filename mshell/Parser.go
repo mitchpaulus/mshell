@@ -348,6 +348,9 @@ type MShellParsePrefixQuote struct {
 	Items      []MShellParseItem // Items between function and 'end'
 	StartToken Token             // The PREFIXQUOTE token (.filter)
 	EndToken   Token             // The 'end' token
+	// Quote is the body as a quote, made once at parse time so that running
+	// the prefix quote does not build a new one each time.
+	Quote *MShellParseQuote
 }
 
 func (pq *MShellParsePrefixQuote) GetStartToken() Token {
@@ -1703,6 +1706,7 @@ func (parser *MShellParser) ParsePrefixQuote() (*MShellParsePrefixQuote, error) 
 	}
 
 	pq.EndToken = parser.curr
+	pq.Quote = &MShellParseQuote{Items: pq.Items, StartToken: pq.StartToken, EndToken: pq.EndToken}
 	err := parser.Match(parser.curr, END)
 	if err != nil {
 		return pq, err

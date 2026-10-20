@@ -1,0 +1,2 @@
+# toCsv takes string rows, not int rows
+[[1 2]] toCsv w

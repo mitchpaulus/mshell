@@ -217,6 +217,7 @@ var BuiltInList = map[string]struct{}{
 	"tempFileExt": {},
 	"title": {},
 	"toBase": {},
+	"toCsv": {},
 	"toDict": {},
 	"toDt": {},
 	"toFixed": {},

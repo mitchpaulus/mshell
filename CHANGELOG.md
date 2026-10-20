@@ -148,6 +148,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Startup is faster on Linux and macOS: `msh` no longer reads every directory on `PATH` when it starts.
   A command's path is looked up when it first runs, and the full list is read only for completion and `binPaths`.
   A one-line script went from about 25 ms to 7 ms on a machine with 6,000 files on `PATH`.
+- `toCsv` also takes a `Grid` or `GridView`, writing a header row of the column names and then one line per row.
+  `none` is an empty cell, `just v` is written as `v`, and any other value is written in its `str` form.
+  `toCsv` is now a built-in, and is about 25 times faster on a list of rows.
 - Format string interpolations can hold any code: string literals, dictionaries, and nested format strings all work inside `{...}`.
   Interpolations are parsed once when the script is read, not each time the string is built,
   and errors inside them point at the right line and column.
