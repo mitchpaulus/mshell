@@ -280,12 +280,22 @@ func buildHoverIndex(base *CoreBase, stdlibDefs []MShellDefinition) (map[string]
 }
 
 // lspStartupFile is one startup file's definitions and declarations, and
-// its top-level code, which a document is checked after.
+// its top-level code, which a document is checked after. doc is the text
+// they were parsed from, for the positions of their tokens; the tokens'
+// lexemes share its string, so keeping it costs only its lines.
 type lspStartupFile struct {
 	path  string
 	defs  []MShellDefinition
 	decls []MShellParseItem
 	top   *MShellFile
+	doc   *lspDocument
+}
+
+// newStartupDoc is a startup file's text as a document.
+func newStartupDoc(text string) *lspDocument {
+	doc := &lspDocument{}
+	doc.setText(text)
+	return doc
 }
 
 // loadStartupForLSP reads the startup files for their definitions and
@@ -328,16 +338,19 @@ func loadStartupFilesForLSP() ([]lspStartupFile, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed, err := parseMShellInput(string(source), &TokenFile{stdlibSpec.path})
+	text := string(source)
+	parsed, err := parseMShellInput(text, &TokenFile{stdlibSpec.path})
 	if err != nil {
 		return nil, nil, err
 	}
-	files := []lspStartupFile{{path: stdlibSpec.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items), top: startupTopLevel(parsed)}}
+	files := []lspStartupFile{{path: stdlibSpec.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items), top: startupTopLevel(parsed), doc: newStartupDoc(text)}}
 	var startupErrs []string
 	if source, err := os.ReadFile(initSpec.path); err == nil {
 		init := lspStartupFile{path: initSpec.path}
-		if parsed, err := parseMShellInput(string(source), &TokenFile{initSpec.path}); err == nil {
+		text := string(source)
+		if parsed, err := parseMShellInput(text, &TokenFile{initSpec.path}); err == nil {
 			init.defs, init.decls, init.top = parsed.Definitions, declarationItems(parsed.Items), startupTopLevel(parsed)
+			init.doc = newStartupDoc(text)
 		} else {
 			logLSP(fmt.Sprintf("init file %s does not parse (%v); proceeding without it", initSpec.path, err))
 			startupErrs = append(startupErrs, fmt.Sprintf("the init file %s does not parse: %v", initSpec.path, err))
@@ -448,6 +461,8 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 					TriggerCharacters: []string{"@", "$"},
 				},
 				RenameProvider: &protocol.RenameOptions{PrepareProvider: true},
+				DeclarationProvider: true,
+				DefinitionProvider:  true,
 			},
 			ServerInfo: &protocol.ServerInfo{
 				Name:    "mshell",
@@ -583,6 +598,23 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 			return false, s.sendErrorResponse(msg.ID, jsonrpcCodeInternalError, err.Error())
 		}
 		return false, s.sendResult(msg.ID, edit)
+	case "textDocument/declaration", "textDocument/definition":
+		// A type, enum or definition is declared and defined in one place,
+		// so the two requests have one answer.
+		if msg.ID == nil {
+			logLSP(msg.Method + " request missing id")
+			return false, nil
+		}
+		var params protocol.TextDocumentPositionParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeInvalidParams, fmt.Sprintf("invalid %s params: %v", msg.Method, err))
+			return false, nil
+		}
+		locs := s.declaration(params)
+		if len(locs) == 0 {
+			return false, s.sendResult(msg.ID, nil)
+		}
+		return false, s.sendResult(msg.ID, locs)
 	default:
 		if msg.ID != nil {
 			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeMethodNotFound, fmt.Sprintf("method %q not found", msg.Method))
@@ -1863,6 +1895,97 @@ func (s *lspServer) rename(params protocol.RenameParams) (*protocol.WorkspaceEdi
 	}
 
 	return edit, nil
+}
+
+// declaration finds where the word at a position is declared: a `type`
+// alias, an enum or one of its members, or a definition's signature. The
+// document is looked in first, then the startup files it is checked with.
+// Builtin types and words have no source, so they have no declaration.
+func (s *lspServer) declaration(params protocol.TextDocumentPositionParams) []protocol.Location {
+	doc, ok := s.documents[params.TextDocument.URI]
+	if !ok {
+		return nil
+	}
+	name := doc.literalAt(params.Position)
+	if name == "" {
+		return nil
+	}
+
+	s.parser.ResetInput(doc.Text)
+	if file, err := s.parser.ParseFile(); err == nil && file != nil {
+		if tok, ok := findDeclaration(name, file.Definitions, file.Items); ok {
+			return []protocol.Location{{URI: params.TextDocument.URI, Range: doc.tokenRange(tok)}}
+		}
+	}
+
+	paths := make([]string, len(s.startupFiles))
+	for i, f := range s.startupFiles {
+		paths[i] = f.path
+	}
+	n := startupFilesBefore(documentPath(params.TextDocument.URI), paths...)
+	for _, f := range s.startupFiles[:n] {
+		if tok, ok := findDeclaration(name, f.defs, f.decls); ok {
+			return []protocol.Location{{URI: fileURI(f.path), Range: f.doc.tokenRange(tok)}}
+		}
+	}
+	return nil
+}
+
+// findDeclaration is the token that declares name among defs and decls:
+// a definition's name, a type alias's name, an enum's name, or an enum
+// member's name. Items in decls other than declarations are skipped.
+func findDeclaration(name string, defs []MShellDefinition, decls []MShellParseItem) (Token, bool) {
+	for _, item := range decls {
+		switch d := item.(type) {
+		case *MShellTypeDecl:
+			if d.Name == name {
+				return d.NameToken, true
+			}
+		case *MShellEnumDecl:
+			if d.Name == name {
+				return d.NameToken, true
+			}
+			for i, m := range d.Members {
+				if m == name {
+					return d.MemberToks[i], true
+				}
+			}
+		}
+	}
+	for i := range defs {
+		if defs[i].Name == name {
+			return defs[i].NameToken, true
+		}
+	}
+	return Token{}, false
+}
+
+// fileURI is the file URI of path; documentPath is its inverse.
+func fileURI(path string) protocol.DocumentURI {
+	p := filepath.ToSlash(path)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p // C:/x is /C:/x
+	}
+	return protocol.DocumentURI((&url.URL{Scheme: "file", Path: p}).String())
+}
+
+// literalAt is the bare word (a LITERAL token) at a position, or "". Type
+// names, enum members and definition names are all bare words; a word in
+// a string or a comment is not one.
+func (d *lspDocument) literalAt(pos protocol.Position) string {
+	lexer := NewLexer(d.Text, nil)
+	lexer.allowUnterminatedString = true
+	lexer.skipValues = true // only lexemes are compared
+	line, col := int(pos.Line), d.runeCol(pos)
+	for {
+		tok := lexer.scanToken()
+		if tok.Type == EOF || tok.Line-1 > line {
+			return ""
+		}
+		if tok.Type == LITERAL && tokenContainsPosition(tok, line, col) {
+			return tok.Lexeme
+		}
+	}
 }
 
 func collectScopeTokens(items []MShellParseItem) []renameTok {
