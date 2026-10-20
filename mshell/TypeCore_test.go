@@ -545,6 +545,7 @@ func TestCoreDeclarations(t *testing.T) {
 		{`enum E = a end  enum F = a end`, false, "'a' is already declared at 1:10"},
 		{`type T = int  enum T = a end`, false, "'T' is already declared"},
 		{`type Json = int`, false, "'Json' is a built-in type"},
+		{`type Toml = int`, false, "'Toml' is a built-in type"},
 		{`enum E = a | just end`, false, "meaning of its own in match patterns"},
 		{`enum E[a a] = c a end`, false, "the parameter 'a' is written twice"},
 		// Generic enums: arguments, recursion, unions.

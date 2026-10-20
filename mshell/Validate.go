@@ -71,6 +71,7 @@ func newRuntimeTypes() *runtimeTypes {
 	rel := NewRelations(arena)
 	res := coreResolver{arena: arena, names: names, rel: rel, aliases: map[NameId]TypeId{}, self: -1}
 	res.declareJson()
+	res.declareToml()
 	res.declareHtmlNode()
 	(&coreTableBuilder{res: &res, t: &coreTable{}}).builtinAliases()
 	c := &coreChecker{arena: arena, names: names, rel: rel, table: &coreTable{}, res: res, defs: map[NameId]*coreSig{}}

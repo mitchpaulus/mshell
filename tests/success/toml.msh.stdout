@@ -1,0 +1,9 @@
+{"database": {"enabled": true, "ports": [8000, 8001, 8002], "temp": 79.5}, "owner": {"dob": "1979-05-27T15:32:00", "name": "Tom"}, "products": [{"name": "Hammer", "sku": 738594937}, {"color": "gray", "name": "Nail"}], "title": "TOML Example"}
+true
+true
+true
+2
+2
+{"ld": "1979-05-27T00:00:00", "ldt": "1979-05-27T07:32:00", "lt": "07:32:00.5", "odt": "1979-05-27T15:32:00"}
+3
+{"k": "v"}

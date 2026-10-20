@@ -111,6 +111,21 @@ func (r *coreResolver) declareJson() {
 	r.aliases[r.jsonName] = ref
 }
 
+// declareToml adds the built-in recursive alias
+// `type Toml = bool | int | float | str | datetime | [Toml] | {str: Toml}`.
+// TOML has no null.
+func (r *coreResolver) declareToml() {
+	name := r.names.Intern("Toml")
+	idx := r.arena.DeclareAlias(name)
+	ref := r.arena.MakeAliasRef(idx)
+	body := r.arena.MakeUnion([]TypeId{
+		TidBool, TidInt, TidFloat, TidStr, TidDateTime,
+		r.arena.MakeList(ref), r.arena.MakeStrDict(ref),
+	})
+	r.arena.SetAliasBody(idx, body)
+	r.aliases[name] = ref
+}
+
 // declareHtmlNode adds the built-in recursive alias of the nodes parseHtml
 // returns: `type HtmlNode = {tag: str, attr: {str: str}, children: [HtmlNode], text: str}`.
 func (r *coreResolver) declareHtmlNode() {

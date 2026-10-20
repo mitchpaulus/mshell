@@ -89,6 +89,12 @@ enum Box[a] = box [a] | empty end
 	mustValidate(t, decls, intList(1, 2), "[str]", false)
 	mustValidate(t, decls, intList(), "[str]", true)
 	mustValidate(t, decls, intList(1), "Json", true)
+	mustValidate(t, decls, intList(1), "Toml", true)
+	// TOML has no null.
+	nulls := NewList(0)
+	nulls.Items = append(nulls.Items, MShellNull{})
+	mustValidate(t, decls, nulls, "Json", true)
+	mustValidate(t, decls, nulls, "Toml", false)
 	mustValidate(t, decls, strList("a"), "[int] | str", false)
 
 	// A list whose stdout or stderr goes somewhere is a command, not a
