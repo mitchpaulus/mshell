@@ -1,0 +1,30 @@
+`toml.toml` parseToml ? toJson wl
+
+# Text that is not valid TOML gives none.
+'a = 1
+a = 2' parseToml isNone str wl
+'a = ' parseToml isNone str wl
+[255] toBinary parseToml isNone str wl
+
+# A document is a table, so its keys can be read directly.
+'a = 1' parseToml ? :a? match
+    int n : @n 1 + str wl,
+    _ : "not an int" wl,
+end
+'a = 1' parseToml ? tryAs {a: int} ? :a? 1 + str wl
+
+# An offset datetime is converted to UTC; a local datetime or date keeps its
+# clock time; a local time has no date, so it is a string.
+'odt = 1979-05-27T07:32:00-08:00
+ldt = 1979-05-27T07:32:00
+ld = 1979-05-27
+lt = 07:32:00.5' parseToml ? toJson wl
+
+# An array of tables is a list of dicts.
+'[[p]]
+qty = 1
+[[p]]
+qty = 2' parseToml ? tryAs {p: [{qty: int}]} ? :p? (:qty?) map sum str wl
+
+def load ( -- new Maybe[{Toml}]) 'k = "v"' parseToml end
+load ? toJson wl

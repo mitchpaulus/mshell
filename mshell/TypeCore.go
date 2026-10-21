@@ -69,6 +69,7 @@ func newCoreBuiltins() *coreBuiltins {
 	arena, names := NewTypeArena(), NewNameTable()
 	res := &coreResolver{arena: arena, names: names, rel: NewRelations(arena), aliases: map[NameId]TypeId{}, self: -1}
 	res.declareJson()
+	res.declareToml()
 	res.declareHtmlNode()
 	// Before the table, whose signatures name them.
 	c := &coreChecker{arena: arena, names: names, rel: res.rel, table: &coreTable{}, res: *res, defs: map[NameId]*coreSig{}}

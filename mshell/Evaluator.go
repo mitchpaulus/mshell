@@ -639,7 +639,7 @@ func isPatternWord(word string) bool {
 	switch word {
 	case "_", "just", "none", "null", "list", "dict",
 		"path", "datetime", "rune", "quotation", "maybe", "binary",
-		"Maybe", "Json", "HtmlNode", "is":
+		"Maybe", "Json", "Toml", "HtmlNode", "is":
 		return true
 	}
 	return false
@@ -10401,6 +10401,38 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// Convert the parsed data to analgous MShell types
 					resultObj := ParseJsonObjToMshell(parsedData)
 					stack.Push(resultObj)
+				case "parseToml":
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'parseToml' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					// A path names a file, read as UTF-8; a string is the contents.
+					// Text that is not valid TOML gives none; a file that cannot be
+					// read is still a failure.
+					var tomlData string
+					switch obj1Typed := obj1.(type) {
+					case MShellPath:
+						path, _ := obj1.CastString()
+						data, err := os.ReadFile(path)
+						if err != nil {
+							return state.CheckedFailure(fmt.Sprintf("%d:%d: Error reading file %s: %s\n", t.Line, t.Column, path, err.Error()))
+						}
+						tomlData = string(data)
+					case MShellString:
+						tomlData = obj1Typed.Content
+					case MShellBinary:
+						tomlData = string(obj1Typed.Data)
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot parse a %s as TOML.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					dict, err := decodeToml(tomlData)
+					if err != nil {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						stack.Push(&Maybe{obj: dict})
+					}
 				case "parseExcel":
 					obj1, err := stack.Pop()
 					if err != nil {

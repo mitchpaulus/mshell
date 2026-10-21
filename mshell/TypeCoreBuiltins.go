@@ -341,6 +341,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// A path names a file; a str (a bare word in a list literal too) is the text.
 	b.reg("parseJson", "(str | path | binary -- new Json)")
+	b.reg("parseToml", "(str | path | binary -- new Maybe[{Toml}])")
 	// The document node: tag "" with the <html> element as its child.
 	b.reg("parseHtml", "(str | path -- new HtmlNode)")
 	b.reg("parseLinkHeader", "(str -- new [Link])")
