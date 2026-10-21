@@ -1,0 +1,25 @@
+# ExcelCell names the type of a parseExcel cell: str | float | bool | ExcelError.
+`excel_test_file.xlsx` parseExcel :0: :data? rows!
+
+def cellText (ExcelCell -- str)
+    match
+        excelError code : $"error {@code}",
+        str s : @s,
+        float f : @f str,
+        bool b : @b str,
+    end
+end
+
+# A stored list given the cell type where it is made takes header strings
+# and the sheet's rows.
+[["Header"]] as [[ExcelCell]] out!
+@rows each. row! @out @row append out! end
+@out len @rows len 1 + = str wl
+@out :0: :0: cellText wl
+"#N/A" excelError cellText wl
+1.5 cellText wl
+
+1.5 tryAs ExcelCell isNone str wl
+"#REF!" excelError tryAs ExcelCell isNone str wl
+none tryAs ExcelCell isNone str wl
+3 tryAs ExcelCell isNone str wl

@@ -667,6 +667,10 @@ func (c *coreChecker) exhaustive(arms []coreArm, t TypeId) bool {
 				fa = true
 			}
 		}
+		// Maybe[⊥], the type of none, holds only none, so it needs no just arm.
+		if none && c.arena.EnumArgs(m)[0] == TidBottom {
+			just = true
+		}
 		if !covered && !(just && none) && !(tr && fa) && !(k.code == kindList && listsCover(arms)) {
 			return false
 		}

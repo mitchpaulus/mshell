@@ -1,0 +1,3 @@
+# An int is not an ExcelCell: parseExcel gives numbers as floats.
+[] as [ExcelCell] cells!
+@cells 3 append cells!

@@ -718,9 +718,9 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// map, extend and `+`, updateCol, gridSetCell, gridAddCol,
 	// gridRemoveCol, gridRenameCol, gridCol, gridValues, toDict.
 
-	// parseExcel: one record per sheet. An error cell is none.
+	// parseExcel: one record per sheet.
 	{
-		cell := ar.MakeUnion([]TypeId{TidStr, TidFloat, TidBool, ar.MakeMaybeEnum(TidBottom)})
+		cell := b.typ("ExcelCell")
 		field := func(name string, ty TypeId) RecordField {
 			return RecordField{Name: res.names.Intern(name), Status: FieldRequired, Type: ty}
 		}
