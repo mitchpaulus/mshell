@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"math/bits"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +49,9 @@ type tomlParser struct {
 // UTC, and a local one (no offset) keeps its clock time. A local date is a
 // datetime at midnight. A local time has no date, so it is a string, such as
 // "07:32:00".
+//
+// Keys and strings without escapes are slices of s, not copies, so any of
+// them that are kept keep all of s in memory.
 func decodeToml(s string) (dict *MShellDict, err error) {
 	if !utf8.ValidString(s) {
 		return nil, fmt.Errorf("input is not valid UTF-8")
@@ -107,7 +111,7 @@ func (p *tomlParser) skipWs() {
 }
 
 func (p *tomlParser) comment() {
-	p.i++
+	p.i = tomlTextEnd(p.s, p.i+1, 0, 0)
 	for p.i < len(p.s) {
 		c := p.s[p.i]
 		if c == '\n' || c == '\r' {
@@ -300,7 +304,7 @@ func (p *tomlParser) simpleKey() string {
 	if p.i == start {
 		p.fail("expected a key")
 	}
-	return strings.Clone(p.s[start:p.i])
+	return p.s[start:p.i]
 }
 
 func (p *tomlParser) value() MShellObject {
@@ -397,15 +401,44 @@ func tomlIsTextChar(c byte) bool {
 	return c >= 0x20 && c != 0x7f || c == '\t'
 }
 
+const (
+	tomlLowBits  = 0x0101010101010101
+	tomlHighBits = 0x8080808080808080
+)
+
+// tomlTextEnd gives the index of the first byte of s at or after i that is a
+// or b, a control character, or a tab, or len(s) if there is none. It checks
+// 8 bytes at a time. The loops after it handle the byte it stops at.
+func tomlTextEnd(s string, i int, a, b byte) int {
+	av, bv := uint64(a)*tomlLowBits, uint64(b)*tomlLowBits
+	for ; i+8 <= len(s); i += 8 {
+		w := s[i : i+8]
+		x := uint64(w[0]) | uint64(w[1])<<8 | uint64(w[2])<<16 | uint64(w[3])<<24 |
+			uint64(w[4])<<32 | uint64(w[5])<<40 | uint64(w[6])<<48 | uint64(w[7])<<56
+		xa, xb, xd := x^av, x^bv, x^(0x7f*tomlLowBits)
+		// The high bit of each byte that is zero in xa, xb or xd, or is below
+		// 0x20 in x. Bits above the lowest one may be wrong, from borrows.
+		m := ((xa-tomlLowBits)&^xa | (xb-tomlLowBits)&^xb | (xd-tomlLowBits)&^xd | (x - 0x20*tomlLowBits)) &^ x & tomlHighBits
+		if m != 0 {
+			return i + bits.TrailingZeros64(m)/8
+		}
+	}
+	for i < len(s) && s[i] != a && s[i] != b && s[i] >= 0x20 && s[i] != 0x7f {
+		i++
+	}
+	return i
+}
+
 func (p *tomlParser) basicString() string {
 	p.i++
 	start := p.i
+	p.i = tomlTextEnd(p.s, p.i, '"', '\\')
 	for p.i < len(p.s) {
 		c := p.s[p.i]
 		if c == '"' {
 			s := p.s[start:p.i]
 			p.i++
-			return strings.Clone(s)
+			return s
 		}
 		if c == '\\' {
 			break
@@ -514,7 +547,7 @@ func (p *tomlParser) multilineBasicString() string {
 		case c == '"':
 			if end := p.closingQuotes('"'); end >= 0 {
 				if !escaped {
-					return strings.Clone(p.s[start:end])
+					return p.s[start:end]
 				}
 				sb.WriteString(p.s[segment:end])
 				return sb.String()
@@ -555,12 +588,13 @@ func (p *tomlParser) multilineBasicString() string {
 func (p *tomlParser) literalString() string {
 	p.i++
 	start := p.i
+	p.i = tomlTextEnd(p.s, p.i, '\'', '\'')
 	for p.i < len(p.s) {
 		c := p.s[p.i]
 		if c == '\'' {
 			s := p.s[start:p.i]
 			p.i++
-			return strings.Clone(s)
+			return s
 		}
 		if !tomlIsTextChar(c) {
 			p.fail("control character in string")
@@ -579,7 +613,7 @@ func (p *tomlParser) multilineLiteralString() string {
 		switch {
 		case c == '\'':
 			if end := p.closingQuotes('\''); end >= 0 {
-				return strings.Clone(p.s[start:end])
+				return p.s[start:end]
 			}
 		case c == '\n' || c == '\r':
 			p.newline()

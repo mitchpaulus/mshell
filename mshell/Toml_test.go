@@ -249,3 +249,31 @@ func tomlCheckUTF8(t *testing.T, obj MShellObject) {
 		}
 	}
 }
+
+// FuzzTomlTextEnd checks that tomlTextEnd, which reads 8 bytes at a time,
+// stops at the same byte as a byte-by-byte loop, from every start index.
+func FuzzTomlTextEnd(f *testing.F) {
+	for _, seed := range []string{
+		"",
+		"plain text with no stops at all, long enough for several words",
+		"0123456\"89abcdef\\",
+		"tab\there, del\x7f, nul\x00, quote' and é \xff\xfe bytes",
+		"\x1f\x20\x21\x22\x5b\x5c\x5d\x7e\x7f\x80\x9f\xa0\xdc\xe2",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		for _, stop := range [][2]byte{{'"', '\\'}, {'\'', '\''}, {0, 0}} {
+			a, b := stop[0], stop[1]
+			for i := 0; i <= len(s); i++ {
+				want := i
+				for want < len(s) && s[want] != a && s[want] != b && s[want] >= 0x20 && s[want] != 0x7f {
+					want++
+				}
+				if got := tomlTextEnd(s, i, a, b); got != want {
+					t.Fatalf("tomlTextEnd(%q, %d, %q, %q) = %d, want %d", s, i, a, b, got, want)
+				}
+			}
+		}
+	})
+}
