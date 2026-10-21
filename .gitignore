@@ -66,3 +66,6 @@ mshell/mshell
 mshell/mshw.exe
 
 mshell/testdata/toml-test/
+
+# Go test binaries (go test -c)
+*.test
