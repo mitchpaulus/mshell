@@ -20,8 +20,8 @@ import (
 
 // builtinDeclSource declares the types of the prompt builtins, the
 // Cipher that encrypt and decrypt take (Crypto.go), the types of the
-// abbreviation builtins (Abbr.go), and the types of the key binding
-// builtins (Bindings.go). They are
+// abbreviation builtins (Abbr.go), the types of the key binding
+// builtins (Bindings.go), and the cells parseExcel gives (Excel.go). They are
 // part of the binary: the type checker and the runtime declare them before
 // any file, and no file can declare their names again.
 const builtinDeclSource = `
@@ -62,6 +62,10 @@ enum CursorShape =
 end
 
 enum Cipher = cipherAesGcm | cipherChaCha20Poly1305 | cipherXChaCha20Poly1305 end
+
+enum ExcelError = excelError str end
+
+type ExcelCell = str | float | bool | ExcelError
 
 type PromptInfo = {stackDepth: int, stackTypes: [str], lastLineOk: bool, lastExitCode: Maybe[int], lastDurationMs: int}
 

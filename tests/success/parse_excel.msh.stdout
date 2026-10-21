@@ -27,7 +27,7 @@
 5:1:String|13.5
 5:2:String|Number stored as text
 ---
-6:1:Maybe|None
+6:1:ExcelError|excelError(#N/A)
 6:2:String|
 ---
 7:1:Float|5

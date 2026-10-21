@@ -148,7 +148,9 @@ func readZipFile(f *zip.File) ([]byte, error) {
 // "visibility" key ("visible", "hidden", or "veryHidden"). Cells are returned
 // as MShellFloat for numbers, MShellString for
 // strings (shared, inline, or formula-string results), MShellBool for
-// booleans, and a None Maybe for error cells. Missing <v> values and padding
+// booleans, and an excelError (the built-in ExcelError enum, declared in
+// builtinDeclSource) holding the error's text, such as "#DIV/0!", for
+// error cells. Missing <v> values and padding
 // cells are empty strings. Dates are returned as floats (Excel serial dates).
 func parseExcelBytes(data []byte) (*MShellList, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
@@ -357,7 +359,11 @@ func cellToObject(c *xlsxC, sharedStrings []string) (MShellObject, error) {
 		v := strings.TrimSpace(*c.V)
 		return MShellBool{Value: v == "1" || strings.EqualFold(v, "true")}, nil
 	case "e":
-		return &Maybe{obj: nil}, nil
+		code := ""
+		if c.V != nil {
+			code = strings.TrimSpace(*c.V)
+		}
+		return &MShellEnum{EnumName: "ExcelError", Member: "excelError", Payload: []MShellObject{MShellString{code}}}, nil
 	case "", "n":
 		if c.V == nil {
 			return MShellString{""}, nil
