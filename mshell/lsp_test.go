@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"go.lsp.dev/protocol"
 )
@@ -1452,7 +1454,7 @@ func TestCodeActionQuotesAllLiteralsInInnermostList(t *testing.T) {
 	doc := "[outer arg [echo café😀 \"already quoted\" @value 3] tail]"
 	server := &lspServer{
 		documents: map[protocol.DocumentURI]*lspDocument{
-			uri: {Text: doc},
+			uri: newLSPDocument(doc),
 		},
 	}
 
@@ -1494,7 +1496,7 @@ func TestCodeActionQuotesNestedLiteralsFromOuterList(t *testing.T) {
 	doc := "[outer [inner value] tail]"
 	server := &lspServer{
 		documents: map[protocol.DocumentURI]*lspDocument{
-			uri: {Text: doc},
+			uri: newLSPDocument(doc),
 		},
 	}
 
@@ -1521,12 +1523,257 @@ func TestCodeActionQuotesNestedLiteralsFromOuterList(t *testing.T) {
 	}
 }
 
+// prefixQuoteResult runs the prefix quote code action at line and character
+// of doc, and gives the text after its edit, or false if it is not offered.
+func prefixQuoteResult(t *testing.T, doc string, line, character uint32) (string, bool) {
+	t.Helper()
+	uri := protocol.DocumentURI("file:///prefix-quote.msh")
+	opened := newLSPDocument(doc)
+	server := &lspServer{
+		documents: map[protocol.DocumentURI]*lspDocument{uri: opened},
+	}
+	pos := protocol.Position{Line: line, Character: character}
+	actions := server.codeActions(protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Range:        protocol.Range{Start: pos, End: pos},
+		Context:      protocol.CodeActionContext{Only: []protocol.CodeActionKind{protocol.RefactorRewrite}},
+	})
+	for _, action := range actions {
+		if action.Title != "Convert to prefix quote" {
+			continue
+		}
+		if action.Kind != protocol.RefactorRewrite {
+			t.Fatalf("unexpected code action kind: %q", action.Kind)
+		}
+		edits := action.Edit.Changes[uri]
+		if len(edits) != 1 {
+			t.Fatalf("expected one edit, got %+v", edits)
+		}
+		start, ok1 := lspPositionToRuneOffset(doc, edits[0].Range.Start)
+		end, ok2 := lspPositionToRuneOffset(doc, edits[0].Range.End)
+		if !ok1 || !ok2 {
+			t.Fatalf("edit range outside document: %+v", edits[0].Range)
+		}
+		runes := []rune(doc)
+		return string(runes[:start]) + edits[0].NewText + string(runes[end:]), true
+	}
+	return "", false
+}
+
+func TestCodeActionPrefixQuote(t *testing.T) {
+	tests := []struct {
+		name      string
+		doc       string
+		line      uint32
+		character uint32
+		want      string
+	}{
+		{
+			name:      "single line",
+			doc:       "[1 2 3] ( 2 * ) map wl",
+			character: 10,
+			want:      "[1 2 3] map. 2 * end wl",
+		},
+		{
+			name:      "cursor on the word",
+			doc:       "[1 2 3] (2 *) map",
+			character: 15,
+			want:      "[1 2 3] map. 2 * end",
+		},
+		{
+			name:      "cursor just after the word",
+			doc:       "[1 2 3] (2 *) map",
+			character: 17,
+			want:      "[1 2 3] map. 2 * end",
+		},
+		{
+			name:      "empty quote",
+			doc:       "() myDef",
+			character: 0,
+			want:      "myDef. end",
+		},
+		{
+			name:      "innermost quote",
+			doc:       "@xs ((5 >) filter) map",
+			character: 6,
+			want:      "@xs (filter. 5 > end) map",
+		},
+		{
+			name:      "outer quote",
+			doc:       "@xs ((5 >) filter) map",
+			character: 4,
+			want:      "@xs map. (5 >) filter end",
+		},
+		{
+			name:      "unicode before the quote",
+			doc:       "\"café😀\" (wl) each",
+			character: 10,
+			want:      "\"café😀\" each. wl end",
+		},
+		{
+			name: "multiline already on own lines",
+			doc: "def f ([str] -- )\n" +
+				"    @xs (\n" +
+				"        @x wl\n" +
+				"    ) each\n" +
+				"end",
+			line:      2,
+			character: 8,
+			want: "def f ([str] -- )\n" +
+				"    @xs each.\n" +
+				"        @x wl\n" +
+				"    end\n" +
+				"end",
+		},
+		{
+			name: "multiline with body next to the parens",
+			doc: "@xs (@x wl\n" +
+				"    @y wl) each",
+			line:      1,
+			character: 4,
+			want: "@xs each.\n" +
+				"    @x wl\n" +
+				"    @y wl\n" +
+				"end",
+		},
+		{
+			name: "multiline keeps the body's indentation",
+			doc: "(a\n" +
+				"b) wl",
+			want: "wl.\n" +
+				"a\n" +
+				"b\n" +
+				"end",
+		},
+		{
+			name: "multiline indents with tabs after a tab",
+			doc: "\t(a\n" +
+				"\t) wl",
+			character: 1,
+			want: "\twl.\n" +
+				"\t\ta\n" +
+				"\tend",
+		},
+		{
+			name: "multiline string in the body is unchanged",
+			doc: "(\"x\n" +
+				"  y\") wl",
+			want: "wl.\n" +
+				"  \"x\n" +
+				"  y\"\n" +
+				"end",
+		},
+		{
+			name:      "word on the next line",
+			doc:       "(\n  1\n)\nmap",
+			line:      3,
+			character: 1,
+			want:      "map.\n  1\nend",
+		},
+		{
+			name:      "in a definition",
+			doc:       "def f (-- [int])\n  [1] (2 *) map\nend",
+			line:      1,
+			character: 7,
+			want:      "def f (-- [int])\n  [1] map. 2 * end\nend",
+		},
+		{
+			name:      "in an if body",
+			doc:       "true if\n  [1] (2 *) map\nend",
+			line:      1,
+			character: 7,
+			want:      "true if\n  [1] map. 2 * end\nend",
+		},
+		{
+			name:      "in an else body",
+			doc:       "true if 1 else\n  [1] (2 *) map\nend",
+			line:      1,
+			character: 7,
+			want:      "true if 1 else\n  [1] map. 2 * end\nend",
+		},
+		{
+			name:      "in a match arm",
+			doc:       "1 match\n  1 : [1] (2 *) map\nend",
+			line:      1,
+			character: 11,
+			want:      "1 match\n  1 : [1] map. 2 * end\nend",
+		},
+		{
+			name:      "in a dict value",
+			doc:       "{ \"a\": [1] (2 *) map }",
+			character: 13,
+			want:      "{ \"a\": [1] map. 2 * end }",
+		},
+		{
+			name:      "in a list",
+			doc:       "[ [1] (2 *) map ]",
+			character: 7,
+			want:      "[ [1] map. 2 * end ]",
+		},
+		{
+			name:      "in a prefix quote",
+			doc:       "[[1]] map.\n  (2 *) map\nend",
+			line:      1,
+			character: 3,
+			want:      "[[1]] map.\n  map. 2 * end\nend",
+		},
+		{
+			name:      "multiline with unicode before the paren",
+			doc:       "\"😀\" (\n  wl\n) each",
+			line:      1,
+			character: 2,
+			want:      "\"😀\" each.\n  wl\nend",
+		},
+		{
+			name:      "word after the closing paren on the next line",
+			doc:       "(1)\n  map",
+			line:      1,
+			character: 3,
+			want:      "map. 1 end",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := prefixQuoteResult(t, tc.doc, tc.line, tc.character)
+			if !ok {
+				t.Fatal("expected a prefix quote code action")
+			}
+			if got != tc.want {
+				t.Fatalf("got\n%s\nwant\n%s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCodeActionPrefixQuoteUnavailable(t *testing.T) {
+	tests := []struct {
+		name      string
+		doc       string
+		line      uint32
+		character uint32
+	}{
+		{name: "quote at the end", doc: "(1 2)", character: 1},
+		{name: "quote followed by a string", doc: "(1 2) 'map'", character: 1},
+		{name: "quote followed by a keyword", doc: "(1 2) if 1 end", character: 1},
+		{name: "quote followed by a quote", doc: "(1) (2) map", character: 1},
+		{name: "cursor outside", doc: "1 (2) map", character: 0},
+		{name: "comment before the word", doc: "(1) # note\nmap", character: 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, ok := prefixQuoteResult(t, tc.doc, tc.line, tc.character); ok {
+				t.Fatalf("expected no prefix quote code action, got %q", got)
+			}
+		})
+	}
+}
+
 func TestCodeActionUnavailableOutsideListOrForQuickFix(t *testing.T) {
 	uri := protocol.DocumentURI("file:///no-quote-list.msh")
 	doc := "word [echo arg]"
 	server := &lspServer{
 		documents: map[protocol.DocumentURI]*lspDocument{
-			uri: {Text: doc},
+			uri: newLSPDocument(doc),
 		},
 	}
 
@@ -1568,7 +1815,7 @@ func TestCodeActionOnlyTargetsParsedListValues(t *testing.T) {
 	}, "\n")
 	server := &lspServer{
 		documents: map[protocol.DocumentURI]*lspDocument{
-			uri: {Text: doc},
+			uri: newLSPDocument(doc),
 		},
 	}
 
@@ -1615,7 +1862,7 @@ func TestCodeActionDoesNotCrossIntoOtherParseConstructs(t *testing.T) {
 	doc := "[(danger) { 'key': risky } [inner arg] outer]"
 	server := &lspServer{
 		documents: map[protocol.DocumentURI]*lspDocument{
-			uri: {Text: doc},
+			uri: newLSPDocument(doc),
 		},
 	}
 
@@ -1646,7 +1893,7 @@ func TestCodeActionUnavailableForUnclosedList(t *testing.T) {
 	doc := "[echo arg"
 	server := &lspServer{
 		documents: map[protocol.DocumentURI]*lspDocument{
-			uri: {Text: doc},
+			uri: newLSPDocument(doc),
 		},
 	}
 
@@ -1727,7 +1974,7 @@ func readLSPResponse(t *testing.T, reader *bufio.Reader) responseMessage {
 func TestCodeActionFixesNewMarks(t *testing.T) {
 	uri := protocol.DocumentURI("file:///new-marks.msh")
 	doc := "def a ( -- [int]) [1] end\ndef b ( -- new int) 1 end\n"
-	server := &lspServer{documents: map[protocol.DocumentURI]*lspDocument{uri: {Text: doc}}}
+	server := &lspServer{documents: map[protocol.DocumentURI]*lspDocument{uri: newLSPDocument(doc)}}
 	at := func(line, char uint32) protocol.CodeActionParams {
 		return protocol.CodeActionParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
@@ -1836,9 +2083,8 @@ func TestDiagnosticsNewestTextOnly(t *testing.T) {
 func renameEdits(t *testing.T, text string, line, char uint32, name string) []string {
 	t.Helper()
 	uri := protocol.DocumentURI("file:///rename.msh")
-	doc := &lspDocument{}
-	doc.setText(text)
-	s := &lspServer{documents: map[protocol.DocumentURI]*lspDocument{uri: doc}, parser: NewMShellParser(NewLexer("", nil))}
+	doc := newLSPDocument(text)
+	s := &lspServer{documents: map[protocol.DocumentURI]*lspDocument{uri: doc}}
 	edit, err := s.rename(protocol.RenameParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
@@ -2039,10 +2285,8 @@ func TestDiagnosticsAfterStartupTopLevel(t *testing.T) {
 // text, as "uri line:start-end".
 func declarationAt(t *testing.T, s *lspServer, uri protocol.DocumentURI, text string, line, char uint32) []string {
 	t.Helper()
-	doc := &lspDocument{}
-	doc.setText(text)
+	doc := newLSPDocument(text)
 	s.documents = map[protocol.DocumentURI]*lspDocument{uri: doc}
-	s.parser = NewMShellParser(NewLexer("", nil))
 	var out []string
 	for _, loc := range s.declaration(protocol.TextDocumentPositionParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
@@ -2106,7 +2350,7 @@ func TestDeclarationInStartupFile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		files = append(files, lspStartupFile{path: f.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items), doc: newStartupDoc(f.text)})
+		files = append(files, lspStartupFile{path: f.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items), doc: newLSPDocument(f.text)})
 	}
 	s := &lspServer{startupFiles: files}
 	other := fileURI(filepath.Join(dir, "other.msh"))
@@ -2129,5 +2373,190 @@ func TestDeclarationInStartupFile(t *testing.T) {
 	// file's declarations are not its own.
 	if got := declarationAt(t, s, fileURI(stdPath), "green\n", 0, 1); len(got) != 0 {
 		t.Errorf("the standard library itself: %v", got)
+	}
+}
+
+// lspPositionToRuneOffset is the rune offset in text of an LSP position.
+// It reads the whole text, so the server does not use it; tests check edits
+// with it.
+func lspPositionToRuneOffset(text string, position protocol.Position) (int, bool) {
+	line := uint32(0)
+	character := uint32(0)
+	runes := []rune(text)
+	for offset, r := range runes {
+		if line == position.Line && character == position.Character {
+			return offset, true
+		}
+		if r == '\n' {
+			if line == position.Line {
+				return 0, false
+			}
+			line++
+			character = 0
+			continue
+		}
+		character += uint32(utf16.RuneLen(r))
+	}
+	if line == position.Line && character == position.Character {
+		return len(runes), true
+	}
+	return 0, false
+}
+
+// runeOffsetToLSPPosition is the LSP position of a rune offset in text.
+func runeOffsetToLSPPosition(text string, target int) protocol.Position {
+	line := uint32(0)
+	character := uint32(0)
+	for offset, r := range []rune(text) {
+		if offset >= target {
+			break
+		}
+		if r == '\n' {
+			line++
+			character = 0
+			continue
+		}
+		character += uint32(utf16.RuneLen(r))
+	}
+	return protocol.Position{Line: line, Character: character}
+}
+
+func changeAt(sl, sc, el, ec uint32, text string) lspContentChange {
+	return lspContentChange{Range: &protocol.Range{
+		Start: protocol.Position{Line: sl, Character: sc},
+		End:   protocol.Position{Line: el, Character: ec},
+	}, Text: text}
+}
+
+func TestApplyChanges(t *testing.T) {
+	cases := []struct {
+		name    string
+		text    string
+		changes []lspContentChange
+		want    string
+	}{
+		{"insert", "ab\ncd", []lspContentChange{changeAt(1, 1, 1, 1, "X")}, "ab\ncXd"},
+		{"delete across lines", "ab\ncd\nef", []lspContentChange{changeAt(0, 1, 2, 1, "")}, "af"},
+		{"replace with lines", "ab", []lspContentChange{changeAt(0, 1, 0, 2, "1\n2\n")}, "a1\n2\n"},
+		{"insert at the start", "ab", []lspContentChange{changeAt(0, 0, 0, 0, "X")}, "Xab"},
+		{"insert at the end", "ab\n", []lspContentChange{changeAt(1, 0, 1, 0, "X")}, "ab\nX"},
+		{"into an empty text", "", []lspContentChange{changeAt(0, 0, 0, 0, "X")}, "X"},
+		{"UTF-16 columns", "😀a😀b", []lspContentChange{changeAt(0, 3, 0, 5, "")}, "😀ab"},
+		{"carriage return stays", "ab\r\ncd", []lspContentChange{changeAt(0, 2, 0, 2, "X")}, "abX\r\ncd"},
+		{"past the line end", "ab\ncd", []lspContentChange{changeAt(0, 9, 0, 9, "X")}, "abX\ncd"},
+		{"past the last line", "ab", []lspContentChange{changeAt(5, 0, 5, 0, "X")}, "abX"},
+		{"each on the text before", "abc", []lspContentChange{changeAt(0, 0, 0, 1, "xy"), changeAt(0, 2, 0, 3, "")}, "xyc"},
+		{"whole text", "abc", []lspContentChange{{Text: "new"}}, "new"},
+		{"whole text then a range", "abc", []lspContentChange{{Text: "new"}, changeAt(0, 0, 0, 1, "N")}, "New"},
+	}
+	s := &lspServer{}
+	for _, c := range cases {
+		if got := s.applyChanges(c.text, c.changes); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestApplyChangesRandom makes random edits, in batches, and checks each
+// against the same edit made on runes.
+func TestApplyChangesRandom(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	pieces := []string{"a", "b", " ", "\n", "\r\n", "é", "😀", "(", "end"}
+	randText := func(n int) string {
+		var b strings.Builder
+		for range n {
+			b.WriteString(pieces[rng.Intn(len(pieces))])
+		}
+		return b.String()
+	}
+	// randPos is a valid position in text.
+	randPos := func(text string) protocol.Position {
+		runes := []rune(text)
+		return runeOffsetToLSPPosition(text, rng.Intn(len(runes)+1))
+	}
+	s := &lspServer{}
+	text := randText(40)
+	for i := range 5000 {
+		want := text
+		var batch []lspContentChange
+		for range 1 + rng.Intn(3) {
+			a, b := randPos(want), randPos(want)
+			ao, _ := lspPositionToRuneOffset(want, a)
+			bo, _ := lspPositionToRuneOffset(want, b)
+			if bo < ao {
+				a, b, ao, bo = b, a, bo, ao
+			}
+			insert := randText(rng.Intn(4))
+			runes := []rune(want)
+			want = string(runes[:ao]) + insert + string(runes[bo:])
+			batch = append(batch, lspContentChange{Range: &protocol.Range{Start: a, End: b}, Text: insert})
+		}
+		got := s.applyChanges(text, batch)
+		if got != want {
+			t.Fatalf("edit %d: %+v on %q: got %q, want %q", i, batch, text, got, want)
+		}
+		text = got
+		if len(text) > 400 {
+			text = randText(40)
+		}
+	}
+}
+
+// TestDidChangeIncremental sends a document's edits as the client does:
+// ranges, and a change to the whole text with no range.
+func TestDidChangeIncremental(t *testing.T) {
+	s := &lspServer{out: bufio.NewWriter(io.Discard), documents: map[protocol.DocumentURI]*lspDocument{}}
+	send := func(method, params string) {
+		t.Helper()
+		if _, err := s.handleMessage(&jsonrpcMessage{Method: method, Params: json.RawMessage(params)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	uri := "file:///inc.msh"
+	send("textDocument/didOpen", `{"textDocument":{"uri":"`+uri+`","languageId":"mshell","version":1,"text":"1 wl\n2 wl\n"}}`)
+	send("textDocument/didChange", `{"textDocument":{"uri":"`+uri+`","version":2},"contentChanges":[`+
+		`{"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}},"text":"20"},`+
+		`{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"text":"0 wl\n"}]}`)
+	if got := s.documents[protocol.DocumentURI(uri)].Text; got != "0 wl\n1 wl\n20 wl\n" {
+		t.Fatalf("after ranges: %q", got)
+	}
+	send("textDocument/didChange", `{"textDocument":{"uri":"`+uri+`","version":3},"contentChanges":[{"text":"3 wl\n"}]}`)
+	if got := s.documents[protocol.DocumentURI(uri)].Text; got != "3 wl\n" {
+		t.Fatalf("after the whole text: %q", got)
+	}
+}
+
+// TestRequestsWhileDiagnosticsRun serves requests on a document while its
+// diagnostics are worked out on their goroutine, as the server does; run
+// with -race, it shows the two share the document's parse and check
+// safely.
+func TestRequestsWhileDiagnosticsRun(t *testing.T) {
+	s := &lspServer{out: bufio.NewWriter(io.Discard), documents: map[protocol.DocumentURI]*lspDocument{}}
+	uri := protocol.DocumentURI("file:///busy.msh")
+	for i := range 100 {
+		text := fmt.Sprintf("def f (int -- int) %d + end\n[1 2] (f) map wl\n[a b] wl\n1 \"a\" +\n", i)
+		s.updateDocument(uri, text)
+		for line := range uint32(4) {
+			pos := protocol.Position{Line: line, Character: 8}
+			s.codeActions(protocol.CodeActionParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+				Range:        protocol.Range{Start: pos, End: pos},
+			})
+			s.hover(protocol.HoverParams{TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: uri}, Position: protocol.Position{Line: 1, Character: 8},
+			}})
+			s.declaration(protocol.TextDocumentPositionParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: uri}, Position: protocol.Position{Line: 1, Character: 8},
+			})
+		}
+	}
+	for {
+		s.diagMu.Lock()
+		busy := s.diag[uri] != nil && s.diag[uri].running
+		s.diagMu.Unlock()
+		if !busy {
+			break
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,11 +42,12 @@ type lspServer struct {
 	shutdown     bool
 	builtins     map[string]*builtinInfo
 	lexer        *Lexer
-	parser       *MShellParser
 	pathBins     IPathBinManager
 	varNames     map[string]struct{}
 	envNames     map[string]struct{}
 	candsBuf     []string
+	// editBuf is where didChange makes its changes (applyChanges).
+	editBuf []byte
 	stdlibDefs   []MShellDefinition
 	// startupDecls are the startup files' `type` and `enum` declarations.
 	startupDecls []MShellParseItem
@@ -85,30 +87,81 @@ type lspServer struct {
 type lspDiagState struct {
 	running bool
 	pending bool
-	next    string
+	next    *lspDocument
 	version uint64
 	closed  bool
 }
 
+// lspDocument is one version of a document's text. An edit makes a new
+// one, and a document is not changed after it is made, so the diagnostics
+// goroutine and the requests can all read it.
+//
+// What the text parses to, what the type checker says of it, and its
+// definitions' signatures are each worked out once, by whichever of the
+// diagnostics or a request asks first; one that asks while another is
+// working it out waits for that result.
 type lspDocument struct {
 	Text  string
 	Lines []string
+
+	parseOnce sync.Once
+	file      *MShellFile
+	parseErr  error
+
+	checkOnce sync.Once
+	check     lspCheck
+
+	sigsOnce sync.Once
+	sigs     map[string][]string
 }
 
-func (d *lspDocument) setText(text string) {
-	d.Text = text
-	lines := d.Lines[:0]
-	start := 0
-	for i := 0; i < len(text); i++ {
-		if text[i] == '\n' {
-			lines = append(lines, text[start:i])
-			start = i + 1
+// lspCheck is what the type checker says of a document.
+type lspCheck struct {
+	// ok is false if the parser or checker panicked; there is then
+	// nothing to show.
+	ok    bool
+	diags []protocol.Diagnostic
+	// fixes are the errors with a fix, as code actions offer them.
+	fixes []lspTypeFix
+}
+
+// lspTypeFix is a type error with a fix: its diagnostic and its edit.
+type lspTypeFix struct {
+	title string
+	diag  protocol.Diagnostic
+	edit  protocol.TextEdit
+}
+
+var errParserPanicked = errors.New("the parser panicked")
+
+// newLSPDocument is a document of text. Its lines share the text's memory.
+func newLSPDocument(text string) *lspDocument {
+	lines := make([]string, 0, strings.Count(text, "\n")+1)
+	rest := text
+	for {
+		i := strings.IndexByte(rest, '\n')
+		if i < 0 {
+			break
 		}
+		lines = append(lines, rest[:i])
+		rest = rest[i+1:]
 	}
-	if start <= len(text) {
-		lines = append(lines, text[start:])
-	}
-	d.Lines = lines
+	lines = append(lines, rest)
+	return &lspDocument{Text: text, Lines: lines}
+}
+
+// parsed is the document's parse.
+func (d *lspDocument) parsed() (*MShellFile, error) {
+	d.parseOnce.Do(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logLSP(fmt.Sprintf("parser panicked: %v\n%s", r, debug.Stack()))
+				d.file, d.parseErr = nil, errParserPanicked
+			}
+		}()
+		d.file, d.parseErr = NewMShellParser(NewLexer(d.Text, nil)).ParseFile()
+	})
+	return d.file, d.parseErr
 }
 
 // LSP positions count UTF-16 code units in a line; tokens carry 1-based
@@ -213,7 +266,6 @@ func RunLSP(in io.Reader, out io.Writer) error {
 	}
 
 	lexer := NewLexer("", nil)
-	parser := NewMShellParser(lexer)
 	pathBins := NewPathBinManager()
 
 	server := &lspServer{
@@ -222,7 +274,6 @@ func RunLSP(in io.Reader, out io.Writer) error {
 		documents: make(map[protocol.DocumentURI]*lspDocument),
 		builtins:  builtins,
 		lexer:     lexer,
-		parser:    parser,
 		pathBins:  pathBins,
 		varNames:  make(map[string]struct{}),
 		envNames:  make(map[string]struct{}),
@@ -291,13 +342,6 @@ type lspStartupFile struct {
 	doc   *lspDocument
 }
 
-// newStartupDoc is a startup file's text as a document.
-func newStartupDoc(text string) *lspDocument {
-	doc := &lspDocument{}
-	doc.setText(text)
-	return doc
-}
-
 // loadStartupForLSP reads the startup files for their definitions and
 // declarations, as a script run from the command line sees them: the
 // standard library (honoring MSHSTDLIB), and the user's init file (honoring
@@ -343,14 +387,14 @@ func loadStartupFilesForLSP() ([]lspStartupFile, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	files := []lspStartupFile{{path: stdlibSpec.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items), top: startupTopLevel(parsed), doc: newStartupDoc(text)}}
+	files := []lspStartupFile{{path: stdlibSpec.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items), top: startupTopLevel(parsed), doc: newLSPDocument(text)}}
 	var startupErrs []string
 	if source, err := os.ReadFile(initSpec.path); err == nil {
 		init := lspStartupFile{path: initSpec.path}
 		text := string(source)
 		if parsed, err := parseMShellInput(text, &TokenFile{initSpec.path}); err == nil {
 			init.defs, init.decls, init.top = parsed.Definitions, declarationItems(parsed.Items), startupTopLevel(parsed)
-			init.doc = newStartupDoc(text)
+			init.doc = newLSPDocument(text)
 		} else {
 			logLSP(fmt.Sprintf("init file %s does not parse (%v); proceeding without it", initSpec.path, err))
 			startupErrs = append(startupErrs, fmt.Sprintf("the init file %s does not parse: %v", initSpec.path, err))
@@ -454,7 +498,7 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 		}
 		result := protocol.InitializeResult{
 			Capabilities: protocol.ServerCapabilities{
-				TextDocumentSync:  protocol.TextDocumentSyncKindFull,
+				TextDocumentSync:  protocol.TextDocumentSyncKindIncremental,
 				HoverProvider:     true,
 				CodeActionProvider: true,
 				CompletionProvider: &protocol.CompletionOptions{
@@ -494,7 +538,7 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 		s.updateDocument(params.TextDocument.URI, params.TextDocument.Text)
 		return false, nil
 	case "textDocument/didChange":
-		var params protocol.DidChangeTextDocumentParams
+		var params lspDidChangeParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
 			logLSP(fmt.Sprintf("invalid didChange params: %v", err))
 			return false, nil
@@ -502,8 +546,11 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 		if len(params.ContentChanges) == 0 {
 			return false, nil
 		}
-		change := params.ContentChanges[len(params.ContentChanges)-1]
-		s.updateDocument(params.TextDocument.URI, change.Text)
+		text := ""
+		if doc, ok := s.documents[params.TextDocument.URI]; ok {
+			text = doc.Text
+		}
+		s.updateDocument(params.TextDocument.URI, s.applyChanges(text, params.ContentChanges))
 		return false, nil
 	case "textDocument/didClose":
 		var params protocol.DidCloseTextDocumentParams
@@ -632,14 +679,16 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 	if !ok {
 		return actions
 	}
-	parser := NewMShellParser(NewLexer(doc.Text, nil))
-	file, err := parser.ParseFile()
+	file, err := doc.parsed()
 	if err != nil {
 		return actions
 	}
-	actions = append(actions, s.typeFixActions(doc, file, params)...)
+	actions = append(actions, s.typeFixActions(doc, params)...)
 	if codeActionKindRequested(params.Context.Only, protocol.RefactorRewrite) {
 		if a, ok := quoteLiteralsAction(doc, file, params); ok {
+			actions = append(actions, a)
+		}
+		if a, ok := prefixQuoteAction(doc, file, params); ok {
 			actions = append(actions, a)
 		}
 	}
@@ -649,7 +698,7 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 // typeFixActions offers the fixes the core checker attaches to its errors:
 // each one whose error is in the requested range, as a quick fix, and all
 // of them at once.
-func (s *lspServer) typeFixActions(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) []protocol.CodeAction {
+func (s *lspServer) typeFixActions(doc *lspDocument, params protocol.CodeActionParams) []protocol.CodeAction {
 	quick := codeActionKindRequested(params.Context.Only, protocol.QuickFix)
 	all := codeActionKindRequested(params.Context.Only, sourceFixAll)
 	if !quick && !all {
@@ -658,29 +707,20 @@ func (s *lspServer) typeFixActions(doc *lspDocument, file *MShellFile, params pr
 	uri := params.TextDocument.URI
 	var actions []protocol.CodeAction
 	var every []protocol.TextEdit
-	s.checkDocument(uri, file, func(diags []TypeError, arena *TypeArena, names *NameTable, _ []string) {
-		for _, e := range diags {
-			if e.Severity != SeverityError || e.Fix.Kind == FixNone {
-				continue
-			}
-			edit := typeFixEdit(doc, e.Fix)
-			if all {
-				every = append(every, edit)
-			}
-			if !quick {
-				continue
-			}
-			if diag := typeErrorToDiagnostic(doc, e, arena, names); rangesOverlap(diag.Range, params.Range) {
-				actions = append(actions, protocol.CodeAction{
-					Title:       e.Fix.Title,
-					Kind:        protocol.QuickFix,
-					Diagnostics: []protocol.Diagnostic{diag},
-					IsPreferred: true,
-					Edit:        &protocol.WorkspaceEdit{Changes: map[protocol.DocumentURI][]protocol.TextEdit{uri: {edit}}},
-				})
-			}
+	for _, fix := range s.checked(uri, doc).fixes {
+		if all {
+			every = append(every, fix.edit)
 		}
-	})
+		if quick && rangesOverlap(fix.diag.Range, params.Range) {
+			actions = append(actions, protocol.CodeAction{
+				Title:       fix.title,
+				Kind:        protocol.QuickFix,
+				Diagnostics: []protocol.Diagnostic{fix.diag},
+				IsPreferred: true,
+				Edit:        &protocol.WorkspaceEdit{Changes: map[protocol.DocumentURI][]protocol.TextEdit{uri: {fix.edit}}},
+			})
+		}
+	}
 	if all && len(every) > 0 {
 		actions = append(actions, protocol.CodeAction{
 			Title: "Fix every `new` mark in this file",
@@ -713,23 +753,21 @@ func rangesOverlap(a, b protocol.Range) bool {
 // quoteLiteralsAction offers to quote every bare word in the innermost
 // list literal at the cursor.
 func quoteLiteralsAction(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) (protocol.CodeAction, bool) {
-	cursor, ok := lspPositionToRuneOffset(doc.Text, params.Range.Start)
+	line, col, ok := cursorAt(doc, params.Range.Start)
 	if !ok {
 		return protocol.CodeAction{}, false
 	}
-	lists := collectRuntimeLists(file)
-
 	var selected *MShellParseList
-	for _, list := range lists {
-		start := list.StartToken.Start
-		end := list.EndToken.Start + utf8.RuneCountInString(list.EndToken.Lexeme)
-		if cursor < start || cursor >= end {
-			continue
+	itemsAtCursor(file, line, col, func(items []MShellParseItem) {
+		for _, item := range items {
+			list, ok := item.(*MShellParseList)
+			// The cursor just after `]` is not in the list.
+			if ok && spanHolds(&list.StartToken, &list.EndToken, line, col) && !atEnd(&list.EndToken, line, col) &&
+				(selected == nil || list.StartToken.Start > selected.StartToken.Start) {
+				selected = list
+			}
 		}
-		if selected == nil || start > selected.StartToken.Start {
-			selected = list
-		}
-	}
+	})
 	if selected == nil {
 		return protocol.CodeAction{}, false
 	}
@@ -741,7 +779,7 @@ func quoteLiteralsAction(doc *lspDocument, file *MShellFile, params protocol.Cod
 	edits := make([]protocol.TextEdit, 0, len(literals))
 	for _, tok := range literals {
 		edits = append(edits, protocol.TextEdit{
-			Range:   tokenLSPRange(doc.Text, tok),
+			Range:   doc.tokenRange(tok),
 			NewText: "'" + tok.Lexeme + "'",
 		})
 	}
@@ -755,54 +793,6 @@ func quoteLiteralsAction(doc *lspDocument, file *MShellFile, params protocol.Cod
 			},
 		},
 	}, true
-}
-
-func collectRuntimeLists(file *MShellFile) []*MShellParseList {
-	lists := make([]*MShellParseList, 0)
-	collectRuntimeListsFromItems(&lists, file.Items)
-	for i := range file.Definitions {
-		collectRuntimeListsFromItems(&lists, file.Definitions[i].Items)
-	}
-	return lists
-}
-
-func collectRuntimeListsFromItems(dst *[]*MShellParseList, items []MShellParseItem) {
-	for _, item := range items {
-		switch v := item.(type) {
-		case *MShellParseList:
-			*dst = append(*dst, v)
-			collectRuntimeListsFromItems(dst, v.Items)
-		case *MShellParseDict:
-			for _, kv := range v.Items {
-				collectRuntimeListsFromItems(dst, kv.Value)
-			}
-		case *MShellParseQuote:
-			collectRuntimeListsFromItems(dst, v.Items)
-		case *MShellParseFormatString:
-			for _, interpolation := range v.Interpolations {
-				collectRuntimeListsFromItems(dst, interpolation)
-			}
-		case *MShellParsePrefixQuote:
-			collectRuntimeListsFromItems(dst, v.Items)
-		case *MShellParseIfBlock:
-			collectRuntimeListsFromItems(dst, v.IfBody)
-			for _, elseIf := range v.ElseIfs {
-				collectRuntimeListsFromItems(dst, elseIf.Condition)
-				collectRuntimeListsFromItems(dst, elseIf.Body)
-			}
-			collectRuntimeListsFromItems(dst, v.ElseBody)
-		case *MShellParseMatchBlock:
-			for _, arm := range v.Arms {
-				collectRuntimeListsFromItems(dst, arm.Body)
-			}
-		case *MShellParseGrid:
-			for _, row := range v.Rows {
-				collectRuntimeListsFromItems(dst, row)
-			}
-		case *MShellIndexerList:
-			collectRuntimeListsFromItems(dst, v.Indexers)
-		}
-	}
 }
 
 func collectListLiterals(list *MShellParseList) []Token {
@@ -824,6 +814,247 @@ func collectListLiterals(list *MShellParseList) []Token {
 	return literals
 }
 
+// quoteCall is a quote followed directly by the word that is called on it,
+// as in `(2 *) map`.
+type quoteCall struct {
+	quote *MShellParseQuote
+	name  *Token
+}
+
+// prefixQuoteAction offers to rewrite the innermost `(body) name` at the
+// cursor as the prefix quote `name. body end`. A quote written on one line
+// stays on one line; otherwise `name.` and `end` go on their own lines.
+//
+// Editors ask for code actions each time the cursor moves, so this reads
+// only the lines and parse items around the cursor.
+func prefixQuoteAction(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) (protocol.CodeAction, bool) {
+	line, col, ok := cursorAt(doc, params.Range.Start)
+	if !ok {
+		return protocol.CodeAction{}, false
+	}
+	var selected quoteCall
+	itemsAtCursor(file, line, col, func(items []MShellParseItem) {
+		for i, item := range items {
+			quote, ok := item.(*MShellParseQuote)
+			if !ok || i+1 == len(items) || quote.StartToken.Type != LEFT_PAREN || quote.EndToken.Type != RIGHT_PAREN {
+				continue
+			}
+			// A prefix quote calls its name as a bare word does, so the
+			// rewrite keeps the meaning. Comments between the quote and
+			// the word would be lost.
+			if name, ok := items[i+1].(*Token); ok && name.Type == LITERAL &&
+				spanHolds(&quote.StartToken, name, line, col) &&
+				(selected.quote == nil || quote.StartToken.Start > selected.quote.StartToken.Start) &&
+				onlySpaceBetween(doc, &quote.EndToken, name) &&
+				isPrefixQuoteName(name.Lexeme) {
+				selected = quoteCall{quote: quote, name: name}
+			}
+		}
+	})
+	if selected.quote == nil {
+		return protocol.CodeAction{}, false
+	}
+
+	open, name := selected.quote.StartToken, selected.name
+	return protocol.CodeAction{
+		Title: "Convert to prefix quote",
+		Kind:  protocol.RefactorRewrite,
+		Edit: &protocol.WorkspaceEdit{
+			Changes: map[protocol.DocumentURI][]protocol.TextEdit{
+				params.TextDocument.URI: {{
+					Range: protocol.Range{
+						Start: doc.position(open.Line-1, open.Column-1),
+						End:   doc.position(name.Line-1, name.Column-1+utf8.RuneCountInString(name.Lexeme)),
+					},
+					NewText: prefixQuoteText(doc, selected),
+				}},
+			},
+		},
+	}, true
+}
+
+// prefixQuoteText is the prefix quote that replaces a quote and its word.
+func prefixQuoteText(doc *lspDocument, call quoteCall) string {
+	open := call.quote.StartToken
+	close := call.quote.EndToken
+	head := call.name.Lexeme + "."
+	openLine := doc.Lines[open.Line-1]
+	closeLine := doc.Lines[close.Line-1]
+	openByte := byteIndex(openLine, open.Column-1)
+	closeByte := byteIndex(closeLine, close.Column-1)
+
+	if open.Line == close.Line {
+		body := strings.TrimSpace(openLine[openByte+1 : closeByte])
+		if body == "" {
+			return head + " end"
+		}
+		return head + " " + body + " end"
+	}
+
+	indent := leadingIndent(openLine[:openByte])
+
+	// Text after `(` moves to its own line under `name.`, indented as the
+	// next line of the body is; text before `)` moves to its own line above
+	// `end`. The lines between are left as they are.
+	lines := make([]string, 0, close.Line-open.Line+1)
+	lines = append(lines, openLine[openByte+1:])
+	lines = append(lines, doc.Lines[open.Line:close.Line-1]...)
+	lines = append(lines, closeLine[:closeByte])
+	first, last := lines[0], lines[len(lines)-1]
+	bodyIndent, found := "", false
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) != "" {
+			bodyIndent, found = leadingIndent(line), true
+			break
+		}
+	}
+	if !found {
+		unit := "    "
+		if strings.Contains(indent, "\t") {
+			unit = "\t"
+		}
+		bodyIndent = indent + unit
+	}
+
+	if strings.TrimSpace(first) == "" {
+		lines[0] = ""
+	} else {
+		lines[0] = "\n" + bodyIndent + strings.TrimLeft(first, " \t")
+	}
+	if strings.TrimSpace(last) != "" {
+		lines[len(lines)-1] = strings.TrimRight(last, " \t") + "\n" + indent
+	}
+	return head + strings.Join(lines, "\n") + "end"
+}
+
+// leadingIndent is the spaces and tabs at the start of s.
+func leadingIndent(s string) string {
+	return s[:len(s)-len(strings.TrimLeft(s, " \t"))]
+}
+
+// byteIndex is the byte index of the rune at 0-based column col of s, or
+// len(s) if s is shorter.
+func byteIndex(s string, col int) int {
+	for i := range s {
+		if col == 0 {
+			return i
+		}
+		col--
+	}
+	return len(s)
+}
+
+// cursorAt is the 1-based line and rune column of an LSP position, as
+// tokens count them, or false if the position is past the document.
+func cursorAt(doc *lspDocument, p protocol.Position) (int, int, bool) {
+	if int(p.Line) >= len(doc.Lines) {
+		return 0, 0, false
+	}
+	return int(p.Line) + 1, doc.runeCol(p) + 1, true
+}
+
+// itemsAtCursor calls visit with each list of items the cursor at 1-based
+// line and rune column col may be in, outermost first: the file's top
+// level, each definition's body, and the items inside every list, quote,
+// block or other item around the cursor. Items not around the cursor are
+// not looked into, so this reads a small part of a large file.
+func itemsAtCursor(file *MShellFile, line, col int, visit func(items []MShellParseItem)) {
+	itemsAtCursorIn(file.Items, line, col, visit)
+	for i := range file.Definitions {
+		itemsAtCursorIn(file.Definitions[i].Items, line, col, visit)
+	}
+}
+
+func itemsAtCursorIn(items []MShellParseItem, line, col int, visit func(items []MShellParseItem)) {
+	visit(items)
+	for _, item := range items {
+		switch v := item.(type) {
+		case *MShellParseQuote:
+			if spanHolds(&v.StartToken, &v.EndToken, line, col) {
+				itemsAtCursorIn(v.Items, line, col, visit)
+			}
+		case *MShellParseList:
+			if spanHolds(&v.StartToken, &v.EndToken, line, col) {
+				itemsAtCursorIn(v.Items, line, col, visit)
+			}
+		case *MShellParseDict:
+			if spanHolds(&v.StartToken, &v.EndToken, line, col) {
+				for _, kv := range v.Items {
+					itemsAtCursorIn(kv.Value, line, col, visit)
+				}
+			}
+		case *MShellParseFormatString:
+			for _, interpolation := range v.Interpolations {
+				itemsAtCursorIn(interpolation, line, col, visit)
+			}
+		case *MShellParsePrefixQuote:
+			if spanHolds(&v.StartToken, &v.EndToken, line, col) {
+				itemsAtCursorIn(v.Items, line, col, visit)
+			}
+		case *MShellParseIfBlock:
+			if spanHolds(&v.StartToken, &v.EndToken, line, col) {
+				itemsAtCursorIn(v.IfBody, line, col, visit)
+				for _, elseIf := range v.ElseIfs {
+					itemsAtCursorIn(elseIf.Condition, line, col, visit)
+					itemsAtCursorIn(elseIf.Body, line, col, visit)
+				}
+				itemsAtCursorIn(v.ElseBody, line, col, visit)
+			}
+		case *MShellParseMatchBlock:
+			if spanHolds(&v.StartToken, &v.EndToken, line, col) {
+				for _, arm := range v.Arms {
+					itemsAtCursorIn(arm.Body, line, col, visit)
+				}
+			}
+		case *MShellParseGrid:
+			if spanHolds(&v.StartToken, &v.EndToken, line, col) {
+				for _, row := range v.Rows {
+					itemsAtCursorIn(row, line, col, visit)
+				}
+			}
+		case *MShellIndexerList:
+			itemsAtCursorIn(v.Indexers, line, col, visit)
+		}
+	}
+}
+
+// spanHolds reports whether the cursor at 1-based line and rune column col
+// is in the text from the start of token start to the end of token end,
+// either end included.
+func spanHolds(start, end *Token, line, col int) bool {
+	endCol := end.Column + utf8.RuneCountInString(end.Lexeme)
+	return (start.Line < line || start.Line == line && start.Column <= col) &&
+		(line < end.Line || line == end.Line && col <= endCol)
+}
+
+// atEnd reports whether the cursor at 1-based line and rune column col is
+// just after token tok.
+func atEnd(tok *Token, line, col int) bool {
+	return line == tok.Line && col == tok.Column+utf8.RuneCountInString(tok.Lexeme)
+}
+
+// onlySpaceBetween reports whether only spaces and line breaks come between
+// tokens a and b. The parser drops comments, so this tells whether one is
+// there.
+func onlySpaceBetween(doc *lspDocument, a, b *Token) bool {
+	line, col := a.Line-1, a.Column-1+utf8.RuneCountInString(a.Lexeme)
+	for ; line < b.Line-1; line, col = line+1, 0 {
+		s := doc.Lines[line]
+		if strings.TrimSpace(s[byteIndex(s, col):]) != "" {
+			return false
+		}
+	}
+	s := doc.Lines[line]
+	return strings.TrimSpace(s[byteIndex(s, col):byteIndex(s, b.Column-1)]) == ""
+}
+
+// isPrefixQuoteName reports whether name followed by '.' lexes as the
+// prefix quote of name.
+func isPrefixQuoteName(name string) bool {
+	tokens, err := NewLexer(name+".", nil).Tokenize()
+	return err == nil && len(tokens) == 2 && tokens[0].Type == PREFIXQUOTE && tokens[0].Lexeme == name+"."
+}
+
 func codeActionKindRequested(only []protocol.CodeActionKind, action protocol.CodeActionKind) bool {
 	if len(only) == 0 {
 		return true
@@ -834,53 +1065,6 @@ func codeActionKindRequested(only []protocol.CodeActionKind, action protocol.Cod
 		}
 	}
 	return false
-}
-
-func lspPositionToRuneOffset(text string, position protocol.Position) (int, bool) {
-	line := uint32(0)
-	character := uint32(0)
-	runes := []rune(text)
-	for offset, r := range runes {
-		if line == position.Line && character == position.Character {
-			return offset, true
-		}
-		if r == '\n' {
-			if line == position.Line {
-				return 0, false
-			}
-			line++
-			character = 0
-			continue
-		}
-		character += uint32(utf16.RuneLen(r))
-	}
-	if line == position.Line && character == position.Character {
-		return len(runes), true
-	}
-	return 0, false
-}
-
-func tokenLSPRange(text string, tok Token) protocol.Range {
-	start := runeOffsetToLSPPosition(text, tok.Start)
-	end := runeOffsetToLSPPosition(text, tok.Start+utf8.RuneCountInString(tok.Lexeme))
-	return protocol.Range{Start: start, End: end}
-}
-
-func runeOffsetToLSPPosition(text string, target int) protocol.Position {
-	line := uint32(0)
-	character := uint32(0)
-	for offset, r := range []rune(text) {
-		if offset >= target {
-			break
-		}
-		if r == '\n' {
-			line++
-			character = 0
-			continue
-		}
-		character += uint32(utf16.RuneLen(r))
-	}
-	return protocol.Position{Line: line, Character: character}
 }
 
 func (s *lspServer) sendResult(id *json.RawMessage, result any) error {
@@ -955,23 +1139,111 @@ func (s *lspServer) writePayload(payload []byte) error {
 	return s.out.Flush()
 }
 
-func (s *lspServer) updateDocument(uri protocol.DocumentURI, text string) {
-	doc, exists := s.documents[uri]
-	if !exists {
-		doc = &lspDocument{}
-		s.documents[uri] = doc
-	}
-	doc.setText(text)
-	s.scheduleDiagnostics(uri, doc.Text)
+// lspDidChangeParams is protocol.DidChangeTextDocumentParams with changes
+// whose range can be missing.
+type lspDidChangeParams struct {
+	TextDocument   protocol.VersionedTextDocumentIdentifier `json:"textDocument"`
+	ContentChanges []lspContentChange                       `json:"contentChanges"`
 }
 
-// scheduleDiagnostics checks text off the event loop, so it keeps serving
+// lspContentChange is a change to a document: the text in Range replaced
+// with Text, or all of it when there is no Range. (The Range of
+// protocol.TextDocumentContentChangeEvent is not a pointer, so a change to
+// the whole text would read as an insert at its start.)
+type lspContentChange struct {
+	Range *protocol.Range `json:"range"`
+	Text  string          `json:"text"`
+}
+
+// applyChanges is text with changes made in order, each to the text the
+// one before it left. They are made in a buffer the server keeps, so an
+// edit allocates only the new text.
+func (s *lspServer) applyChanges(text string, changes []lspContentChange) string {
+	if len(changes) == 1 && changes[0].Range == nil {
+		return changes[0].Text
+	}
+	buf := append(s.editBuf[:0], text...)
+	for _, c := range changes {
+		if c.Range == nil {
+			buf = append(buf[:0], c.Text...)
+			continue
+		}
+		// The range's end is found from the line its start is on.
+		startLine := lineStart(buf, c.Range.Start.Line)
+		endLine := startLine
+		if c.Range.End.Line > c.Range.Start.Line {
+			endLine += lineStart(buf[startLine:], c.Range.End.Line-c.Range.Start.Line)
+		}
+		start := columnOffset(buf, startLine, c.Range.Start.Character)
+		end := max(start, columnOffset(buf, endLine, c.Range.End.Character))
+		buf = splice(buf, start, end, c.Text)
+	}
+	s.editBuf = buf
+	return string(buf)
+}
+
+// lineStart is the byte offset in text of the start of line n, counting
+// from 0, or the end of the text if it has fewer lines; a position past the
+// last line is the end of the text.
+func lineStart(text []byte, n uint32) int {
+	off := 0
+	for range n {
+		i := bytes.IndexByte(text[off:], '\n')
+		if i < 0 {
+			return len(text)
+		}
+		off += i + 1
+	}
+	return off
+}
+
+// columnOffset is the byte offset in text of the character at UTF-16
+// column col of the line that starts at byte off. A column past the end of
+// the line is the end of the line.
+func columnOffset(text []byte, off int, col uint32) int {
+	line := text[off:]
+	if i := bytes.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	units := uint32(0)
+	for i := 0; i < len(line); {
+		if units >= col {
+			return off + i
+		}
+		r, size := utf8.DecodeRune(line[i:])
+		units += uint32(utf16.RuneLen(r))
+		i += size
+	}
+	return off + len(line)
+}
+
+// splice is buf with the bytes from start to end replaced by text, made in
+// buf's memory when it has room.
+func splice(buf []byte, start, end int, text string) []byte {
+	old := len(buf)
+	n := old - (end - start) + len(text)
+	if n > old {
+		buf = slices.Grow(buf, n-old)[:n]
+	}
+	copy(buf[start+len(text):], buf[end:old])
+	copy(buf[start:], text)
+	return buf[:n]
+}
+
+func (s *lspServer) updateDocument(uri protocol.DocumentURI, text string) {
+	doc := newLSPDocument(text)
+	s.documents[uri] = doc
+	s.scheduleDiagnostics(uri, doc)
+}
+
+// scheduleDiagnostics checks doc off the event loop, so it keeps serving
 // requests; the write side is mutex-guarded so the notification
 // interleaves safely with response writes. Checks of one document do not
 // overlap and are not queued: a check running when an edit arrives is
 // followed by one check of the newest text, and its own result, now out
-// of date, is dropped.
-func (s *lspServer) scheduleDiagnostics(uri protocol.DocumentURI, text string) {
+// of date, is dropped. A request that needs the check of the newest text
+// first makes it itself, and the diagnostics then use that.
+func (s *lspServer) scheduleDiagnostics(uri protocol.DocumentURI, doc *lspDocument) {
 	s.diagMu.Lock()
 	defer s.diagMu.Unlock()
 	if s.diag == nil {
@@ -985,11 +1257,11 @@ func (s *lspServer) scheduleDiagnostics(uri protocol.DocumentURI, text string) {
 	st.version++
 	st.closed = false
 	if st.running {
-		st.pending, st.next = true, text
+		st.pending, st.next = true, doc
 		return
 	}
 	st.running = true
-	go s.diagnosticsLoop(uri, st, text, st.version)
+	go s.diagnosticsLoop(uri, st, doc, st.version)
 }
 
 // closeDiagnostics stops a closed document's diagnostics: a check still
@@ -998,7 +1270,7 @@ func (s *lspServer) closeDiagnostics(uri protocol.DocumentURI) {
 	s.diagMu.Lock()
 	defer s.diagMu.Unlock()
 	if st := s.diag[uri]; st != nil {
-		st.closed, st.pending, st.next = true, false, ""
+		st.closed, st.pending, st.next = true, false, nil
 		st.version++
 		if !st.running {
 			delete(s.diag, uri)
@@ -1006,15 +1278,15 @@ func (s *lspServer) closeDiagnostics(uri protocol.DocumentURI) {
 	}
 }
 
-func (s *lspServer) diagnosticsLoop(uri protocol.DocumentURI, st *lspDiagState, text string, version uint64) {
+func (s *lspServer) diagnosticsLoop(uri protocol.DocumentURI, st *lspDiagState, doc *lspDocument, version uint64) {
 	for {
-		diags, ok := s.safeDiagnostics(uri, text)
+		check := s.checked(uri, doc)
 		s.diagMu.Lock()
 		current := version == st.version && !st.closed
-		if current && ok {
+		if current && check.ok {
 			// Published under the lock, so a later check of this
 			// document cannot publish first.
-			s.publishDiagnostics(uri, diags)
+			s.publishDiagnostics(uri, check.diags)
 		}
 		if !st.pending {
 			st.running = false
@@ -1024,32 +1296,10 @@ func (s *lspServer) diagnosticsLoop(uri protocol.DocumentURI, st *lspDiagState, 
 			s.diagMu.Unlock()
 			return
 		}
-		text, version = st.next, st.version
-		st.pending, st.next = false, ""
+		doc, version = st.next, st.version
+		st.pending, st.next = false, nil
 		s.diagMu.Unlock()
 	}
-}
-
-// safeDiagnostics is computeDiagnostics, reporting a panic in the checker
-// instead of ending the server.
-func (s *lspServer) safeDiagnostics(uri protocol.DocumentURI, text string) (diags []protocol.Diagnostic, ok bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			logLSP(fmt.Sprintf("diagnostics panicked: %v\n%s", r, debug.Stack()))
-			diags, ok = nil, false
-		}
-	}()
-	return s.computeDiagnostics(uri, text), true
-}
-
-// publishDiagnosticsFor parses the document text and runs the static
-// type checker, converting any parse or type errors into LSP
-// diagnostics and sending a textDocument/publishDiagnostics
-// notification. An empty diagnostic list clears prior diagnostics on
-// the client. Runs on its own goroutine; it builds a private parser
-// so it doesn't race with handlers using s.parser.
-func (s *lspServer) publishDiagnosticsFor(uri protocol.DocumentURI, text string) {
-	s.publishDiagnostics(uri, s.computeDiagnostics(uri, text))
 }
 
 func (s *lspServer) publishDiagnostics(uri protocol.DocumentURI, diags []protocol.Diagnostic) {
@@ -1193,35 +1443,50 @@ func (s *lspServer) checkDocument(uri protocol.DocumentURI, file *MShellFile, fn
 	}
 }
 
-func (s *lspServer) computeDiagnostics(uri protocol.DocumentURI, text string) []protocol.Diagnostic {
-	lexer := NewLexer(text, nil)
-	parser := NewMShellParser(lexer)
-	file, parseErr := parser.ParseFile()
-	if parseErr != nil {
-		doc := &lspDocument{}
-		doc.setText(text)
-		return []protocol.Diagnostic{parseErrorToDiagnostic(doc, parseErr)}
-	}
-
-	var diags []protocol.Diagnostic
-	s.checkDocument(uri, file, func(errs []TypeError, arena *TypeArena, names *NameTable, startupErrs []string) {
-		for _, msg := range startupErrs {
-			diags = append(diags, protocol.Diagnostic{
-				Range:    protocol.Range{End: protocol.Position{Character: 1}},
-				Severity: protocol.DiagnosticSeverityError,
-				Source:   "mshell",
-				Message:  msg,
-			})
-		}
-		if len(errs) > 0 {
-			doc := &lspDocument{}
-			doc.setText(text)
-			for _, e := range errs {
-				diags = append(diags, typeErrorToDiagnostic(doc, e, arena, names))
+// checked is what the type checker says of doc, the text of the document
+// uri: its diagnostics, and the fixes code actions offer.
+func (s *lspServer) checked(uri protocol.DocumentURI, doc *lspDocument) *lspCheck {
+	doc.checkOnce.Do(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logLSP(fmt.Sprintf("type checker panicked: %v\n%s", r, debug.Stack()))
+				doc.check = lspCheck{}
 			}
+		}()
+		file, parseErr := doc.parsed()
+		if parseErr == errParserPanicked {
+			return
 		}
+		if parseErr != nil {
+			doc.check = lspCheck{ok: true, diags: []protocol.Diagnostic{parseErrorToDiagnostic(doc, parseErr)}}
+			return
+		}
+		check := lspCheck{ok: true}
+		s.checkDocument(uri, file, func(errs []TypeError, arena *TypeArena, names *NameTable, startupErrs []string) {
+			for _, msg := range startupErrs {
+				check.diags = append(check.diags, protocol.Diagnostic{
+					Range:    protocol.Range{End: protocol.Position{Character: 1}},
+					Severity: protocol.DiagnosticSeverityError,
+					Source:   "mshell",
+					Message:  msg,
+				})
+			}
+			for _, e := range errs {
+				diag := typeErrorToDiagnostic(doc, e, arena, names)
+				check.diags = append(check.diags, diag)
+				if e.Severity == SeverityError && e.Fix.Kind != FixNone {
+					check.fixes = append(check.fixes, lspTypeFix{title: e.Fix.Title, diag: diag, edit: typeFixEdit(doc, e.Fix)})
+				}
+			}
+		})
+		doc.check = check
 	})
-	return diags
+	return &doc.check
+}
+
+// computeDiagnostics is the diagnostics of text, the document uri.
+func (s *lspServer) computeDiagnostics(uri protocol.DocumentURI, text string) []protocol.Diagnostic {
+	return s.checked(uri, newLSPDocument(text)).diags
 }
 
 func typeErrorToDiagnostic(doc *lspDocument, e TypeError, arena *TypeArena, names *NameTable) protocol.Diagnostic {
@@ -1390,7 +1655,7 @@ func (s *lspServer) resolveHover(word string, doc *lspDocument) *builtinInfo {
 // signatures for any top-level definition named `name`. Returns nil if
 // the document fails to parse or no matching def exists.
 func (s *lspServer) lookupInFileDefSig(name string, doc *lspDocument) []string {
-	return s.inFileDefSigs(doc.Text)[name]
+	return s.inFileDefSigs(doc)[name]
 }
 
 func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.CompletionItem, bool) {
@@ -1405,10 +1670,12 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 	lexer.allowUnterminatedString = true
 	lexer.emitWhitespace = false
 	lexer.emitComments = false
+	lexer.skipValues = true // only lexemes are read
 	defer func() {
 		lexer.allowUnterminatedString = prevAllow
 		lexer.emitWhitespace = false
 		lexer.emitComments = false
+		lexer.skipValues = false
 		lexer.resetInput("")
 	}()
 
@@ -1675,7 +1942,7 @@ func (s *lspServer) completeWord(literalToken Token, prefix string, doc *lspDocu
 
 	// In-file defs: resolve sigs via the parser when possible; fall
 	// back to the lexer-collected name set when parsing fails.
-	inFileSigs := s.inFileDefSigs(doc.Text)
+	inFileSigs := s.inFileDefSigs(doc)
 	if len(inFileSigs) > 0 {
 		for name, sigs := range inFileSigs {
 			detail := ""
@@ -1736,12 +2003,17 @@ func (s *lspServer) completeWord(literalToken Token, prefix string, doc *lspDocu
 	return items
 }
 
-// inFileDefSigs parses the document and returns a name → formatted
-// signatures map for every top-level definition. Returns nil on parse
-// failure so callers can fall back to lexer-collected names.
-func (s *lspServer) inFileDefSigs(text string) map[string][]string {
-	s.parser.ResetInput(text)
-	file, err := s.parser.ParseFile()
+// inFileDefSigs is a name → formatted signatures map for every top-level
+// definition of the document, worked out once per version. It is nil if
+// the document does not parse, so callers can fall back to lexer-collected
+// names.
+func (s *lspServer) inFileDefSigs(doc *lspDocument) map[string][]string {
+	doc.sigsOnce.Do(func() { doc.sigs = s.defSigs(doc) })
+	return doc.sigs
+}
+
+func (s *lspServer) defSigs(doc *lspDocument) map[string][]string {
+	file, err := doc.parsed()
 	if err != nil || file == nil {
 		return nil
 	}
@@ -1807,10 +2079,7 @@ func (d *lspDocument) nameRange(t renameTok) protocol.Range {
 }
 
 func (s *lspServer) findRenameTarget(doc *lspDocument, position protocol.Position) (*renameTarget, error) {
-	parser := s.parser
-	parser.ResetInput(doc.Text)
-
-	file, err := parser.ParseFile()
+	file, err := doc.parsed()
 	if err != nil {
 		return nil, newLSPError(jsonrpcCodeInternalError, "failed to parse document: %v", err)
 	}
@@ -1911,8 +2180,7 @@ func (s *lspServer) declaration(params protocol.TextDocumentPositionParams) []pr
 		return nil
 	}
 
-	s.parser.ResetInput(doc.Text)
-	if file, err := s.parser.ParseFile(); err == nil && file != nil {
+	if file, err := doc.parsed(); err == nil && file != nil {
 		if tok, ok := findDeclaration(name, file.Definitions, file.Items); ok {
 			return []protocol.Location{{URI: params.TextDocument.URI, Range: doc.tokenRange(tok)}}
 		}
