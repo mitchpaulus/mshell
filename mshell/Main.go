@@ -1063,7 +1063,7 @@ type TermState struct {
 	// keys is what the key resolver keeps between keys, and abbrCursor
 	// where an abbreviation the running program expanded put its cursor
 	// marker (Bindings.go).
-	keys       keyResolver
+	keys       keyResolver[editSnapshot, editMode, *bindingEntry]
 	abbrCursor abbrExpansion
 	// lineArena holds the command line's strings, and lineTokens its
 	// tokens, lexed once per edit (CommandBuffers.go).

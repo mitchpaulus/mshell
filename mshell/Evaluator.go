@@ -536,7 +536,7 @@ type EvalState struct {
 	// Bindings are the key bindings, oldest first, the defaults first
 	// (Bindings.go), and bindingTries each mode's bindings in force.
 	Bindings             []*bindingEntry
-	bindingTries         [editModeCount]bindingTrie
+	bindingTries         [editModeCount]bindingTrie[*bindingEntry]
 	defaultBindingsAdded bool
 	// lastExitCode is the exit code of the last process to finish, when
 	// ranProcess is set.
