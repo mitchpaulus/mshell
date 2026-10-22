@@ -69,7 +69,7 @@ func TestHandleInputProcessesBufferedQuit(t *testing.T) {
 		},
 	}
 
-	quit := fm.handleInput([]byte("jq"), 2)
+	quit := feedInput(fm, "jq")
 
 	if !quit {
 		t.Fatal("expected buffered q to quit")
@@ -304,14 +304,13 @@ func TestEnterSelectedWindowsVolumeSwitchesCurrentDirectory(t *testing.T) {
 	}
 }
 
-// feedInput sends input to the file manager in reads of at most 16 bytes,
-// the size the main loop reads.
-func feedInput(fm *FileManager, input string) {
-	for len(input) > 0 {
-		n := min(16, len(input))
-		fm.handleInput([]byte(input[:n]), n)
-		input = input[n:]
+// feedInput gives the file manager each chunk as one read, and handles its
+// input until the input ends. It reports whether a binding quit.
+func feedInput(fm *FileManager, chunks ...string) bool {
+	fm.input = &StdinReaderState{array: make([]byte, 1024), read: chunkReads(chunks...)}
+	for !fm.handleNextInput() {
 	}
+	return fm.quit
 }
 
 func TestHandleInputIgnoresLateTerminalReplies(t *testing.T) {
@@ -344,9 +343,6 @@ func TestHandleInputIgnoresLateTerminalReplies(t *testing.T) {
 	if _, err := os.Stat(clipboard); err != nil {
 		t.Fatalf("clipboard was cleared: %v", err)
 	}
-	if len(fm.pendingInput) != 0 {
-		t.Fatalf("left %q waiting", fm.pendingInput)
-	}
 
 	// Keys after the replies still work.
 	feedInput(fm, "j")
@@ -361,21 +357,25 @@ func TestHandleInputJoinsSplitKeySequence(t *testing.T) {
 		cols:    80,
 		entries: []os.DirEntry{testDirEntry{name: "a"}, testDirEntry{name: "b"}},
 	}
-	fm.handleInput([]byte("\x1b["), 2)
-	if fm.cursor != 0 {
-		t.Fatal("acted on half of a key sequence")
+	reads := chunkReads("\x1b[", "B") // down arrow
+	fm.input = &StdinReaderState{array: make([]byte, 1024), read: func(buf []byte) (int, error) {
+		if fm.input.n == 2 && fm.cursor != 0 {
+			t.Fatal("acted on half of a key sequence")
+		}
+		return reads(buf)
+	}}
+	for !fm.handleNextInput() {
 	}
-	fm.handleInput([]byte("B"), 1) // down arrow
 	if fm.cursor != 1 {
 		t.Fatalf("cursor = %d after a split down arrow, want 1", fm.cursor)
 	}
 }
 
 func TestHandleInputDoesNotWaitForeverOnUnfinishedSequence(t *testing.T) {
-	fm := &FileManager{rows: 20, cols: 80}
-	feedInput(fm, "\x1b["+strings.Repeat("1;", maxPendingEscapeBytes))
-	if len(fm.pendingInput) >= maxPendingEscapeBytes {
-		t.Fatalf("kept %d bytes waiting", len(fm.pendingInput))
+	fm := &FileManager{rows: 20, cols: 80, entries: []os.DirEntry{testDirEntry{name: "a"}, testDirEntry{name: "b"}}}
+	feedInput(fm, "\x1b["+strings.Repeat("0", maxCsiParamBytes+10), "j")
+	if fm.cursor != 1 {
+		t.Fatalf("cursor = %d after the sequence was given up and j, want 1", fm.cursor)
 	}
 }
 

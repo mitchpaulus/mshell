@@ -426,6 +426,7 @@ or explicitly with `-` (`some-command | msh - [ARG]..`).
 With `-`, arguments after the `-` are positional arguments to the script.
 
 The interactive shell's keys are bindings set in `init.msh` with `bindingAdd`; see Key bindings in the Getting Started documentation.
+The file manager's (`msh fm`, `mshFileManager`) are set with `fmBindingAdd`, `fmBindingErase` and `fmBindingList`; see File manager there.
 
 ### Definition-based completions
 
@@ -750,10 +751,11 @@ A generic cannot be a union member.
 `match` takes a union apart by kind (`int n :`, `list xs :`), binding the member's own type.
 
 `type Name = T` is an alias, interchangeable with `T`; it may be recursive through a list, dict, field, quotation or enum (`type Person = {name: str, friends: [Person]}`).
-Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {Json}`, what `parseJson` gives), `Toml` (`bool | int | float | str | datetime | [Toml] | {Toml}`, the values in the dict `parseToml` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`, `PromptInfo`, `Abbr`, `AbbrInfo`, `Key` (`rune | NamedKey | ModifiedKey`), `EditState`, `Binding`, `Encrypted` (`{nonce: binary, ciphertext: binary, tag: binary}`); `ExcelCell` (`str | float | bool | ExcelError`, a cell `parseExcel` gives); and `UrlEncodable` (`str | path | int | [str | path | int]`), the values `urlEncode` takes in a dict.
+Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {Json}`, what `parseJson` gives), `Toml` (`bool | int | float | str | datetime | [Toml] | {Toml}`, the values in the dict `parseToml` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`, `PromptInfo`, `Abbr`, `AbbrInfo`, `Key` (`rune | NamedKey | ModifiedKey`), `EditState`, `Binding`, `FmLine`, `FmState`, `FmProgram` (`[FmOp | EditOp]`), `FmBinding`, `Encrypted` (`{nonce: binary, ciphertext: binary, tag: binary}`); `ExcelCell` (`str | float | bool | ExcelError`, a cell `parseExcel` gives); and `UrlEncodable` (`str | path | int | [str | path | int]`), the values `urlEncode` takes in a dict.
 The interactive prompt's enums are built in: `PromptItem`, `Base16Color`, `BaseBrightness`, `TextAttribute`, `CursorShape`; so is `Cipher` (`cipherAesGcm | cipherChaCha20Poly1305 | cipherXChaCha20Poly1305`), which `encrypt` and `decrypt` take.
 The abbreviation enums are built in too: `AbbrMatch`, `AbbrPosition`, `AbbrExpansion`.
 So are the key binding enums: `NamedKey` (`keyEnter`, `keyF1`, ...), `ModifiedKey` (`keyCtrl`, `keyAlt`, `keyShift`, `keySuper`), `EditMode`, `EditOp` (`editAccept`, `editRun`, ...), `BindingAction`.
+So are the file manager's binding enums: `FmMode`, `FmPrompt`, `FmDistance`, `FmOp` (`fmDown`, `fmCd`, ...), `FmAction`.
 `ExcelError` (`excelError str`) is an error cell `parseExcel` gives, holding the error's text, such as `"#DIV/0!"`.
 Their names and member names (`baseRed`, `attrBold`, `resetStyle`, `cipherAesGcm`, ...) cannot be declared or defined again.
 

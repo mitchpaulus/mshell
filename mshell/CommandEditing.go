@@ -67,6 +67,18 @@ func graphemeNext(source SourceText, cursor ByteOffset) ByteOffset {
 // Word commands retain the existing ASCII-space delimiter convention.
 // A space with combining marks is one whole delimiter grapheme.
 func wordLeft(source SourceText, cursor ByteOffset) ByteOffset {
+	return wordLeftBy(source, cursor, isSpaceByte)
+}
+
+func wordRight(source SourceText, cursor ByteOffset) ByteOffset {
+	return wordRightBy(source, cursor, isSpaceByte)
+}
+
+func isSpaceByte(b byte) bool { return b == ' ' }
+
+// wordLeftBy and wordRightBy move by words that end at a grapheme whose
+// first byte delim accepts.
+func wordLeftBy(source SourceText, cursor ByteOffset, delim func(byte) bool) ByteOffset {
 	cursor = graphemeCeil(source, cursor)
 	rest := string(source)
 	segmentState := -1
@@ -76,7 +88,7 @@ func wordLeft(source SourceText, cursor ByteOffset) ByteOffset {
 	for len(rest) > 0 && offset < cursor {
 		var cluster string
 		cluster, rest, _, segmentState = uniseg.FirstGraphemeClusterInString(rest, segmentState)
-		space := cluster[0] == ' '
+		space := delim(cluster[0])
 		if !space && previousSpace {
 			wordStart = offset
 		}
@@ -86,7 +98,7 @@ func wordLeft(source SourceText, cursor ByteOffset) ByteOffset {
 	return wordStart
 }
 
-func wordRight(source SourceText, cursor ByteOffset) ByteOffset {
+func wordRightBy(source SourceText, cursor ByteOffset, delim func(byte) bool) ByteOffset {
 	cursor = graphemeFloor(source, cursor)
 	rest := string(source)
 	segmentState := -1
@@ -96,7 +108,7 @@ func wordRight(source SourceText, cursor ByteOffset) ByteOffset {
 		var cluster string
 		cluster, rest, _, segmentState = uniseg.FirstGraphemeClusterInString(rest, segmentState)
 		if offset >= cursor {
-			space := cluster[0] == ' '
+			space := delim(cluster[0])
 			if space && inWord {
 				return offset
 			}

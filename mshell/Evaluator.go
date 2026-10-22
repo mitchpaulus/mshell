@@ -538,6 +538,11 @@ type EvalState struct {
 	Bindings             []*bindingEntry
 	bindingTries         [editModeCount]bindingTrie[*bindingEntry]
 	defaultBindingsAdded bool
+	// FmBindings are the file manager's key bindings, in the same way
+	// (FmBindings.go).
+	FmBindings             []*fmBindingEntry
+	fmBindingTries         [fmModeCount]bindingTrie[*fmBindingEntry]
+	fmDefaultBindingsAdded bool
 	// lastExitCode is the exit code of the last process to finish, when
 	// ranProcess is set.
 	lastExitCode int
@@ -7190,7 +7195,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot use a %s as a starting directory for mshFileManager.\n", t.Line, t.Column, obj.TypeName()))
 					}
 
-					newDir := RunFileManagerBuiltin(dir)
+					newDir, exit := RunFileManagerBuiltin(state, context, definitions, dir)
+					if exit != nil {
+						return *exit
+					}
 					if newDir != "" {
 						result, _, _, _ := state.ChangeDirectory(newDir, environmentSource(t))
 						if !result.Success {
@@ -12414,6 +12422,18 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 				case "bindingList":
 					if r := state.evalBindingList(&t, stack); r != nil {
+						return *r
+					}
+				case "fmBindingAdd":
+					if r := state.evalFmBindingAdd(&t, stack); r != nil {
+						return *r
+					}
+				case "fmBindingErase":
+					if r := state.evalFmBindingErase(&t, stack); r != nil {
+						return *r
+					}
+				case "fmBindingList":
+					if r := state.evalFmBindingList(&t, stack); r != nil {
 						return *r
 					}
 
