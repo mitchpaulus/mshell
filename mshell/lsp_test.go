@@ -1521,6 +1521,191 @@ func TestCodeActionQuotesNestedLiteralsFromOuterList(t *testing.T) {
 	}
 }
 
+// prefixQuoteResult runs the prefix quote code action at line and character
+// of doc, and gives the text after its edit, or false if it is not offered.
+func prefixQuoteResult(t *testing.T, doc string, line, character uint32) (string, bool) {
+	t.Helper()
+	uri := protocol.DocumentURI("file:///prefix-quote.msh")
+	server := &lspServer{
+		documents: map[protocol.DocumentURI]*lspDocument{
+			uri: {Text: doc},
+		},
+	}
+	pos := protocol.Position{Line: line, Character: character}
+	actions := server.codeActions(protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Range:        protocol.Range{Start: pos, End: pos},
+		Context:      protocol.CodeActionContext{Only: []protocol.CodeActionKind{protocol.RefactorRewrite}},
+	})
+	for _, action := range actions {
+		if action.Title != "Convert to prefix quote" {
+			continue
+		}
+		if action.Kind != protocol.RefactorRewrite {
+			t.Fatalf("unexpected code action kind: %q", action.Kind)
+		}
+		edits := action.Edit.Changes[uri]
+		if len(edits) != 1 {
+			t.Fatalf("expected one edit, got %+v", edits)
+		}
+		start, ok1 := lspPositionToRuneOffset(doc, edits[0].Range.Start)
+		end, ok2 := lspPositionToRuneOffset(doc, edits[0].Range.End)
+		if !ok1 || !ok2 {
+			t.Fatalf("edit range outside document: %+v", edits[0].Range)
+		}
+		runes := []rune(doc)
+		return string(runes[:start]) + edits[0].NewText + string(runes[end:]), true
+	}
+	return "", false
+}
+
+func TestCodeActionPrefixQuote(t *testing.T) {
+	tests := []struct {
+		name      string
+		doc       string
+		line      uint32
+		character uint32
+		want      string
+	}{
+		{
+			name:      "single line",
+			doc:       "[1 2 3] ( 2 * ) map wl",
+			character: 10,
+			want:      "[1 2 3] map. 2 * end wl",
+		},
+		{
+			name:      "cursor on the word",
+			doc:       "[1 2 3] (2 *) map",
+			character: 15,
+			want:      "[1 2 3] map. 2 * end",
+		},
+		{
+			name:      "cursor just after the word",
+			doc:       "[1 2 3] (2 *) map",
+			character: 17,
+			want:      "[1 2 3] map. 2 * end",
+		},
+		{
+			name:      "empty quote",
+			doc:       "() myDef",
+			character: 0,
+			want:      "myDef. end",
+		},
+		{
+			name:      "innermost quote",
+			doc:       "@xs ((5 >) filter) map",
+			character: 6,
+			want:      "@xs (filter. 5 > end) map",
+		},
+		{
+			name:      "outer quote",
+			doc:       "@xs ((5 >) filter) map",
+			character: 4,
+			want:      "@xs map. (5 >) filter end",
+		},
+		{
+			name:      "unicode before the quote",
+			doc:       "\"café😀\" (wl) each",
+			character: 10,
+			want:      "\"café😀\" each. wl end",
+		},
+		{
+			name: "multiline already on own lines",
+			doc: "def f ([str] -- )\n" +
+				"    @xs (\n" +
+				"        @x wl\n" +
+				"    ) each\n" +
+				"end",
+			line:      2,
+			character: 8,
+			want: "def f ([str] -- )\n" +
+				"    @xs each.\n" +
+				"        @x wl\n" +
+				"    end\n" +
+				"end",
+		},
+		{
+			name: "multiline with body next to the parens",
+			doc: "@xs (@x wl\n" +
+				"    @y wl) each",
+			line:      1,
+			character: 4,
+			want: "@xs each.\n" +
+				"    @x wl\n" +
+				"    @y wl\n" +
+				"end",
+		},
+		{
+			name: "multiline keeps the body's indentation",
+			doc: "(a\n" +
+				"b) wl",
+			want: "wl.\n" +
+				"a\n" +
+				"b\n" +
+				"end",
+		},
+		{
+			name: "multiline indents with tabs after a tab",
+			doc: "\t(a\n" +
+				"\t) wl",
+			character: 1,
+			want: "\twl.\n" +
+				"\t\ta\n" +
+				"\tend",
+		},
+		{
+			name: "multiline string in the body is unchanged",
+			doc: "(\"x\n" +
+				"  y\") wl",
+			want: "wl.\n" +
+				"  \"x\n" +
+				"  y\"\n" +
+				"end",
+		},
+		{
+			name:      "word on the next line",
+			doc:       "(\n  1\n)\nmap",
+			line:      3,
+			character: 1,
+			want:      "map.\n  1\nend",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := prefixQuoteResult(t, tc.doc, tc.line, tc.character)
+			if !ok {
+				t.Fatal("expected a prefix quote code action")
+			}
+			if got != tc.want {
+				t.Fatalf("got\n%s\nwant\n%s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCodeActionPrefixQuoteUnavailable(t *testing.T) {
+	tests := []struct {
+		name      string
+		doc       string
+		line      uint32
+		character uint32
+	}{
+		{name: "quote at the end", doc: "(1 2)", character: 1},
+		{name: "quote followed by a string", doc: "(1 2) 'map'", character: 1},
+		{name: "quote followed by a keyword", doc: "(1 2) if 1 end", character: 1},
+		{name: "quote followed by a quote", doc: "(1) (2) map", character: 1},
+		{name: "cursor outside", doc: "1 (2) map", character: 0},
+		{name: "comment before the word", doc: "(1) # note\nmap", character: 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, ok := prefixQuoteResult(t, tc.doc, tc.line, tc.character); ok {
+				t.Fatalf("expected no prefix quote code action, got %q", got)
+			}
+		})
+	}
+}
+
 func TestCodeActionUnavailableOutsideListOrForQuickFix(t *testing.T) {
 	uri := protocol.DocumentURI("file:///no-quote-list.msh")
 	doc := "word [echo arg]"

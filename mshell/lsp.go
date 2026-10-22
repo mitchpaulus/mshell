@@ -642,6 +642,9 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 		if a, ok := quoteLiteralsAction(doc, file, params); ok {
 			actions = append(actions, a)
 		}
+		if a, ok := prefixQuoteAction(doc, file, params); ok {
+			actions = append(actions, a)
+		}
 	}
 	return actions
 }
@@ -822,6 +825,181 @@ func collectListLiterals(list *MShellParseList) []Token {
 	}
 	collect(list)
 	return literals
+}
+
+// quoteCall is a quote followed directly by the word that is called on it,
+// as in `(2 *) map`.
+type quoteCall struct {
+	quote *MShellParseQuote
+	name  *Token
+}
+
+// prefixQuoteAction offers to rewrite the innermost `(body) name` at the
+// cursor as the prefix quote `name. body end`. A quote written on one line
+// stays on one line; otherwise `name.` and `end` go on their own lines.
+func prefixQuoteAction(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) (protocol.CodeAction, bool) {
+	cursor, ok := lspPositionToRuneOffset(doc.Text, params.Range.Start)
+	if !ok {
+		return protocol.CodeAction{}, false
+	}
+	text := []rune(doc.Text)
+
+	var selected *quoteCall
+	for _, call := range collectQuoteCalls(file) {
+		start := call.quote.StartToken.Start
+		end := call.name.Start + utf8.RuneCountInString(call.name.Lexeme)
+		if cursor < start || cursor > end {
+			continue
+		}
+		if selected != nil && start <= selected.quote.StartToken.Start {
+			continue
+		}
+		// Comments between the quote and the word would be lost.
+		if strings.TrimSpace(string(text[call.quote.EndToken.Start+1:call.name.Start])) != "" {
+			continue
+		}
+		selected = &call
+	}
+	if selected == nil {
+		return protocol.CodeAction{}, false
+	}
+
+	start := selected.quote.StartToken.Start
+	end := selected.name.Start + utf8.RuneCountInString(selected.name.Lexeme)
+	return protocol.CodeAction{
+		Title: "Convert to prefix quote",
+		Kind:  protocol.RefactorRewrite,
+		Edit: &protocol.WorkspaceEdit{
+			Changes: map[protocol.DocumentURI][]protocol.TextEdit{
+				params.TextDocument.URI: {{
+					Range: protocol.Range{
+						Start: runeOffsetToLSPPosition(doc.Text, start),
+						End:   runeOffsetToLSPPosition(doc.Text, end),
+					},
+					NewText: prefixQuoteText(text, *selected),
+				}},
+			},
+		},
+	}, true
+}
+
+// prefixQuoteText is the prefix quote that replaces a quote and its word.
+func prefixQuoteText(text []rune, call quoteCall) string {
+	open := call.quote.StartToken.Start
+	close := call.quote.EndToken.Start
+	head := call.name.Lexeme + "."
+	body := string(text[open+1 : close])
+
+	if call.quote.StartToken.Line == call.quote.EndToken.Line {
+		body = strings.TrimSpace(body)
+		if body == "" {
+			return head + " end"
+		}
+		return head + " " + body + " end"
+	}
+
+	lineStart := open
+	for lineStart > 0 && text[lineStart-1] != '\n' {
+		lineStart--
+	}
+	indent := leadingIndent(string(text[lineStart:open]))
+
+	// Text after `(` moves to its own line under `name.`, indented as the
+	// next line of the body is; text before `)` moves to its own line above
+	// `end`. The lines between are left as they are.
+	lines := strings.Split(body, "\n")
+	first, last := lines[0], lines[len(lines)-1]
+	bodyIndent, found := "", false
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) != "" {
+			bodyIndent, found = leadingIndent(line), true
+			break
+		}
+	}
+	if !found {
+		unit := "    "
+		if strings.Contains(indent, "\t") {
+			unit = "\t"
+		}
+		bodyIndent = indent + unit
+	}
+
+	if strings.TrimSpace(first) == "" {
+		lines[0] = ""
+	} else {
+		lines[0] = "\n" + bodyIndent + strings.TrimLeft(first, " \t")
+	}
+	if strings.TrimSpace(last) != "" {
+		lines[len(lines)-1] = strings.TrimRight(last, " \t") + "\n" + indent
+	}
+	return head + strings.Join(lines, "\n") + "end"
+}
+
+// leadingIndent is the spaces and tabs at the start of s.
+func leadingIndent(s string) string {
+	return s[:len(s)-len(strings.TrimLeft(s, " \t"))]
+}
+
+// collectQuoteCalls finds every quote followed by a word that can be written
+// as a prefix quote. A prefix quote calls its name as a bare word does, so
+// the rewrite keeps the meaning.
+func collectQuoteCalls(file *MShellFile) []quoteCall {
+	calls := make([]quoteCall, 0)
+	collectQuoteCallsFromItems(&calls, file.Items)
+	for i := range file.Definitions {
+		collectQuoteCallsFromItems(&calls, file.Definitions[i].Items)
+	}
+	return calls
+}
+
+func collectQuoteCallsFromItems(dst *[]quoteCall, items []MShellParseItem) {
+	for i, item := range items {
+		switch v := item.(type) {
+		case *MShellParseQuote:
+			if i+1 < len(items) && v.StartToken.Type == LEFT_PAREN && v.EndToken.Type == RIGHT_PAREN {
+				if name, ok := items[i+1].(*Token); ok && name.Type == LITERAL && isPrefixQuoteName(name.Lexeme) {
+					*dst = append(*dst, quoteCall{quote: v, name: name})
+				}
+			}
+			collectQuoteCallsFromItems(dst, v.Items)
+		case *MShellParseList:
+			collectQuoteCallsFromItems(dst, v.Items)
+		case *MShellParseDict:
+			for _, kv := range v.Items {
+				collectQuoteCallsFromItems(dst, kv.Value)
+			}
+		case *MShellParseFormatString:
+			for _, interpolation := range v.Interpolations {
+				collectQuoteCallsFromItems(dst, interpolation)
+			}
+		case *MShellParsePrefixQuote:
+			collectQuoteCallsFromItems(dst, v.Items)
+		case *MShellParseIfBlock:
+			collectQuoteCallsFromItems(dst, v.IfBody)
+			for _, elseIf := range v.ElseIfs {
+				collectQuoteCallsFromItems(dst, elseIf.Condition)
+				collectQuoteCallsFromItems(dst, elseIf.Body)
+			}
+			collectQuoteCallsFromItems(dst, v.ElseBody)
+		case *MShellParseMatchBlock:
+			for _, arm := range v.Arms {
+				collectQuoteCallsFromItems(dst, arm.Body)
+			}
+		case *MShellParseGrid:
+			for _, row := range v.Rows {
+				collectQuoteCallsFromItems(dst, row)
+			}
+		case *MShellIndexerList:
+			collectQuoteCallsFromItems(dst, v.Indexers)
+		}
+	}
+}
+
+// isPrefixQuoteName reports whether name followed by '.' lexes as the
+// prefix quote of name.
+func isPrefixQuoteName(name string) bool {
+	tokens, err := NewLexer(name+".", nil).Tokenize()
+	return err == nil && len(tokens) == 2 && tokens[0].Type == PREFIXQUOTE && tokens[0].Lexeme == name+"."
 }
 
 func codeActionKindRequested(only []protocol.CodeActionKind, action protocol.CodeActionKind) bool {
