@@ -104,6 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The interactive shell's personal key sequences are gone: `jf`, `vl`, `qq`, `;r`, `;j`, F1 and Alt-D.
   Letters typed in those pairs now appear at once, and `vlc` and `qq` can be typed. Add any you want back to `init.msh` with `bindingAdd`.
 - Modifiers on Home, End, the arrows and Delete, and Alt with any key, are now read as keys that can be bound, instead of being dropped.
+- A lone Escape is a key in the old terminal encoding, and acts when it is pressed.
+  Escape and a key arrive together only as Alt and the key; Escape and then a key, typed one after the other, is no longer Alt and that key.
 - The interactive shell writes a debug log only when started with `--debug`.
   The log is `mshell.log` in the history directory, readable only by you, instead of `/tmp/mshell.log`.
   Without `--debug`, no log file is opened, so a key press no longer waits on an fsync,

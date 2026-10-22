@@ -112,8 +112,9 @@ func TestDecodeCsiKey(t *testing.T) {
 	}
 }
 
-// ESC and a key with no binding is that key: an Escape pressed out of habit
-// loses nothing. ESC b is Alt-B, which is bound.
+// ESC and a key in one read, when Alt and the key has no binding, is
+// Escape and then the key, and Escape is not bound. ESC b is Alt-B, which
+// is bound.
 func TestEscapeThenUnboundKey(t *testing.T) {
 	state := &TermState{stdInFd: -1}
 	in := []byte("\x1ba\x1bb")

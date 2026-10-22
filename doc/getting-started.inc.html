@@ -334,9 +334,11 @@ Which keys the shell can tell apart depends on the terminal.
 Most terminals send keys in an old encoding in which some keys are the same:
 Tab is Ctrl-I, Enter is Ctrl-M, many terminals send Ctrl-H for Ctrl-Backspace,
 and Ctrl with Shift on a letter is Ctrl alone.
-Escape followed by a key is Alt with that key:
-when that Alt key is bound it runs, and otherwise the key acts on its own, so an Escape pressed out of habit loses nothing.
-So a lone Escape is not a key in this encoding, and Escape waits for the next key to know what it is.
+In it, Alt and a key is sent as Escape and then the key, so the shell tells them apart by how they arrive.
+An Escape that arrives on its own is <code>keyEscape</code>, and acts when you press it.
+An Escape that arrives together with a key is Alt and that key when a binding uses it, and otherwise Escape and then the key.
+Nothing waits for a time: a terminal sends a key's bytes together, so this is right whether you type fast or slow, and over ssh.
+The <a href="#getting-started-file-manager">file manager</a> reads keys the same way.
 </p>
 
 <p>
@@ -359,7 +361,7 @@ Ctrl-C twice, or Ctrl-D, ends it.
 r'x' keyCtrl                             18
 r':'                                     3a                       +401 ms
 keyLeft keyAlt                           1b 5b 31 3b 33 44        +960 ms
-r'x' keyAlt  (or r'x' alone, when that is not bound) 1b 78                    +512 ms</code>
+r'x' keyAlt  (or keyEscape then r'x', when that is not bound) 1b 78           +512 ms</code>
 </pre>
 
 <h2 id="getting-started-edit-ops">Editor operations</h2>

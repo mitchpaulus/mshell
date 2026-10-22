@@ -2990,6 +2990,8 @@ type StdinReaderState struct {
 	n     int
 	// record, when not nil, gets every byte read (msh keys).
 	record *[]byte
+	// read, when not nil, fills the buffer in place of standard input.
+	read func([]byte) (int, error)
 }
 
 // UnreadByte pushes back the byte most recently returned by ReadByte so the
@@ -3006,16 +3008,20 @@ func (state *StdinReaderState) UnreadByte() {
 
 func (state *StdinReaderState) ReadByte() (byte, error) {
 	if state.i >= state.n {
-		// Do fresh read
-		// fmt.Fprintf(f, "Reading from stdin...\n")
-		// fmt.Fprintf(f, "%s", debug.Stack())
-		if err := processShellInputGate.beginRead(); err != nil {
-			return 0, err
+		var n int
+		var err error
+		if state.read != nil {
+			n, err = state.read(state.array)
+		} else {
+			if err := processShellInputGate.beginRead(); err != nil {
+				return 0, err
+			}
+			n, err = os.Stdin.Read(state.array)
+			processShellInputGate.endRead()
 		}
-		n, err := os.Stdin.Read(state.array)
-		processShellInputGate.endRead()
-		// fmt.Fprintf(f, "Read %d from stdin...\n", n)
-
+		if err == nil && n == 0 {
+			err = io.EOF
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -3158,6 +3164,11 @@ func readBracketedPaste(reader *StdinReaderState) (TerminalToken, error) {
 	}
 }
 
+// maxCsiParamBytes bounds the parameters of a CSI sequence the lexer
+// reads before it gives up on the sequence. Keys and terminal replies are
+// far shorter.
+const maxCsiParamBytes = 256
+
 // maxControlStringBytes bounds how much of an unterminated control string
 // the lexer will swallow before giving up, so a stray ESC ] in pasted text
 // cannot eat every following keystroke.
@@ -3237,7 +3248,12 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 			// If the character is a printable ASCII character, send it to the channel.
 			return AsciiToken{Char: c}, nil
 		} else if c == 27 { // ESC
-			// c = <-inputChan
+			// An ESC that ends what one read returned is Escape: a key's
+			// bytes arrive in one read. A read that filled the buffer has
+			// more bytes waiting (ai/fm-bindings.typ, section 10.2).
+			if stdinReaderState.i >= stdinReaderState.n && stdinReaderState.n < len(stdinReaderState.array) {
+				return KeyToken{Code: NamedEscape}, nil
+			}
 			c, err = stdinReaderState.ReadByte()
 			if err != nil {
 				if err == io.EOF {
@@ -3370,6 +3386,11 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 								return CsiToken{FinalChar: c, Params: byteArray}, nil
 							}
 						}
+						if len(byteArray) >= maxCsiParamBytes {
+							// No key or reply is this long: stop waiting for
+							// its end.
+							return UnknownToken{}, nil
+						}
 						byteArray = append(byteArray, c)
 					}
 				}
@@ -3386,27 +3407,10 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					return nil, fmt.Errorf("Error reading from stdin: %w", err)
 				}
 				return UnknownToken{}, nil
-			} else if c == 98 { // Alt-B
-				// Move cursor left by word
-				return KEY_ALT_B, nil
-			} else if c == 100 { // Alt-D
-				return KEY_ALT_D, nil
-			} else if c == 102 { // Alt-F
-				// Move cursor right by word
-				return KEY_ALT_F, nil
-			} else if c == 111 { // Alt-O
-				return KEY_ALT_O, nil
-			} else if c == 'R' { // Alt-Shift-R
-				return KEY_ALT_SHIFT_R, nil
-			} else if c == 46 { // Alt-.
-				return KEY_ALT_DOT, nil
-				// Quit
 			} else {
-				// ESC and a key: Alt and the key, as the legacy encoding sends it.
-				// A lone Escape cannot be told from it without waiting for the next
-				// byte, so it is not a key here. When Alt and the key has no
-				// binding, the key acts on its own (HandleToken), so an Escape
-				// pressed out of habit loses nothing.
+				// ESC and a key in one read: Alt and the key, as the legacy
+				// encoding sends it. When Alt and the key has no binding, it
+				// is Escape and then the key (HandleToken).
 				stdinReaderState.UnreadByte()
 				inner, err := state.InteractiveLexer(stdinReaderState)
 				if err != nil {
@@ -4394,6 +4398,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		return false, nil
 	}
 	if t, ok := token.(KeyToken); ok && t.EscOf != 0 && !state.keyUsed(code) {
+		if end, err := state.resolveKey(NamedEscape, time.Now()); end || err != nil {
+			return end, err
+		}
 		code = t.EscOf
 	}
 	return state.resolveKey(code, time.Now())

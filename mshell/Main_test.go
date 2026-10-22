@@ -1072,7 +1072,7 @@ func TestInteractiveLexerDeleteRequiresTilde(t *testing.T) {
 		{"end rxvt", "\x1b[8~", KEY_END},
 		{"home ctrl xterm", "\x1b[1;5H", KeyToken{Code: NamedHome | KeyModCtrl}},
 		{"end shift xterm", "\x1b[1;2F", KeyToken{Code: NamedEnd | KeyModShift}},
-		{"alt b", "\x1bb", KEY_ALT_B},
+		{"alt b", "\x1bb", KeyToken{Code: 'b' | KeyModAlt, EscOf: 'b'}},
 		{"cursor report", "\x1b[3;5R", CsiToken{FinalChar: 'R', Params: []byte("3;5")}},
 		{"incomplete report parameters", "\x1b[3R", CsiToken{FinalChar: 'R', Params: []byte("3")}},
 		{"other CSI with one parameter", "\x1b[3A", CsiToken{FinalChar: 'A', Params: []byte("3")}},
@@ -1102,9 +1102,9 @@ func TestInteractiveLexerDeleteRequiresTilde(t *testing.T) {
 	}
 }
 
-// ESC and a key is Alt and the key, which remembers the key, so that it
-// acts on its own when Alt and it has no binding (TestEscapeThenUnboundKey).
-// The byte after ESC is never swallowed.
+// ESC and a key in one read is Alt and the key, which remembers the key,
+// so that it is Escape and then the key when Alt and it has no binding
+// (TestEscapeThenUnboundKey). The byte after ESC is never swallowed.
 func TestInteractiveLexerEscapeThenKey(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1136,6 +1136,70 @@ func TestInteractiveLexerEscapeThenKey(t *testing.T) {
 				t.Fatalf("consumed %d bytes, want %d", reader.i, len(input))
 			}
 		})
+	}
+}
+
+// chunkReads gives each chunk as one read, split where it is longer than
+// the buffer, and then the end of the input.
+func chunkReads(chunks ...string) func([]byte) (int, error) {
+	return func(buf []byte) (int, error) {
+		if len(chunks) == 0 {
+			return 0, io.EOF
+		}
+		n := copy(buf, chunks[0])
+		chunks[0] = chunks[0][n:]
+		if chunks[0] == "" {
+			chunks = chunks[1:]
+		}
+		return n, nil
+	}
+}
+
+// An ESC that ends a read is Escape, unless the read filled the buffer;
+// a sequence split across reads is still one key (ai/fm-bindings.typ,
+// section 10.2).
+func TestInteractiveLexerEscapeAtReadBoundary(t *testing.T) {
+	tests := []struct {
+		name   string
+		buffer int
+		reads  []string
+		want   []TerminalToken
+	}{
+		{"escape alone", 16, []string{"\x1b", "x"}, []TerminalToken{KeyToken{Code: NamedEscape}, AsciiToken{Char: 'x'}}},
+		{"escape then a key in the next read", 16, []string{"x\x1b", "a"}, []TerminalToken{AsciiToken{Char: 'x'}, KeyToken{Code: NamedEscape}, AsciiToken{Char: 'a'}}},
+		{"escape filling the buffer", 1, []string{"\x1b[A"}, []TerminalToken{KEY_UP}},
+		{"sequence split after the bracket", 16, []string{"\x1b[", "A"}, []TerminalToken{KEY_UP}},
+		{"escape and a key in one read", 16, []string{"\x1bq"}, []TerminalToken{KeyToken{Code: 'q' | KeyModAlt, EscOf: 'q'}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := &StdinReaderState{array: make([]byte, tt.buffer), read: chunkReads(tt.reads...)}
+			state := &TermState{}
+			for i, want := range tt.want {
+				got, err := state.InteractiveLexer(reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("token %d = %#v, want %#v", i, got, want)
+				}
+			}
+			if got, err := state.InteractiveLexer(reader); err != nil || got != (EofTerminalToken{}) {
+				t.Fatalf("after the tokens: %#v, %v", got, err)
+			}
+		})
+	}
+}
+
+// A CSI sequence that never ends is given up on: the lexer does not wait
+// for its end forever.
+func TestInteractiveLexerBoundsCsiParameters(t *testing.T) {
+	input := "\x1b[" + strings.Repeat("1;", maxCsiParamBytes)
+	reader := &StdinReaderState{array: make([]byte, 64), read: chunkReads(input)}
+	state := &TermState{}
+	got, err := state.InteractiveLexer(reader)
+	if err != nil || got != (UnknownToken{}) {
+		t.Fatalf("token = %#v, %v; want UnknownToken", got, err)
 	}
 }
 

@@ -203,8 +203,8 @@ func keysSource(keys []KeyCode) string {
 // KeyToken is a key the terminal lexer decoded that has no token of its
 // own among the older ones: an Alt chord, a key with modifiers, a key the
 // kitty keyboard protocol reports. EscOf is set when the legacy encoding
-// sent it as ESC and a key: it is that key, which acts on its own when
-// Alt and it has no binding.
+// sent it as ESC and a key in one read: it is that key, and the token is
+// Escape and then that key when Alt and it has no binding.
 type KeyToken struct {
 	Code  KeyCode
 	EscOf KeyCode
