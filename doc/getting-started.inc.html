@@ -303,6 +303,10 @@ and Alt-S puts <code>sudo</code> in front of the line.
     </tbody>
 </table>
 
+<p>
+Every type is declared in full in <a href="#getting-started-binding-types">Types</a>.
+</p>
+
 <h2 id="getting-started-keys">Keys</h2>
 
 <p>
@@ -586,9 +590,16 @@ one with no keys or more than 8, a <code>within</code> or <code>idleBefore</code
 an operation after <code>editAccept</code> or <code>editExit</code>, or one that a newer binding conflicts with.
 </p>
 
+<h2 id="getting-started-binding-types">Types</h2>
+
 <p>
+The types of key bindings, as <code>mshell</code> declares them.
 These types and their members are built in, so their names cannot be used for your own types, members or definitions.
 </p>
+
+<pre>
+⟦ [[awk '/^enum NamedKey/,/^type Binding =/' ../mshell/Prompt.go] [msh --html]] |; ⟧
+</pre>
 
 <h1 id="getting-started-file-manager">File manager <a class="section-link" href="#getting-started-file-manager" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
 
@@ -642,6 +653,7 @@ What they print goes to standard error, so the directory is the only thing <code
 An <code>FmProgram</code> is a list of <code>FmOp</code> and <code>EditOp</code> values, <code>[FmOp | EditOp]</code>:
 the prompt line is edited with the shell's line edits, so <code>editDeleteWordLeft</code> means the same thing in both places.
 A list written in place is a program; a list kept in a variable as <code>[EditOp]</code> is not, and is made one with <code>as FmProgram</code>.
+Every type is declared in full in <a href="#getting-started-fm-types">Types</a>.
 </p>
 
 <h2 id="getting-started-fm-modes">Modes</h2>
@@ -971,6 +983,18 @@ an operation after <code>fmQuit</code> or <code>fmQuitNoCd</code>, or a distance
 The prompt line has its own keymap, apart from the shell's line, so a key you change in the shell is not changed there:
 bind it in both if you want it in both.
 </p>
+
+<h2 id="getting-started-fm-types">Types</h2>
+
+<p>
+The file manager's types, as <code>mshell</code> declares them.
+These types and their members are built in, so their names cannot be used for your own types, members or definitions.
+<code>[FmOp | EditOp]</code> is the same type as <code>FmProgram</code>.
+</p>
+
+<pre>
+⟦ [[awk '/^enum FmMode/,/^type FmBinding/' ../mshell/Prompt.go] [msh --html]] |; ⟧
+</pre>
 
 <h1 id="getting-started-github-actions">GitHub Actions <a class="section-link" href="#getting-started-github-actions" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
 
