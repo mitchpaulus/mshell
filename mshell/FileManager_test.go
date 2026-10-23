@@ -8,6 +8,7 @@ import (
 	"testing"
 	"reflect"
 	"runtime"
+	"strconv"
 )
 
 type testDirEntry struct {
@@ -20,43 +21,57 @@ func (e testDirEntry) IsDir() bool                { return e.isDir }
 func (e testDirEntry) Type() fs.FileMode          { return 0 }
 func (e testDirEntry) Info() (fs.FileInfo, error) { return nil, nil }
 
-func TestAppendUniquePathAppendsWhenMissing(t *testing.T) {
-	paths := []string{"/tmp/a", "/tmp/b"}
-	got := appendUniquePath(paths, "/tmp/c")
-	want := []string{"/tmp/a", "/tmp/b", "/tmp/c"}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("appendUniquePath() = %v, want %v", got, want)
+// A path added goes after those already in its list, once, and leaves the
+// other list.
+func TestClipboardListsAdd(t *testing.T) {
+	c := newClipboardLists([]string{"/a", "/b"}, []string{"/x"})
+	for _, add := range []struct{ op, path string }{
+		{"copy", "/a"}, {"cut", "/c"}, {"cut", "/b"}, {"copy", "/d"}, {"cut", "/a"}, {"cut", "/x"},
+	} {
+		c.add(add.op, add.path)
+	}
+	cut, copied := c.lists()
+	if want := []string{"/b", "/c", "/a", "/x"}; !reflect.DeepEqual(cut, want) {
+		t.Errorf("cut %v, want %v", cut, want)
+	}
+	if want := []string{"/d"}; !reflect.DeepEqual(copied, want) {
+		t.Errorf("copy %v, want %v", copied, want)
 	}
 }
 
-func TestAppendUniquePathSkipsDuplicate(t *testing.T) {
-	paths := []string{"/tmp/a", "/tmp/b"}
-	got := appendUniquePath(paths, "/tmp/a")
-	want := []string{"/tmp/a", "/tmp/b"}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("appendUniquePath() = %v, want %v", got, want)
+// Reading the clipboard drops lines that are not an op and a path, and
+// writes the file back without them.
+func TestLoadClipboardDropsBadLines(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	path, err := clipboardFilePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(path, []byte("cut\t/a\n\nbad\t/b\ncopy\t/a\nno tab\ncut\t\ncopy\t/c\ncut\t/d\ncut\t/d\n"), 0644)
+	cut, copied := loadClipboard()
+	if !reflect.DeepEqual(cut, []string{"/d"}) || !reflect.DeepEqual(copied, []string{"/a", "/c"}) {
+		t.Fatalf("cut %v, copy %v", cut, copied)
+	}
+	data, _ := os.ReadFile(path)
+	if want := "cut\t/d\ncopy\t/a\ncopy\t/c\n"; string(data) != want {
+		t.Errorf("file %q, want %q", data, want)
 	}
 }
 
-func TestRemovePathRemovesExisting(t *testing.T) {
-	paths := []string{"/tmp/a", "/tmp/b", "/tmp/c"}
-	got := removePath(paths, "/tmp/b")
-	want := []string{"/tmp/a", "/tmp/c"}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("removePath() = %v, want %v", got, want)
+// Cutting a large selection reads and writes the clipboard once, not once
+// for each entry.
+func BenchmarkClipboardAddSelection(b *testing.B) {
+	b.Setenv("XDG_DATA_HOME", b.TempDir())
+	dir := b.TempDir()
+	for i := range 1000 {
+		os.WriteFile(filepath.Join(dir, "file"+strconv.Itoa(i)), nil, 0644)
 	}
-}
-
-func TestRemovePathNoOpWhenMissing(t *testing.T) {
-	paths := []string{"/tmp/a", "/tmp/b"}
-	got := removePath(paths, "/tmp/c")
-	want := []string{"/tmp/a", "/tmp/b"}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("removePath() = %v, want %v", got, want)
+	fm := &FileManager{rows: 20, cols: 80, currentDir: dir}
+	fm.loadDirectory()
+	for b.Loop() {
+		clearClipboard()
+		fm.invertSelection()
+		fm.clipboardAdd("cut")
 	}
 }
 

@@ -357,9 +357,7 @@ func (fm *FileManager) runOp(op fmOp, key KeyCode) fmOpResult {
 	case fmOpToggle:
 		fm.toggleCurrent()
 	case fmOpSelectionInvert:
-		for _, entry := range fm.entries {
-			fm.toggleSelected(fm.selectedEntryPath(entry))
-		}
+		fm.invertSelection()
 	case fmOpSelectionClear:
 		fm.clearSelection()
 	case fmOpPrompt:
@@ -508,6 +506,29 @@ func (fm *FileManager) toggleSelected(path string) {
 	fm.selected = append(fm.selected, path)
 }
 
+// invertSelection selects the entries shown that are not selected, and
+// takes out those that are, in one pass over the selection. Selected
+// entries of other directories stay selected.
+func (fm *FileManager) invertSelection() {
+	if fm.selectedSet == nil {
+		fm.selectedSet = make(map[string]bool)
+	}
+	var added []string
+	for _, entry := range fm.entries {
+		path := fm.selectedEntryPath(entry)
+		if fm.selectedSet[path] {
+			delete(fm.selectedSet, path)
+		} else {
+			fm.selectedSet[path] = true
+			added = append(added, path)
+		}
+	}
+	// The paths taken out are no longer in the set, and the paths added
+	// were not in the list.
+	fm.selected = slices.DeleteFunc(fm.selected, func(p string) bool { return !fm.selectedSet[p] })
+	fm.selected = append(fm.selected, added...)
+}
+
 func (fm *FileManager) clearSelection() {
 	fm.selected = nil
 	fm.selectedSet = nil
@@ -552,9 +573,7 @@ func (fm *FileManager) noteMissing(missing int) {
 // or copied.
 func (fm *FileManager) clipboardAdd(op string) {
 	paths, missing := fm.targets()
-	for _, p := range paths {
-		_ = addClipboardPath(op, p)
-	}
+	_ = addClipboardPaths(op, paths)
 	fm.noteMissing(missing)
 }
 

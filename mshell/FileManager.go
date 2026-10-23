@@ -2467,40 +2467,17 @@ func loadClipboard() ([]string, []string) {
 	if trimmed == "" {
 		return nil, nil
 	}
-	lines := strings.Split(trimmed, "\n")
-	if len(lines) == 0 {
-		return nil, nil
-	}
-
-	var cutPaths []string
-	var copyPaths []string
+	clipboard := newClipboardLists(nil, nil)
 	dirty := false
-	for _, line := range lines {
-		if line == "" {
+	for line := range strings.SplitSeq(trimmed, "\n") {
+		op, path, found := strings.Cut(line, "\t")
+		if !found || path == "" || (op != "cut" && op != "copy") {
 			dirty = true
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) != 2 {
-			dirty = true
-			continue
-		}
-		op := parts[0]
-		path := parts[1]
-		if path == "" {
-			dirty = true
-			continue
-		}
-		if op == "cut" {
-			copyPaths = removePath(copyPaths, path)
-			cutPaths = appendUniquePath(cutPaths, path)
-		} else if op == "copy" {
-			cutPaths = removePath(cutPaths, path)
-			copyPaths = appendUniquePath(copyPaths, path)
-		} else {
-			dirty = true
-		}
+		clipboard.add(op, path)
 	}
+	cutPaths, copyPaths := clipboard.lists()
 	if dirty {
 		_ = saveClipboard(cutPaths, copyPaths)
 	}
@@ -2537,32 +2514,60 @@ func clearClipboard() error {
 	return os.Remove(path)
 }
 
-func appendUniquePath(paths []string, path string) []string {
-	if slices.Contains(paths, path) {
-			return paths
-		}
-	return append(paths, path)
+// clipboardLists are the cut and copy lists, with where each path is in
+// its list, so adding a path takes no scan of the lists.
+type clipboardLists struct {
+	cutPaths, copyPaths []string
+	cutAt, copyAt       map[string]int
 }
 
-func removePath(paths []string, path string) []string {
-	for i, existing := range paths {
-		if existing == path {
-			return append(paths[:i], paths[i+1:]...)
-		}
+func newClipboardLists(cutPaths []string, copyPaths []string) *clipboardLists {
+	c := &clipboardLists{cutAt: make(map[string]int, len(cutPaths)), copyAt: make(map[string]int, len(copyPaths))}
+	for _, p := range cutPaths {
+		c.add("cut", p)
 	}
-	return paths
+	for _, p := range copyPaths {
+		c.add("copy", p)
+	}
+	return c
 }
 
-func addClipboardPath(op string, path string) error {
-	cutPaths, copyPaths := loadClipboard()
-	if op == "cut" {
-		copyPaths = removePath(copyPaths, path)
-		cutPaths = appendUniquePath(cutPaths, path)
-	} else if op == "copy" {
-		cutPaths = removePath(cutPaths, path)
-		copyPaths = appendUniquePath(copyPaths, path)
+// add puts a path in the cut or the copy list, after any it is already in
+// there, and takes it out of the other. A path taken out is left as "" until
+// lists.
+func (c *clipboardLists) add(op string, path string) {
+	to, toAt, from, fromAt := &c.cutPaths, c.cutAt, &c.copyPaths, c.copyAt
+	if op == "copy" {
+		to, toAt, from, fromAt = &c.copyPaths, c.copyAt, &c.cutPaths, c.cutAt
 	}
-	return saveClipboard(cutPaths, copyPaths)
+	if i, ok := fromAt[path]; ok {
+		(*from)[i] = ""
+		delete(fromAt, path)
+	}
+	if _, ok := toAt[path]; !ok {
+		toAt[path] = len(*to)
+		*to = append(*to, path)
+	}
+}
+
+// lists gives the cut and copy lists, in the order their paths were added.
+// The clipboardLists is not used after.
+func (c *clipboardLists) lists() ([]string, []string) {
+	removed := func(p string) bool { return p == "" }
+	return slices.DeleteFunc(c.cutPaths, removed), slices.DeleteFunc(c.copyPaths, removed)
+}
+
+// addClipboardPaths adds paths to the cut or the copy list, reading and
+// writing the clipboard once.
+func addClipboardPaths(op string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	clipboard := newClipboardLists(loadClipboard())
+	for _, p := range paths {
+		clipboard.add(op, p)
+	}
+	return saveClipboard(clipboard.lists())
 }
 
 func saveBookmarks(bookmarks map[byte]string) error {

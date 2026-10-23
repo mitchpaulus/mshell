@@ -288,6 +288,30 @@ func TestFmSelection(t *testing.T) {
 	}
 }
 
+// v keeps the selection's order: what stays selected first, then the
+// entries it selects, in the order of the listing. Entries of other
+// directories stay selected.
+func TestFmInvertSelectionOrder(t *testing.T) {
+	fm := fmTestManager(t, "", "a", "b", "c", "d")
+	other := filepath.Join(t.TempDir(), "other")
+	fm.toggleSelected(filepath.Join(fm.currentDir, "c"))
+	fm.toggleSelected(other)
+	fm.toggleSelected(filepath.Join(fm.currentDir, "a"))
+	feedInput(fm, "v")
+	want := []string{other, filepath.Join(fm.currentDir, "b"), filepath.Join(fm.currentDir, "d")}
+	if !slices.Equal(fm.selected, want) {
+		t.Fatalf("after v: %v, want %v", fm.selected, want)
+	}
+	for _, p := range want {
+		if !fm.selectedSet[p] {
+			t.Errorf("%s is not in the set", p)
+		}
+	}
+	if len(fm.selectedSet) != len(want) {
+		t.Errorf("set %v, want %v", fm.selectedSet, want)
+	}
+}
+
 // Pastes never run keys: outside a prompt they are refused out loud; in
 // one they go in whole or not at all.
 func TestFmPastes(t *testing.T) {
