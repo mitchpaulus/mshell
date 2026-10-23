@@ -533,16 +533,11 @@ type EvalState struct {
 	// yet. A script never prints them.
 	Abbrs        []*abbrEntry
 	AbbrWarnings []string
-	// Bindings are the key bindings, oldest first, the defaults first
-	// (Bindings.go), and bindingTries each mode's bindings in force.
-	Bindings             []*bindingEntry
-	bindingTries         [editModeCount]bindingTrie[*bindingEntry]
-	defaultBindingsAdded bool
-	// FmBindings are the file manager's key bindings, in the same way
-	// (FmBindings.go).
-	FmBindings             []*fmBindingEntry
-	fmBindingTries         [fmModeCount]bindingTrie[*fmBindingEntry]
-	fmDefaultBindingsAdded bool
+	// bindings and fmBindings are the keymaps of the shell (Bindings.go)
+	// and of the file manager (FmBindings.go). shellKeymap and fmKeymap give
+	// them with their defaults.
+	bindings   keymap[*bindingEntry]
+	fmBindings keymap[*fmBindingEntry]
 	// lastExitCode is the exit code of the last process to finish, when
 	// ranProcess is set.
 	lastExitCode int
@@ -12413,27 +12408,27 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return *r
 					}
 				case "bindingAdd":
-					if r := state.evalBindingAdd(&t, stack); r != nil {
+					if r := state.shellKeymap().evalAdd(state, &t, stack); r != nil {
 						return *r
 					}
 				case "bindingErase":
-					if r := state.evalBindingErase(&t, stack); r != nil {
+					if r := state.shellKeymap().evalErase(state, &t, stack); r != nil {
 						return *r
 					}
 				case "bindingList":
-					if r := state.evalBindingList(&t, stack); r != nil {
+					if r := state.shellKeymap().evalList(state, &t, stack); r != nil {
 						return *r
 					}
 				case "fmBindingAdd":
-					if r := state.evalFmBindingAdd(&t, stack); r != nil {
+					if r := state.fmKeymap().evalAdd(state, &t, stack); r != nil {
 						return *r
 					}
 				case "fmBindingErase":
-					if r := state.evalFmBindingErase(&t, stack); r != nil {
+					if r := state.fmKeymap().evalErase(state, &t, stack); r != nil {
 						return *r
 					}
 				case "fmBindingList":
-					if r := state.evalFmBindingList(&t, stack); r != nil {
+					if r := state.fmKeymap().evalList(state, &t, stack); r != nil {
 						return *r
 					}
 

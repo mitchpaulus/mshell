@@ -666,28 +666,19 @@ func (state *TermState) runAbbrFunc(e *abbrEntry, word string, site abbrSite) (s
 	run := state.runUserQuote(e.fn, &stack, context, abbrTimeout, newEvalCancel())
 
 	what := "The quote of abbreviation " + e.describe()
-	var problem string
-	switch {
-	case run.err != nil:
-		problem = run.err.Error()
-	case run.result.ExitCalled:
-		problem = what + " called 'exit'; that does not end the shell.\n"
-	case run.result.Success:
-		if len(stack) == 1 {
-			if m, ok := stack[0].(*Maybe); ok {
-				if m.IsNone() {
-					state.abbrProblem = ""
-					return "", false, false
-				}
-				if s, ok := m.obj.(MShellString); ok {
-					state.abbrProblem = ""
-					return s.Content, true, false
-				}
+	problem := run.problem(what, "the shell", abbrTimeout)
+	if problem == "" {
+		if m, ok := singleMaybe(stack); ok {
+			if m.IsNone() {
+				state.abbrProblem = ""
+				return "", false, false
+			}
+			if s, ok := m.obj.(MShellString); ok {
+				state.abbrProblem = ""
+				return s.Content, true, false
 			}
 		}
 		problem = what + " must leave one Maybe[str] on the stack.\n"
-	default:
-		problem = run.failure(what, abbrTimeout)
 	}
 	// The same problem is shown once, not again while the quote keeps
 	// failing the same way.

@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -176,20 +175,10 @@ func (state *EvalState) opValue(op editOp) MShellObject {
 
 // bindingEntry is one binding bindingAdd added, or a default.
 type bindingEntry struct {
-	// record is the Binding bindingAdd was given, with its mode filled in,
-	// which bindingList gives back.
-	record *MShellDict
-	keys   []KeyCode
-	mode   editMode
+	bindingCommon[editMode]
 	// The action: ops for bindingOps, fn for bindingFunc.
 	ops []editOp
 	fn  *MShellQuotation
-	// The timing fields, zero when not given.
-	within, idleBefore time.Duration
-	// invalid says why the record can never fire, or is "". inert is that,
-	// or the conflict with a newer binding that made it inert.
-	invalid string
-	inert   string
 }
 
 // pure reports whether the binding only edits the line. A quote's result
@@ -206,82 +195,23 @@ func (e *bindingEntry) pure() bool {
 	return true
 }
 
+// describe names a binding in a message.
+func (e *bindingEntry) describe() string { return e.describeIn(editModeMembers[:]) }
+
 // parseBinding reads a Binding record. It fails only on a value the type
 // checker refuses; a record that can never fire gives an inert entry.
 func (state *EvalState) parseBinding(record *MShellDict) (*bindingEntry, error) {
-	e := &bindingEntry{record: record}
-
-	keys, ok := record.Items["keys"].(*MShellList)
-	if !ok {
-		return nil, fmt.Errorf("the 'keys' field must be a list of Key")
+	common, opsValue, fn, err := parseBindingFields[editMode](state, record, "BindingAction", "EditMode", editModeMembers[:])
+	if err != nil {
+		return nil, err
 	}
-	for _, item := range keys.Items {
-		k, err := keyCodeOf(item)
-		if err != nil {
+	e := &bindingEntry{bindingCommon: common, fn: fn}
+	if opsValue != nil {
+		if e.ops, err = parseEditOps(opsValue); err != nil {
 			return nil, err
 		}
-		e.keys = append(e.keys, k)
 	}
-
-	action := enumField(record, "action", "BindingAction")
-	if action == nil || len(action.Payload) != 1 {
-		return nil, fmt.Errorf("the 'action' field must be a BindingAction")
-	}
-	switch action.Member {
-	case "bindingOps":
-		ops, err := parseEditOps(action.Payload[0])
-		if err != nil {
-			return nil, err
-		}
-		e.ops = ops
-	default:
-		q, ok := action.Payload[0].(*MShellQuotation)
-		if !ok {
-			return nil, fmt.Errorf("'bindingFunc' must hold a quotation")
-		}
-		e.fn = q
-	}
-
-	if _, given := record.Items["mode"]; !given {
-		record.Items["mode"] = state.builtinEnumValue("modeInsert")
-	}
-	mode := enumField(record, "mode", "EditMode")
-	if mode == nil {
-		return nil, fmt.Errorf("the 'mode' field must be an EditMode")
-	}
-	e.mode = editMode(mode.MemberIndex)
-
-	timing := []struct {
-		key string
-		to  *time.Duration
-	}{{"within", &e.within}, {"idleBefore", &e.idleBefore}}
-	for _, f := range timing {
-		v, given := record.Items[f.key]
-		if !given {
-			continue
-		}
-		n, ok := v.(MShellInt)
-		if !ok {
-			return nil, fmt.Errorf("the '%s' field must be an int", f.key)
-		}
-		if n.Value <= 0 && e.invalid == "" {
-			e.invalid = fmt.Sprintf("'%s' is %d; a time must be more than 0 ms", f.key, n.Value)
-		}
-		*f.to = time.Duration(n.Value) * time.Millisecond
-	}
-	if v, given := record.Items["description"]; given {
-		if _, ok := v.(MShellString); !ok {
-			return nil, fmt.Errorf("the 'description' field must be a str")
-		}
-	}
-
-	switch {
-	case e.invalid != "":
-	case len(e.keys) == 0:
-		e.invalid = "it has no keys"
-	case len(e.keys) > maxBindingKeys:
-		e.invalid = fmt.Sprintf("it has %d keys, and a binding has at most %d", len(e.keys), maxBindingKeys)
-	default:
+	if e.invalid == "" {
 		for i, op := range e.ops {
 			if op.kind.ends() && i < len(e.ops)-1 {
 				e.invalid = fmt.Sprintf("'%s' must be its last op", editOpMembers[op.kind])
@@ -292,106 +222,17 @@ func (state *EvalState) parseBinding(record *MShellDict) (*bindingEntry, error) 
 	return e, nil
 }
 
-// describe names a binding in a message.
-func (e *bindingEntry) describe() string {
-	s := "[" + keysSource(e.keys) + "]"
-	if e.mode != modeInsert {
-		s += " in " + editModeMembers[e.mode]
-	}
-	return s
+var shellKeymapKind = keymapKind[*bindingEntry]{
+	builtin:   "binding",
+	record:    "a Binding",
+	modeCount: int(editModeCount),
+	parse:     (*EvalState).parseBinding,
+	defaults:  (*EvalState).defaultBindingEntries,
 }
 
-func (e *bindingEntry) bindingKeys() []KeyCode { return e.keys }
-func (e *bindingEntry) bindingMode() uint8     { return uint8(e.mode) }
-func (e *bindingEntry) bindingTiming() (time.Duration, time.Duration) {
-	return e.within, e.idleBefore
-}
-func (e *bindingEntry) inertReason() *string  { return &e.inert }
-func (e *bindingEntry) invalidReason() string { return e.invalid }
-
-// recomputeBindings works out which bindings are inert, and builds each
-// mode's trie of the bindings in force.
-func (state *EvalState) recomputeBindings() {
-	recomputeInert(state.Bindings)
-	for m := range state.bindingTries {
-		state.bindingTries[m].build(state.Bindings, uint8(m))
-	}
-}
-
-// addBinding adds an entry as the newest, replacing one with the same keys
-// in the same mode, and notes each binding it makes inert for the
-// interactive shell to print.
-func (state *EvalState) addBinding(e *bindingEntry) {
-	state.ensureDefaultBindings()
-	state.Bindings = addToKeymap(state.Bindings, e, func(entries []*bindingEntry) {
-		state.Bindings = entries
-		state.recomputeBindings()
-	}, func(warning string) {
-		state.AbbrWarnings = append(state.AbbrWarnings, warning)
-	})
-}
-
-// evalBindingAdd runs bindingAdd: (Binding -- ).
-func (state *EvalState) evalBindingAdd(t *Token, stack *MShellStack) *EvalResult {
-	obj, err := stack.Pop()
-	if err != nil {
-		return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot do 'bindingAdd' operation on an empty stack.\n", t.Line, t.Column))
-	}
-	dict, ok := obj.(*MShellDict)
-	if !ok {
-		return state.mismatchPtr(fmt.Sprintf("%d:%d: 'bindingAdd' takes a Binding, found a %s (%s).\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
-	}
-	copied, err := DeepCopy(dict)
-	if err != nil {
-		return state.checkedPtr(fmt.Sprintf("%d:%d: 'bindingAdd': %s\n", t.Line, t.Column, err.Error()))
-	}
-	e, err := state.parseBinding(copied.(*MShellDict))
-	if err != nil {
-		return state.mismatchPtr(fmt.Sprintf("%d:%d: 'bindingAdd' takes a Binding: %s.\n", t.Line, t.Column, err.Error()))
-	}
-	state.addBinding(e)
-	return nil
-}
-
-// evalBindingErase runs bindingErase: ([Key] -- ). It removes the bindings
-// with those keys in every mode, defaults included.
-func (state *EvalState) evalBindingErase(t *Token, stack *MShellStack) *EvalResult {
-	obj, err := stack.Pop()
-	if err != nil {
-		return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot do 'bindingErase' operation on an empty stack.\n", t.Line, t.Column))
-	}
-	list, ok := obj.(*MShellList)
-	if !ok {
-		return state.mismatchPtr(fmt.Sprintf("%d:%d: 'bindingErase' takes a list of Key, found a %s (%s).\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
-	}
-	keys := make([]KeyCode, len(list.Items))
-	for i, item := range list.Items {
-		k, err := keyCodeOf(item)
-		if err != nil {
-			return state.mismatchPtr(fmt.Sprintf("%d:%d: 'bindingErase': %s.\n", t.Line, t.Column, err.Error()))
-		}
-		keys[i] = k
-	}
-	state.ensureDefaultBindings()
-	state.Bindings = slices.DeleteFunc(state.Bindings, func(e *bindingEntry) bool { return slices.Equal(e.keys, keys) })
-	state.recomputeBindings()
-	return nil
-}
-
-// evalBindingList runs bindingList: ( -- new [Binding]), oldest first, so
-// the defaults come first.
-func (state *EvalState) evalBindingList(t *Token, stack *MShellStack) *EvalResult {
-	state.ensureDefaultBindings()
-	list := NewList(len(state.Bindings))
-	for i, e := range state.Bindings {
-		copied, err := DeepCopy(e.record)
-		if err != nil {
-			return state.checkedPtr(fmt.Sprintf("%d:%d: 'bindingList': %s\n", t.Line, t.Column, err.Error()))
-		}
-		list.Items[i] = copied
-	}
-	stack.Push(list)
-	return nil
+// shellKeymap is the shell's keymap, with its defaults.
+func (state *EvalState) shellKeymap() *keymap[*bindingEntry] {
+	return state.bindings.ready(state, &shellKeymapKind)
 }
 
 // ----- The default keymap (section 5.4) -----
@@ -467,31 +308,18 @@ var defaultBindings = sync.OnceValue(func() []defaultBinding {
 	return bs
 })
 
-// ensureDefaultBindings adds the default keymap, once, before any binding
-// a file adds, so a user's binding is always the newer one.
-func (state *EvalState) ensureDefaultBindings() {
-	if state.defaultBindingsAdded {
-		return
-	}
-	state.defaultBindingsAdded = true
-	state.ensureBuiltinEnums()
+// defaultBindingEntries are the entries of the default keymap.
+func (state *EvalState) defaultBindingEntries() []*bindingEntry {
+	var entries []*bindingEntry
 	for _, d := range defaultBindings() {
-		keys := NewList(len(d.keys))
-		for i, k := range d.keys {
-			keys.Items[i] = state.keyValue(k)
-		}
 		opList := NewList(len(d.ops))
 		for i, op := range d.ops {
 			opList.Items[i] = state.opValue(op)
 		}
-		record := NewDict()
-		record.Items["keys"] = keys
-		record.Items["action"] = state.builtinEnumValue("bindingOps", opList)
-		record.Items["mode"] = state.builtinEnumValue(editModeMembers[d.mode])
-		e := &bindingEntry{record: record, keys: d.keys, mode: d.mode, ops: d.ops}
-		state.Bindings = append(state.Bindings, e)
+		record := state.defaultRecord(d.keys, state.builtinEnumValue("bindingOps", opList), editModeMembers[d.mode], "")
+		entries = append(entries, &bindingEntry{bindingCommon: bindingCommon[editMode]{record: record, keys: d.keys, mode: d.mode}, ops: d.ops})
 	}
-	state.recomputeBindings()
+	return entries
 }
 
 // ----- Resolving keys (section 6.5, ai/key-bindings/KeyResolution.tla) -----
@@ -515,8 +343,7 @@ func (state *TermState) editMode() editMode {
 // completes, or does the key's own action, and keeps the keys that may
 // still become part of a binding. It returns whether the shell should end.
 func (state *TermState) resolveKey(code KeyCode, now time.Time) (bool, error) {
-	ev := &state.evalState
-	ev.ensureDefaultBindings()
+	km := state.evalState.shellKeymap()
 	r := &state.keys
 	mode := state.editMode()
 	if mode != r.mode {
@@ -526,7 +353,7 @@ func (state *TermState) resolveKey(code KeyCode, now time.Time) (bool, error) {
 	w := r.push(code, now, editSnapshot{line: state.currentCommand, index: state.index})
 
 	for {
-		trie := &ev.bindingTries[mode]
+		trie := &km.tries[mode]
 		fired, end, err := r.fireLongest(trie, w, state.fireBinding)
 		if fired || err != nil {
 			state.showPendingKeys()
@@ -586,9 +413,7 @@ func (state *TermState) fireBinding(e *bindingEntry, w []pendingKey[editSnapshot
 // keyUsed reports whether a binding of the current mode starts with key,
 // or continues the pending keys with it.
 func (state *TermState) keyUsed(key KeyCode) bool {
-	ev := &state.evalState
-	ev.ensureDefaultBindings()
-	return state.keys.used(&ev.bindingTries[state.editMode()], key)
+	return state.keys.used(&state.evalState.shellKeymap().tries[state.editMode()], key)
 }
 
 // bindingProgram is the program a binding gives for the keys of w: its ops,
@@ -620,36 +445,22 @@ func (state *TermState) bindingProgram(e *bindingEntry, w []pendingKey[editSnaps
 	run := state.runUserQuote(e.fn, &stack, context, abbrTimeout, newEvalCancel())
 
 	what := "The quote of binding " + e.describe()
-	var problem string
-	switch {
-	case run.err != nil:
-		problem = run.err.Error()
-	case run.result.ExitCalled:
-		problem = what + " called 'exit'; that does not end the shell.\n"
-	case run.result.Success:
-		if len(stack) == 1 {
-			if m, ok := stack[0].(*Maybe); ok {
-				if m.IsNone() {
-					state.abbrProblem = ""
-					return nil, false
-				}
-				program, err := parseEditOps(m.obj)
-				if err == nil {
-					state.abbrProblem = ""
-					for i, op := range program {
-						if op.kind.ends() && i < len(program)-1 {
-							state.abbrMessage = fmt.Sprintf("%s returned ops after '%s'; they were not run.\n", what, editOpMembers[op.kind])
-							program = program[:i+1]
-							break
-						}
-					}
-					return program, true
-				}
+	var program []editOp
+	some := false
+	problem := run.problem(what, "the shell", abbrTimeout)
+	if problem == "" {
+		program, some, problem = stackProgram(stack, what, "Maybe[[EditOp]]", parseEditOps)
+	}
+	if problem == "" {
+		state.abbrProblem = ""
+		for i, op := range program {
+			if op.kind.ends() && i < len(program)-1 {
+				state.abbrMessage = fmt.Sprintf("%s returned ops after '%s'; they were not run.\n", what, editOpMembers[op.kind])
+				program = program[:i+1]
+				break
 			}
 		}
-		problem = what + " must leave one Maybe[[EditOp]] on the stack.\n"
-	default:
-		problem = run.failure(what, abbrTimeout)
+		return program, some
 	}
 	// The same problem is shown once, not again while the quote keeps
 	// failing the same way.
@@ -686,6 +497,14 @@ func (state *TermState) runEditOps(program []editOp, key KeyCode) (bool, error) 
 }
 
 func (state *TermState) runEditOp(op editOp, key KeyCode) (bool, error) {
+	if start, end, ok := lineMoveOrDelete(op.kind, state.currentCommand, state.index, isSpaceByte); ok {
+		if start < end {
+			state.replaceText("", start, end)
+		} else {
+			state.index = start
+		}
+		return false, nil
+	}
 	switch op.kind {
 	case opInsert:
 		state.replaceText(op.a, state.index, state.index)
@@ -709,35 +528,6 @@ func (state *TermState) runEditOp(op editOp, key KeyCode) (bool, error) {
 		state.currentCommand = SourceText(state.lineArena.concat(op.a, op.b, ""))
 		state.index = graphemeCeil(state.currentCommand, ByteOffset(len(op.a)))
 		state.resetHistorySearch()
-	case opLeft:
-		state.index = graphemePrevious(state.currentCommand, state.index)
-	case opRight:
-		state.index = graphemeNext(state.currentCommand, state.index)
-	case opWordLeft:
-		state.index = wordLeft(state.currentCommand, state.index)
-	case opWordRight:
-		state.index = wordRight(state.currentCommand, state.index)
-	case opLineStart:
-		state.index = 0
-	case opLineEnd:
-		state.index = state.commandEnd()
-	case opBackspace:
-		if state.index > 0 {
-			start := graphemePrevious(state.currentCommand, state.index)
-			state.replaceText("", start, state.index)
-		}
-	case opDelete:
-		if state.index < state.commandEnd() {
-			start := graphemeFloor(state.currentCommand, state.index)
-			end := graphemeNext(state.currentCommand, state.index)
-			state.replaceText("", start, end)
-		}
-	case opDeleteWordLeft:
-		state.deletePreviousWord()
-	case opDeleteToStart:
-		state.replaceText("", 0, state.index)
-	case opDeleteToEnd:
-		state.replaceText("", state.index, state.commandEnd())
 	case opExpandAbbr:
 		if exp, ok := state.expandAbbr(false); ok {
 			state.abbrCursor = exp
@@ -852,13 +642,9 @@ func (state *TermState) runBindingQuote(quote *MShellQuotation, withState bool) 
 		return true, nil
 	case !result.Success:
 	case withState:
-		if m, ok := singleMaybe(stack); ok && !m.IsNone() {
-			if p, perr := parseEditOps(m.obj); perr == nil {
-				program = p
-			}
-		} else if !ok {
-			fmt.Fprintln(os.Stderr, "The quote of editRunOps must leave one Maybe[[EditOp]] on the stack.")
-		}
+		var problem string
+		program, _, problem = stackProgram(stack, "The quote of editRunOps", "Maybe[[EditOp]]", parseEditOps)
+		fmt.Fprint(os.Stderr, terminalSafeText(problem, true))
 	case len(stack) > 0:
 		fmt.Fprintf(os.Stderr, "The quote of editRun left %d values on the stack; they were dropped.\n", len(stack))
 	}
@@ -871,6 +657,25 @@ func (state *TermState) runBindingQuote(quote *MShellQuotation, withState bool) 
 		return state.runEditOps(program, noKey)
 	}
 	return false, nil
+}
+
+// stackProgram reads the program a quote left on its stack, which must be
+// one Maybe of a program, written maybeType. some is false when the Maybe
+// is None. problem says why the stack holds no program, or is "". what names
+// the quote, starting a sentence.
+func stackProgram[O any](stack MShellStack, what, maybeType string, parse func(MShellObject) ([]O, error)) (program []O, some bool, problem string) {
+	m, ok := singleMaybe(stack)
+	if !ok {
+		return nil, false, what + " must leave one " + maybeType + " on the stack.\n"
+	}
+	if m.IsNone() {
+		return nil, false, ""
+	}
+	program, err := parse(m.obj)
+	if err != nil {
+		return nil, false, what + ": " + err.Error() + ".\n"
+	}
+	return program, true, ""
 }
 
 // singleMaybe is the one Maybe left on a stack.

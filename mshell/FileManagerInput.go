@@ -130,9 +130,7 @@ func (fm *FileManager) handleToken(token TerminalToken) bool {
 // keyUsed reports whether a binding of the current mode starts with key,
 // or continues the pending keys with it.
 func (fm *FileManager) keyUsed(key KeyCode) bool {
-	ev := fm.evalState()
-	ev.ensureFmDefaultBindings()
-	return fm.keys.used(&ev.fmBindingTries[fm.mode], key)
+	return fm.keys.used(&fm.evalState().fmKeymap().tries[fm.mode], key)
 }
 
 // resolveKey handles one key: it runs the longest binding the key
@@ -140,8 +138,7 @@ func (fm *FileManager) keyUsed(key KeyCode) bool {
 // still become part of a binding. It reports whether the file manager
 // should end.
 func (fm *FileManager) resolveKey(code KeyCode, now time.Time) bool {
-	ev := fm.evalState()
-	ev.ensureFmDefaultBindings()
+	km := fm.evalState().fmKeymap()
 	r := &fm.keys
 	if fm.mode != r.mode {
 		r.clear()
@@ -149,7 +146,7 @@ func (fm *FileManager) resolveKey(code KeyCode, now time.Time) bool {
 	}
 	fm.popup = false
 	w := r.push(code, now, fm.snapshot())
-	trie := &ev.fmBindingTries[fm.mode]
+	trie := &km.tries[fm.mode]
 	fired, end, _ := r.fireLongest(trie, w, fm.fireBinding)
 	if fired {
 		// A mode change ends a pending sequence.
@@ -219,28 +216,13 @@ func (fm *FileManager) runLimitedQuote(quote *MShellQuotation, stack *MShellStac
 	context.StandardOutput = &out
 	context.StandardError = &out
 	run := ev.runUserQuote(quote, stack, context, fm.definitions, abbrTimeout, newEvalCancel())
-	var problem string
-	switch {
-	case run.err != nil:
-		problem = run.err.Error()
-	case run.result.ExitCalled:
-		problem = what + " called 'exit'; that does not end the file manager."
-	case run.result.Success:
-		m, ok := singleMaybe(*stack)
-		if !ok {
-			problem = what + " must leave one Maybe[FmProgram] on the stack."
-			break
+	problem := run.problem(what, "the file manager", abbrTimeout)
+	if problem == "" {
+		program, some, p := stackProgram(*stack, what, "Maybe[FmProgram]", parseFmOps)
+		if p == "" {
+			return program, some
 		}
-		if m.IsNone() {
-			return nil, false
-		}
-		program, err := parseFmOps(m.obj)
-		if err == nil {
-			return program, true
-		}
-		problem = what + ": " + err.Error() + "."
-	default:
-		problem = run.failure(what, abbrTimeout)
+		problem = p
 	}
 	fm.statusMsg = firstLine(problem)
 	return nil, false
@@ -267,8 +249,9 @@ func (fm *FileManager) stateValue(snap fmSnapshot, keys []KeyCode) *MShellDict {
 		current = &Maybe{obj: MShellString{fm.selectedEntryPath(fm.entries[snap.cursor])}}
 	}
 	info.Items["current"] = current
-	selected := NewList(len(fm.selected))
-	for i, p := range fm.selected {
+	paths := fm.selected.list()
+	selected := NewList(len(paths))
+	for i, p := range paths {
 		selected.Items[i] = MShellString{p}
 	}
 	info.Items["selected"] = selected
@@ -494,44 +477,24 @@ func (fm *FileManager) toggleCurrent() {
 
 // toggleSelected adds a path to the selection, or takes it out.
 func (fm *FileManager) toggleSelected(path string) {
-	if fm.selectedSet[path] {
-		delete(fm.selectedSet, path)
-		fm.selected = slices.DeleteFunc(fm.selected, func(p string) bool { return p == path })
-		return
+	if fm.selected.has(path) {
+		fm.selected.remove(path)
+	} else {
+		fm.selected.add(path)
 	}
-	if fm.selectedSet == nil {
-		fm.selectedSet = make(map[string]bool)
-	}
-	fm.selectedSet[path] = true
-	fm.selected = append(fm.selected, path)
 }
 
 // invertSelection selects the entries shown that are not selected, and
-// takes out those that are, in one pass over the selection. Selected
-// entries of other directories stay selected.
+// takes out those that are. Selected entries of other directories stay
+// selected.
 func (fm *FileManager) invertSelection() {
-	if fm.selectedSet == nil {
-		fm.selectedSet = make(map[string]bool)
-	}
-	var added []string
 	for _, entry := range fm.entries {
-		path := fm.selectedEntryPath(entry)
-		if fm.selectedSet[path] {
-			delete(fm.selectedSet, path)
-		} else {
-			fm.selectedSet[path] = true
-			added = append(added, path)
-		}
+		fm.toggleSelected(fm.selectedEntryPath(entry))
 	}
-	// The paths taken out are no longer in the set, and the paths added
-	// were not in the list.
-	fm.selected = slices.DeleteFunc(fm.selected, func(p string) bool { return !fm.selectedSet[p] })
-	fm.selected = append(fm.selected, added...)
 }
 
 func (fm *FileManager) clearSelection() {
-	fm.selected = nil
-	fm.selectedSet = nil
+	fm.selected = pathSet{}
 }
 
 // targets are what an op that acts on the selection acts on: the selected
@@ -539,8 +502,8 @@ func (fm *FileManager) clearSelection() {
 // current entry. Using the selection clears it. missing is how many
 // selected entries no longer exist.
 func (fm *FileManager) targets() (paths []string, missing int) {
-	if len(fm.selected) > 0 {
-		for _, p := range fm.selected {
+	if fm.selected.len() > 0 {
+		for _, p := range fm.selected.list() {
 			if _, err := os.Lstat(p); err == nil {
 				paths = append(paths, p)
 			} else {
@@ -661,7 +624,14 @@ func (fm *FileManager) replaceLine(text string, start, end ByteOffset) bool {
 // not fit in the line.
 func (fm *FileManager) editLine(op editOp, key KeyCode) bool {
 	l := &fm.line
-	end := ByteOffset(len(l.text))
+	if start, end, ok := lineMoveOrDelete(op.kind, l.text, l.index, isFmWordEnd); ok {
+		if start < end {
+			fm.replaceLine("", start, end)
+		} else {
+			l.index = start
+		}
+		return true
+	}
 	switch op.kind {
 	case opInsert:
 		return fm.replaceLine(op.a, l.index, l.index)
@@ -670,41 +640,10 @@ func (fm *FileManager) editLine(op editOp, key KeyCode) bool {
 			return fm.replaceLine(string(r), l.index, l.index)
 		}
 	case opSetLine:
-		if len(op.a)+len(op.b) > maxFmLineBytes {
-			fm.statusMsg = fmt.Sprintf("The line holds at most %d bytes.", maxFmLineBytes)
+		if !fm.replaceLine(op.a+op.b, 0, ByteOffset(len(l.text))) {
 			return false
 		}
-		l.text = SourceText(op.a + op.b)
 		l.index = graphemeCeil(l.text, ByteOffset(len(op.a)))
-		fm.lineChanged()
-	case opLeft:
-		l.index = graphemePrevious(l.text, l.index)
-	case opRight:
-		l.index = graphemeNext(l.text, l.index)
-	case opWordLeft:
-		l.index = wordLeftBy(l.text, l.index, isFmWordEnd)
-	case opWordRight:
-		l.index = wordRightBy(l.text, l.index, isFmWordEnd)
-	case opLineStart:
-		l.index = 0
-	case opLineEnd:
-		l.index = end
-	case opBackspace:
-		if l.index > 0 {
-			fm.replaceLine("", graphemePrevious(l.text, l.index), l.index)
-		}
-	case opDelete:
-		if l.index < end {
-			fm.replaceLine("", graphemeFloor(l.text, l.index), graphemeNext(l.text, l.index))
-		}
-	case opDeleteWordLeft:
-		if l.index > 0 {
-			fm.replaceLine("", wordLeftBy(l.text, l.index, isFmWordEnd), l.index)
-		}
-	case opDeleteToStart:
-		fm.replaceLine("", 0, l.index)
-	case opDeleteToEnd:
-		fm.replaceLine("", l.index, end)
 	}
 	return true
 }
@@ -789,10 +728,9 @@ var fmModeHeadings = [fmModeCount]string{"Browsing", "The prompt line", "The hel
 // helpLines are the lines of the help screen: every binding in force, by
 // mode, and then every binding that is not, with the reason.
 func (fm *FileManager) helpLines() []string {
-	ev := fm.evalState()
-	ev.ensureFmDefaultBindings()
+	entries := fm.evalState().fmKeymap().entries
 	width := 0
-	for _, e := range ev.FmBindings {
+	for _, e := range entries {
 		if e.inert == "" {
 			width = max(width, uniseg.StringWidth(keysShort(e.keys)))
 		}
@@ -801,7 +739,7 @@ func (fm *FileManager) helpLines() []string {
 	var lines []string
 	for m := range fmModeCount {
 		lines = append(lines, " "+fmModeHeadings[m])
-		for _, e := range ev.FmBindings {
+		for _, e := range entries {
 			if e.inert == "" && e.mode == m {
 				keys := keysShort(e.keys)
 				pad := strings.Repeat(" ", max(0, width-uniseg.StringWidth(keys)))
@@ -811,7 +749,7 @@ func (fm *FileManager) helpLines() []string {
 		lines = append(lines, "")
 	}
 	var inert []string
-	for _, e := range ev.FmBindings {
+	for _, e := range entries {
 		if e.inert != "" {
 			inert = append(inert, "   "+terminalSafeText(e.describe()+": "+e.inert, false))
 		}
@@ -879,13 +817,12 @@ func (fm *FileManager) renderHelp(buf *bytes.Buffer) {
 // keys, the bindings in force that continue them, with the keys still to
 // type.
 func (fm *FileManager) popupLines() []string {
-	ev := fm.evalState()
 	pending := fm.keys.pendingCodes()
 	lines := []string{" " + keysShort(pending) + " "}
 	var rest []string
 	var what []string
 	width := 0
-	for _, e := range ev.FmBindings {
+	for _, e := range fm.evalState().fmKeymap().entries {
 		if e.inert != "" || e.mode != fm.mode || len(e.keys) <= len(pending) || !slices.Equal(e.keys[:len(pending)], pending) {
 			continue
 		}
@@ -1127,17 +1064,11 @@ func (fm *FileManager) runQuote(op fmOp) fmOpResult {
 	case op.kind == fmOpRunWait:
 		fm.waitForKey()
 	case op.kind == fmOpRunOps:
-		m, ok := singleMaybe(stack)
-		if !ok {
-			fmt.Fprintln(os.Stderr, "The quote of fmRunOps must leave one Maybe[FmProgram] on the stack.")
+		var problem string
+		program, _, problem = stackProgram(stack, "The quote of fmRunOps", "Maybe[FmProgram]", parseFmOps)
+		if problem != "" {
+			fmt.Fprint(os.Stderr, terminalSafeText(problem, true))
 			waitForEnter()
-		} else if !m.IsNone() {
-			p, err := parseFmOps(m.obj)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "The quote of fmRunOps: %s.\n", err)
-				waitForEnter()
-			}
-			program = p
 		}
 	}
 

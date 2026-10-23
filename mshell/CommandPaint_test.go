@@ -604,7 +604,7 @@ func BenchmarkInteractiveAllocations(b *testing.B) {
 		})
 		b.Run("Movement/"+name, func(b *testing.B) {
 			b.ReportAllocs()
-			for b.Loop() { _ = wordLeft(source, graphemePrevious(source, ByteOffset(len(source)))) }
+			for b.Loop() { _ = wordLeft(source, graphemePrevious(source, ByteOffset(len(source))), isSpaceByte) }
 		})
 	}
 	b.Run("CompletionPrefix", func(b *testing.B) {

@@ -46,8 +46,7 @@ func TestBindingEnumsMatch(t *testing.T) {
 // Every default binding is in force: none conflicts with another.
 func TestDefaultBindingsInForce(t *testing.T) {
 	var ev EvalState
-	ev.ensureDefaultBindings()
-	for _, e := range ev.Bindings {
+	for _, e := range ev.shellKeymap().entries {
 		if e.inert != "" {
 			t.Errorf("default binding %s is inert: %s", e.describe(), e.inert)
 		}
@@ -251,22 +250,23 @@ func TestResolveMatchesDefinition(t *testing.T) {
 
 		state := &TermState{stdInFd: -1}
 		ev := &state.evalState
-		ev.defaultBindingsAdded = true
+		km := ev.shellKeymap()
+		km.entries = nil
 		for _, ob := range bs {
-			e := &bindingEntry{keys: ob.keys, within: ob.within, idleBefore: ob.ib}
+			e := &bindingEntry{bindingCommon: bindingCommon[editMode]{keys: ob.keys, within: ob.within, idleBefore: ob.ib}}
 			if ob.pure {
 				e.ops = []editOp{{kind: opInsert, a: ob.text}}
 			} else {
 				e.ops = []editOp{{kind: opMessage, a: "E" + ob.text}}
 			}
-			ev.Bindings = slices.DeleteFunc(ev.Bindings, func(o *bindingEntry) bool { return slices.Equal(o.keys, e.keys) })
-			ev.Bindings = append(ev.Bindings, e)
+			km.entries = slices.DeleteFunc(km.entries, func(o *bindingEntry) bool { return slices.Equal(o.keys, e.keys) })
+			km.entries = append(km.entries, e)
 		}
-		ev.recomputeBindings()
+		km.recompute()
 		// The keymap after replacements, and which bindings are in force.
 		bs = bs[:0]
 		var active []bool
-		for _, e := range ev.Bindings {
+		for _, e := range km.entries {
 			ob := oracleBinding{keys: e.keys, pure: e.pure(), within: e.within, ib: e.idleBefore}
 			ob.text = e.ops[0].a
 			if !ob.pure {

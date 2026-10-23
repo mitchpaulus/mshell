@@ -10,11 +10,9 @@ package main
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 // fmMode is a keymap of the file manager: browsing, the prompt line, or
@@ -464,30 +462,11 @@ func keysShort(keys []KeyCode) string {
 
 // fmBindingEntry is one binding fmBindingAdd added, or a default.
 type fmBindingEntry struct {
-	// record is the FmBinding fmBindingAdd was given, with its mode filled
-	// in, which fmBindingList gives back.
-	record *MShellDict
-	keys   []KeyCode
-	mode   fmMode
+	bindingCommon[fmMode]
 	// The action: ops for fmOps, fn for fmFunc.
 	ops []fmOp
 	fn  *MShellQuotation
-	// The timing fields, zero when not given.
-	within, idleBefore time.Duration
-	description        string
-	// invalid says why the record can never fire, or is "". inert is that,
-	// or the conflict with a newer binding that made it inert.
-	invalid string
-	inert   string
 }
-
-func (e *fmBindingEntry) bindingKeys() []KeyCode { return e.keys }
-func (e *fmBindingEntry) bindingMode() uint8     { return uint8(e.mode) }
-func (e *fmBindingEntry) bindingTiming() (time.Duration, time.Duration) {
-	return e.within, e.idleBefore
-}
-func (e *fmBindingEntry) inertReason() *string  { return &e.inert }
-func (e *fmBindingEntry) invalidReason() string { return e.invalid }
 
 // pure reports whether every op of the binding is a pure edit of its mode.
 // A quote's result is not known until it runs, so a fmFunc is never pure.
@@ -504,13 +483,7 @@ func (e *fmBindingEntry) pure() bool {
 }
 
 // describe names a binding in a message.
-func (e *fmBindingEntry) describe() string {
-	s := "[" + keysSource(e.keys) + "]"
-	if e.mode != fmModeNormal {
-		s += " in " + fmModeMembers[e.mode]
-	}
-	return s
-}
+func (e *fmBindingEntry) describe() string { return e.describeIn(fmModeMembers[:]) }
 
 // what is what the popup and the help screen say the binding does: its
 // description, or its ops written as source.
@@ -527,93 +500,33 @@ func (e *fmBindingEntry) what() string {
 // parseFmBinding reads an FmBinding record. It fails only on a value the
 // type checker refuses; a record that can never fire gives an inert entry.
 func (state *EvalState) parseFmBinding(record *MShellDict) (*fmBindingEntry, error) {
-	e := &fmBindingEntry{record: record}
-
-	keys, ok := record.Items["keys"].(*MShellList)
-	if !ok {
-		return nil, fmt.Errorf("the 'keys' field must be a list of Key")
+	common, opsValue, fn, err := parseBindingFields[fmMode](state, record, "FmAction", "FmMode", fmModeMembers[:])
+	if err != nil {
+		return nil, err
 	}
-	for _, item := range keys.Items {
-		k, err := keyCodeOf(item)
-		if err != nil {
+	e := &fmBindingEntry{bindingCommon: common, fn: fn}
+	if opsValue != nil {
+		if e.ops, err = parseFmOps(opsValue); err != nil {
 			return nil, err
 		}
-		e.keys = append(e.keys, k)
 	}
-
-	action := enumField(record, "action", "FmAction")
-	if action == nil || len(action.Payload) != 1 {
-		return nil, fmt.Errorf("the 'action' field must be an FmAction")
-	}
-	switch action.Member {
-	case "fmOps":
-		ops, err := parseFmOps(action.Payload[0])
-		if err != nil {
-			return nil, err
-		}
-		e.ops = ops
-	default:
-		q, ok := action.Payload[0].(*MShellQuotation)
-		if !ok {
-			return nil, fmt.Errorf("'fmFunc' must hold a quotation")
-		}
-		e.fn = q
-	}
-
-	if _, given := record.Items["mode"]; !given {
-		record.Items["mode"] = state.builtinEnumValue("fmModeNormal")
-	}
-	mode := enumField(record, "mode", "FmMode")
-	if mode == nil {
-		return nil, fmt.Errorf("the 'mode' field must be an FmMode")
-	}
-	e.mode = fmMode(mode.MemberIndex)
-
-	timing := []struct {
-		key string
-		to  *time.Duration
-	}{{"within", &e.within}, {"idleBefore", &e.idleBefore}}
-	for _, f := range timing {
-		v, given := record.Items[f.key]
-		if !given {
-			continue
-		}
-		n, ok := v.(MShellInt)
-		if !ok {
-			return nil, fmt.Errorf("the '%s' field must be an int", f.key)
-		}
-		if n.Value <= 0 && e.invalid == "" {
-			e.invalid = fmt.Sprintf("'%s' is %d; a time must be more than 0 ms", f.key, n.Value)
-		}
-		*f.to = time.Duration(n.Value) * time.Millisecond
-	}
-	if v, given := record.Items["description"]; given {
-		s, ok := v.(MShellString)
-		if !ok {
-			return nil, fmt.Errorf("the 'description' field must be a str")
-		}
-		e.description = s.Content
-	}
-
-	switch {
-	case e.invalid != "":
-	case len(e.keys) == 0:
-		e.invalid = "it has no keys"
-	case len(e.keys) > maxBindingKeys:
-		e.invalid = fmt.Sprintf("it has %d keys, and a binding has at most %d", len(e.keys), maxBindingKeys)
-	default:
+	if e.invalid == "" {
 		e.invalid = checkFmProgram(e.ops, e.mode)
 	}
 	return e, nil
 }
 
-// recomputeFmBindings works out which bindings are inert, and builds each
-// mode's trie of the bindings in force.
-func (state *EvalState) recomputeFmBindings() {
-	recomputeInert(state.FmBindings)
-	for m := range state.fmBindingTries {
-		state.fmBindingTries[m].build(state.FmBindings, uint8(m))
-	}
+var fmKeymapKind = keymapKind[*fmBindingEntry]{
+	builtin:   "fmBinding",
+	record:    "an FmBinding",
+	modeCount: int(fmModeCount),
+	parse:     (*EvalState).parseFmBinding,
+	defaults:  (*EvalState).fmDefaultBindingEntries,
+}
+
+// fmKeymap is the file manager's keymap, with its defaults.
+func (state *EvalState) fmKeymap() *keymap[*fmBindingEntry] {
+	return state.fmBindings.ready(state, &fmKeymapKind)
 }
 
 // ----- The default keymap (section 5.4) -----
@@ -727,104 +640,18 @@ var fmDefaultBindings = sync.OnceValue(func() []fmDefaultBinding {
 	return bs
 })
 
-// ensureFmDefaultBindings adds the file manager's default keymap, once,
-// before any binding a file adds, so a user's binding is always the newer
-// one.
-func (state *EvalState) ensureFmDefaultBindings() {
-	if state.fmDefaultBindingsAdded {
-		return
-	}
-	state.fmDefaultBindingsAdded = true
-	state.ensureBuiltinEnums()
+// fmDefaultBindingEntries are the entries of the file manager's default
+// keymap.
+func (state *EvalState) fmDefaultBindingEntries() []*fmBindingEntry {
+	var entries []*fmBindingEntry
 	for _, d := range fmDefaultBindings() {
-		keys := NewList(len(d.keys))
-		for i, k := range d.keys {
-			keys.Items[i] = state.keyValue(k)
-		}
 		opList := NewList(len(d.ops))
 		for i, op := range d.ops {
 			opList.Items[i] = state.fmOpValue(op)
 		}
-		record := NewDict()
-		record.Items["keys"] = keys
-		record.Items["action"] = state.builtinEnumValue("fmOps", opList)
-		record.Items["mode"] = state.builtinEnumValue(fmModeMembers[d.mode])
-		if d.description != "" {
-			record.Items["description"] = MShellString{d.description}
-		}
-		e := &fmBindingEntry{record: record, keys: d.keys, mode: d.mode, ops: d.ops, description: d.description}
-		state.FmBindings = append(state.FmBindings, e)
+		record := state.defaultRecord(d.keys, state.builtinEnumValue("fmOps", opList), fmModeMembers[d.mode], d.description)
+		common := bindingCommon[fmMode]{record: record, keys: d.keys, mode: d.mode, description: d.description}
+		entries = append(entries, &fmBindingEntry{bindingCommon: common, ops: d.ops})
 	}
-	state.recomputeFmBindings()
-}
-
-// ----- The builtins (section 5.3) -----
-
-// evalFmBindingAdd runs fmBindingAdd: (FmBinding -- ).
-func (state *EvalState) evalFmBindingAdd(t *Token, stack *MShellStack) *EvalResult {
-	obj, err := stack.Pop()
-	if err != nil {
-		return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot do 'fmBindingAdd' operation on an empty stack.\n", t.Line, t.Column))
-	}
-	dict, ok := obj.(*MShellDict)
-	if !ok {
-		return state.mismatchPtr(fmt.Sprintf("%d:%d: 'fmBindingAdd' takes an FmBinding, found a %s (%s).\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
-	}
-	copied, err := DeepCopy(dict)
-	if err != nil {
-		return state.checkedPtr(fmt.Sprintf("%d:%d: 'fmBindingAdd': %s\n", t.Line, t.Column, err.Error()))
-	}
-	e, err := state.parseFmBinding(copied.(*MShellDict))
-	if err != nil {
-		return state.mismatchPtr(fmt.Sprintf("%d:%d: 'fmBindingAdd' takes an FmBinding: %s.\n", t.Line, t.Column, err.Error()))
-	}
-	state.ensureFmDefaultBindings()
-	state.FmBindings = addToKeymap(state.FmBindings, e, func(entries []*fmBindingEntry) {
-		state.FmBindings = entries
-		state.recomputeFmBindings()
-	}, func(warning string) {
-		state.AbbrWarnings = append(state.AbbrWarnings, warning)
-	})
-	return nil
-}
-
-// evalFmBindingErase runs fmBindingErase: ([Key] -- ). It removes the
-// bindings with those keys in every mode, defaults included.
-func (state *EvalState) evalFmBindingErase(t *Token, stack *MShellStack) *EvalResult {
-	obj, err := stack.Pop()
-	if err != nil {
-		return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot do 'fmBindingErase' operation on an empty stack.\n", t.Line, t.Column))
-	}
-	list, ok := obj.(*MShellList)
-	if !ok {
-		return state.mismatchPtr(fmt.Sprintf("%d:%d: 'fmBindingErase' takes a list of Key, found a %s (%s).\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
-	}
-	keys := make([]KeyCode, len(list.Items))
-	for i, item := range list.Items {
-		k, err := keyCodeOf(item)
-		if err != nil {
-			return state.mismatchPtr(fmt.Sprintf("%d:%d: 'fmBindingErase': %s.\n", t.Line, t.Column, err.Error()))
-		}
-		keys[i] = k
-	}
-	state.ensureFmDefaultBindings()
-	state.FmBindings = slices.DeleteFunc(state.FmBindings, func(e *fmBindingEntry) bool { return slices.Equal(e.keys, keys) })
-	state.recomputeFmBindings()
-	return nil
-}
-
-// evalFmBindingList runs fmBindingList: ( -- new [FmBinding]), oldest
-// first, so the defaults come first.
-func (state *EvalState) evalFmBindingList(t *Token, stack *MShellStack) *EvalResult {
-	state.ensureFmDefaultBindings()
-	list := NewList(len(state.FmBindings))
-	for i, e := range state.FmBindings {
-		copied, err := DeepCopy(e.record)
-		if err != nil {
-			return state.checkedPtr(fmt.Sprintf("%d:%d: 'fmBindingList': %s\n", t.Line, t.Column, err.Error()))
-		}
-		list.Items[i] = copied
-	}
-	stack.Push(list)
-	return nil
+	return entries
 }

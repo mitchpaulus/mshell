@@ -35,8 +35,7 @@ func TestFmBindingEnumsMatch(t *testing.T) {
 // every program runs where it stands.
 func TestFmDefaultBindingsInForce(t *testing.T) {
 	var ev EvalState
-	ev.ensureFmDefaultBindings()
-	for _, e := range ev.FmBindings {
+	for _, e := range ev.fmKeymap().entries {
 		if e.inert != "" {
 			t.Errorf("default binding %s is inert: %s", e.describe(), e.inert)
 		}
@@ -68,7 +67,8 @@ func TestFmBindingInertReasons(t *testing.T) {
 		if r := evalForTest(t, ev, tt.source+" fmBindingAdd"); !r.Success {
 			t.Fatalf("%s: fmBindingAdd failed", tt.source)
 		}
-		e := ev.FmBindings[len(ev.FmBindings)-1]
+		entries := ev.fmKeymap().entries
+		e := entries[len(entries)-1]
 		if tt.inert == "" && e.inert != "" || !strings.Contains(e.inert, tt.inert) {
 			t.Errorf("%s: inert %q, want %q", tt.source, e.inert, tt.inert)
 		}
@@ -255,33 +255,33 @@ func TestFmSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	feedInput(fm, "j  ")
-	if len(fm.selected) != 2 || fm.cursor != 2 {
-		t.Fatalf("after j space space: %v, cursor %d", fm.selected, fm.cursor)
+	if fm.selected.len() != 2 || fm.cursor != 2 {
+		t.Fatalf("after j space space: %v, cursor %d", fm.selected.list(), fm.cursor)
 	}
 	feedInput(fm, "v")
-	if len(fm.selected) != 1 || filepath.Base(fm.selected[0]) != "a" {
-		t.Fatalf("v gave %v", fm.selected)
+	if fm.selected.len() != 1 || filepath.Base(fm.selected.list()[0]) != "a" {
+		t.Fatalf("v gave %v", fm.selected.list())
 	}
 	feedInput(fm, "u")
-	if len(fm.selected) != 0 {
-		t.Fatalf("u left %v", fm.selected)
+	if fm.selected.len() != 0 {
+		t.Fatalf("u left %v", fm.selected.list())
 	}
 
 	feedInput(fm, "j ")
 	feedInput(fm, "gg")
 	feedInput(fm, "l ")
-	if len(fm.selected) != 2 {
-		t.Fatalf("selected across directories: %v", fm.selected)
+	if fm.selected.len() != 2 {
+		t.Fatalf("selected across directories: %v", fm.selected.list())
 	}
 	feedInput(fm, "d")
 	cut, _ := loadClipboard()
-	if len(cut) != 2 || len(fm.selected) != 0 {
-		t.Fatalf("cut %v, still selected %v", cut, fm.selected)
+	if len(cut) != 2 || fm.selected.len() != 0 {
+		t.Fatalf("cut %v, still selected %v", cut, fm.selected.list())
 	}
 
 	// A selected entry removed before the op is left out, and counted.
 	feedInput(fm, " ")
-	os.Remove(fm.selected[0])
+	os.Remove(fm.selected.list()[0])
 	feedInput(fm, "yy")
 	if !strings.Contains(fm.statusMsg, "1 selected entry no longer exists") {
 		t.Fatalf("message %q", fm.statusMsg)
@@ -299,16 +299,16 @@ func TestFmInvertSelectionOrder(t *testing.T) {
 	fm.toggleSelected(filepath.Join(fm.currentDir, "a"))
 	feedInput(fm, "v")
 	want := []string{other, filepath.Join(fm.currentDir, "b"), filepath.Join(fm.currentDir, "d")}
-	if !slices.Equal(fm.selected, want) {
-		t.Fatalf("after v: %v, want %v", fm.selected, want)
+	if got := fm.selected.list(); !slices.Equal(got, want) {
+		t.Fatalf("after v: %v, want %v", got, want)
 	}
 	for _, p := range want {
-		if !fm.selectedSet[p] {
+		if !fm.selected.has(p) {
 			t.Errorf("%s is not in the set", p)
 		}
 	}
-	if len(fm.selectedSet) != len(want) {
-		t.Errorf("set %v, want %v", fm.selectedSet, want)
+	if fm.selected.len() != len(want) {
+		t.Errorf("%d in the set, want %d", fm.selected.len(), len(want))
 	}
 }
 
@@ -465,27 +465,29 @@ func TestFmResolveMatchesDefinition(t *testing.T) {
 	gaps := []time.Duration{0, 2 * time.Millisecond}
 	limits := []time.Duration{0, 0, time.Millisecond}
 	for trial := range 4000 {
-		ev := &EvalState{fmDefaultBindingsAdded: true}
+		ev := &EvalState{}
+		km := ev.fmKeymap()
+		km.entries = nil
 		for i := range 1 + rng.Intn(6) {
 			keys := make([]KeyCode, 1+rng.Intn(3))
 			for j := range keys {
 				keys[j] = alphabet[rng.Intn(len(alphabet))]
 			}
-			e := &fmBindingEntry{keys: keys, mode: fmModeInsert,
-				within: limits[rng.Intn(len(limits))], idleBefore: limits[rng.Intn(len(limits))]}
+			e := &fmBindingEntry{bindingCommon: bindingCommon[fmMode]{keys: keys, mode: fmModeInsert,
+				within: limits[rng.Intn(len(limits))], idleBefore: limits[rng.Intn(len(limits))]}}
 			text := fmt.Sprintf("<%d>", i)
 			if rng.Intn(2) == 0 {
 				e.ops = []fmOp{{kind: fmOpEdit, edit: editOp{kind: opInsert, a: text}}}
 			} else {
 				e.ops = []fmOp{{kind: fmOpMessage, a: "E" + text}}
 			}
-			ev.FmBindings = slices.DeleteFunc(ev.FmBindings, func(o *fmBindingEntry) bool { return slices.Equal(o.keys, e.keys) })
-			ev.FmBindings = append(ev.FmBindings, e)
+			km.entries = slices.DeleteFunc(km.entries, func(o *fmBindingEntry) bool { return slices.Equal(o.keys, e.keys) })
+			km.entries = append(km.entries, e)
 		}
-		ev.recomputeFmBindings()
+		km.recompute()
 		var bs []oracleBinding
 		var active []bool
-		for _, e := range ev.FmBindings {
+		for _, e := range km.entries {
 			ob := oracleBinding{keys: e.keys, pure: e.pure(), within: e.within, ib: e.idleBefore}
 			if ob.pure {
 				ob.text = e.ops[0].edit.a

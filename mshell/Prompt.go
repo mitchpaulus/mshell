@@ -551,23 +551,15 @@ func (state *TermState) userPrompt() (promptRender, bool) {
 
 	// A quote that finished with its list is shown, even if the time ran
 	// out as it finished.
-	var problem string
 	var render promptRender
-	switch {
-	case run.err != nil:
-		problem = run.err.Error()
-	case run.result.ExitCalled:
-		problem = "The prompt called 'exit'; that does not end the shell.\n"
-	case run.result.Success && len(stack) == 1:
+	problem := run.problem("The prompt", "the shell", promptTimeout)
+	if problem == "" && len(stack) != 1 {
+		problem = fmt.Sprintf("The prompt must leave one list on the stack, and left %d values.\n", len(stack))
+	} else if problem == "" {
 		var err error
-		render, err = renderPrompt(stack[0])
-		if err != nil {
+		if render, err = renderPrompt(stack[0]); err != nil {
 			problem = err.Error() + ".\n"
 		}
-	case run.result.Success:
-		problem = fmt.Sprintf("The prompt must leave one list on the stack, and left %d values.\n", len(stack))
-	default:
-		problem = run.failure("The prompt", promptTimeout)
 	}
 	if problem != "" {
 		if problem != state.promptProblem {
@@ -650,6 +642,21 @@ func (run userQuoteRun) failure(what string, timeout time.Duration) string {
 		// A command run with '!' stops the quote without a message.
 		return fmt.Sprintf("%s stopped with exit code %d.\n", what, run.result.ExitCode)
 	}
+}
+
+// problem says why a quote run with a time limit gave nothing to use, or
+// is "" when it succeeded. what names the quote, starting a sentence, and
+// owner is what its exit does not end.
+func (run userQuoteRun) problem(what, owner string, timeout time.Duration) string {
+	switch {
+	case run.err != nil:
+		return run.err.Error()
+	case run.result.ExitCalled:
+		return what + " called 'exit'; that does not end " + owner + ".\n"
+	case run.result.Success:
+		return ""
+	}
+	return run.failure(what, timeout)
 }
 
 // timeoutText is a time limit in words: "3 seconds", "1 second".

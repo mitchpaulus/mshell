@@ -266,9 +266,9 @@ type FileManager struct {
 	line       fmLine
 	helpOffset int
 
-	// The selection: absolute paths, in the order they were selected.
-	selected    []string
-	selectedSet map[string]bool
+	// selected are the absolute paths of the selection, in the order they
+	// were selected.
+	selected pathSet
 
 	// startedIn is the working directory when the file manager started.
 	// quit is set by fmQuit and fmQuitNoCd, quitNoCd by fmQuitNoCd, and
@@ -1242,8 +1242,8 @@ func (fm *FileManager) render() {
 		}
 		clipStatus += fmt.Sprintf(" COPY %d %s", len(copyPaths), noun)
 	}
-	if len(fm.selected) > 0 {
-		clipStatus += fmt.Sprintf(" SELECTED %d", len(fm.selected))
+	if fm.selected.len() > 0 {
+		clipStatus += fmt.Sprintf(" SELECTED %d", fm.selected.len())
 	}
 
 	headerRunes := utf8.RuneCountInString(header)
@@ -1341,7 +1341,7 @@ func (fm *FileManager) render() {
 				name = truncateMiddle(name, availW)
 				nameRunes = availW
 			}
-			if fm.selectedSet[entryPath] {
+			if fm.selected.has(entryPath) {
 				// A selected entry is marked in the space before its name.
 				buf.WriteString("\033[35m*")
 				switch {
@@ -2514,15 +2514,68 @@ func clearClipboard() error {
 	return os.Remove(path)
 }
 
-// clipboardLists are the cut and copy lists, with where each path is in
-// its list, so adding a path takes no scan of the lists.
+// pathSet is a set of paths that keeps the order they were added in.
+// Adding, taking out and looking up a path take no scan of the set.
+type pathSet struct {
+	// paths are in the order they were added. A path taken out is left as
+	// "", until the gaps are half the list.
+	paths []string
+	// at is where each path of the set is in paths.
+	at map[string]int
+}
+
+func (s *pathSet) has(path string) bool {
+	_, ok := s.at[path]
+	return ok
+}
+
+func (s *pathSet) len() int { return len(s.at) }
+
+// add puts a path after the others, unless it is in the set already.
+func (s *pathSet) add(path string) {
+	if s.has(path) {
+		return
+	}
+	if s.at == nil {
+		s.at = make(map[string]int)
+	}
+	s.at[path] = len(s.paths)
+	s.paths = append(s.paths, path)
+}
+
+func (s *pathSet) remove(path string) {
+	i, ok := s.at[path]
+	if !ok {
+		return
+	}
+	s.paths[i] = ""
+	delete(s.at, path)
+	if 2*len(s.at) < len(s.paths) {
+		s.paths = slices.DeleteFunc(s.paths, func(p string) bool { return p == "" })
+		for i, p := range s.paths {
+			s.at[p] = i
+		}
+	}
+}
+
+// list gives the paths, in the order they were added.
+func (s *pathSet) list() []string {
+	out := make([]string, 0, len(s.at))
+	for _, p := range s.paths {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// clipboardLists are the cut and copy lists.
 type clipboardLists struct {
-	cutPaths, copyPaths []string
-	cutAt, copyAt       map[string]int
+	cut, copy pathSet
 }
 
 func newClipboardLists(cutPaths []string, copyPaths []string) *clipboardLists {
-	c := &clipboardLists{cutAt: make(map[string]int, len(cutPaths)), copyAt: make(map[string]int, len(copyPaths))}
+	c := &clipboardLists{}
 	for _, p := range cutPaths {
 		c.add("cut", p)
 	}
@@ -2533,28 +2586,19 @@ func newClipboardLists(cutPaths []string, copyPaths []string) *clipboardLists {
 }
 
 // add puts a path in the cut or the copy list, after any it is already in
-// there, and takes it out of the other. A path taken out is left as "" until
-// lists.
+// there, and takes it out of the other.
 func (c *clipboardLists) add(op string, path string) {
-	to, toAt, from, fromAt := &c.cutPaths, c.cutAt, &c.copyPaths, c.copyAt
+	to, from := &c.cut, &c.copy
 	if op == "copy" {
-		to, toAt, from, fromAt = &c.copyPaths, c.copyAt, &c.cutPaths, c.cutAt
+		to, from = &c.copy, &c.cut
 	}
-	if i, ok := fromAt[path]; ok {
-		(*from)[i] = ""
-		delete(fromAt, path)
-	}
-	if _, ok := toAt[path]; !ok {
-		toAt[path] = len(*to)
-		*to = append(*to, path)
-	}
+	from.remove(path)
+	to.add(path)
 }
 
 // lists gives the cut and copy lists, in the order their paths were added.
-// The clipboardLists is not used after.
 func (c *clipboardLists) lists() ([]string, []string) {
-	removed := func(p string) bool { return p == "" }
-	return slices.DeleteFunc(c.cutPaths, removed), slices.DeleteFunc(c.copyPaths, removed)
+	return c.cut.list(), c.copy.list()
 }
 
 // addClipboardPaths adds paths to the cut or the copy list, reading and

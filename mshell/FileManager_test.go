@@ -39,6 +39,30 @@ func TestClipboardListsAdd(t *testing.T) {
 	}
 }
 
+// A pathSet keeps its order and finds its paths after squeezing out the
+// gaps that removals leave.
+func TestPathSetRemove(t *testing.T) {
+	var s pathSet
+	for _, p := range []string{"/a", "/b", "/c", "/d", "/e", "/a"} {
+		s.add(p)
+	}
+	for _, p := range []string{"/b", "/d", "/a", "/x"} {
+		s.remove(p)
+	}
+	s.add("/b")
+	s.remove("/c")
+	if want := []string{"/e", "/b"}; !reflect.DeepEqual(s.list(), want) || s.len() != 2 {
+		t.Fatalf("list %v, len %d, want %v", s.list(), s.len(), want)
+	}
+	if !s.has("/e") || !s.has("/b") || s.has("/c") {
+		t.Errorf("has is wrong after removals")
+	}
+	s.remove("/e")
+	if want := []string{"/b"}; !reflect.DeepEqual(s.list(), want) {
+		t.Errorf("list %v, want %v", s.list(), want)
+	}
+}
+
 // Reading the clipboard drops lines that are not an op and a path, and
 // writes the file back without them.
 func TestLoadClipboardDropsBadLines(t *testing.T) {
