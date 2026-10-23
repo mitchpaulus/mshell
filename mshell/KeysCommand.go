@@ -73,7 +73,7 @@ func runKeysCommand(args []string) int {
 		case KeyToken:
 			what = keySource(code)
 			if t.EscOf != 0 {
-				what += "  (or " + keySource(t.EscOf) + " alone, when that is not bound)"
+				what += "  (or keyEscape then " + keySource(t.EscOf) + ", when that is not bound)"
 			}
 		default:
 			if isKey {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"reflect"
 	"runtime"
+	"strconv"
 )
 
 type testDirEntry struct {
@@ -20,43 +21,81 @@ func (e testDirEntry) IsDir() bool                { return e.isDir }
 func (e testDirEntry) Type() fs.FileMode          { return 0 }
 func (e testDirEntry) Info() (fs.FileInfo, error) { return nil, nil }
 
-func TestAppendUniquePathAppendsWhenMissing(t *testing.T) {
-	paths := []string{"/tmp/a", "/tmp/b"}
-	got := appendUniquePath(paths, "/tmp/c")
-	want := []string{"/tmp/a", "/tmp/b", "/tmp/c"}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("appendUniquePath() = %v, want %v", got, want)
+// A path added goes after those already in its list, once, and leaves the
+// other list.
+func TestClipboardListsAdd(t *testing.T) {
+	c := newClipboardLists([]string{"/a", "/b"}, []string{"/x"})
+	for _, add := range []struct{ op, path string }{
+		{"copy", "/a"}, {"cut", "/c"}, {"cut", "/b"}, {"copy", "/d"}, {"cut", "/a"}, {"cut", "/x"},
+	} {
+		c.add(add.op, add.path)
+	}
+	cut, copied := c.lists()
+	if want := []string{"/b", "/c", "/a", "/x"}; !reflect.DeepEqual(cut, want) {
+		t.Errorf("cut %v, want %v", cut, want)
+	}
+	if want := []string{"/d"}; !reflect.DeepEqual(copied, want) {
+		t.Errorf("copy %v, want %v", copied, want)
 	}
 }
 
-func TestAppendUniquePathSkipsDuplicate(t *testing.T) {
-	paths := []string{"/tmp/a", "/tmp/b"}
-	got := appendUniquePath(paths, "/tmp/a")
-	want := []string{"/tmp/a", "/tmp/b"}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("appendUniquePath() = %v, want %v", got, want)
+// A pathSet keeps its order and finds its paths after squeezing out the
+// gaps that removals leave.
+func TestPathSetRemove(t *testing.T) {
+	var s pathSet
+	for _, p := range []string{"/a", "/b", "/c", "/d", "/e", "/a"} {
+		s.add(p)
+	}
+	for _, p := range []string{"/b", "/d", "/a", "/x"} {
+		s.remove(p)
+	}
+	s.add("/b")
+	s.remove("/c")
+	if want := []string{"/e", "/b"}; !reflect.DeepEqual(s.list(), want) || s.len() != 2 {
+		t.Fatalf("list %v, len %d, want %v", s.list(), s.len(), want)
+	}
+	if !s.has("/e") || !s.has("/b") || s.has("/c") {
+		t.Errorf("has is wrong after removals")
+	}
+	s.remove("/e")
+	if want := []string{"/b"}; !reflect.DeepEqual(s.list(), want) {
+		t.Errorf("list %v, want %v", s.list(), want)
 	}
 }
 
-func TestRemovePathRemovesExisting(t *testing.T) {
-	paths := []string{"/tmp/a", "/tmp/b", "/tmp/c"}
-	got := removePath(paths, "/tmp/b")
-	want := []string{"/tmp/a", "/tmp/c"}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("removePath() = %v, want %v", got, want)
+// Reading the clipboard drops lines that are not an op and a path, and
+// writes the file back without them.
+func TestLoadClipboardDropsBadLines(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	path, err := clipboardFilePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(path, []byte("cut\t/a\n\nbad\t/b\ncopy\t/a\nno tab\ncut\t\ncopy\t/c\ncut\t/d\ncut\t/d\n"), 0644)
+	cut, copied := loadClipboard()
+	if !reflect.DeepEqual(cut, []string{"/d"}) || !reflect.DeepEqual(copied, []string{"/a", "/c"}) {
+		t.Fatalf("cut %v, copy %v", cut, copied)
+	}
+	data, _ := os.ReadFile(path)
+	if want := "cut\t/d\ncopy\t/a\ncopy\t/c\n"; string(data) != want {
+		t.Errorf("file %q, want %q", data, want)
 	}
 }
 
-func TestRemovePathNoOpWhenMissing(t *testing.T) {
-	paths := []string{"/tmp/a", "/tmp/b"}
-	got := removePath(paths, "/tmp/c")
-	want := []string{"/tmp/a", "/tmp/b"}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("removePath() = %v, want %v", got, want)
+// Cutting a large selection reads and writes the clipboard once, not once
+// for each entry.
+func BenchmarkClipboardAddSelection(b *testing.B) {
+	b.Setenv("XDG_DATA_HOME", b.TempDir())
+	dir := b.TempDir()
+	for i := range 1000 {
+		os.WriteFile(filepath.Join(dir, "file"+strconv.Itoa(i)), nil, 0644)
+	}
+	fm := &FileManager{rows: 20, cols: 80, currentDir: dir}
+	fm.loadDirectory()
+	for b.Loop() {
+		clearClipboard()
+		fm.invertSelection()
+		fm.clipboardAdd("cut")
 	}
 }
 
@@ -69,7 +108,7 @@ func TestHandleInputProcessesBufferedQuit(t *testing.T) {
 		},
 	}
 
-	quit := fm.handleInput([]byte("jq"), 2)
+	quit := feedInput(fm, "jq")
 
 	if !quit {
 		t.Fatal("expected buffered q to quit")
@@ -304,14 +343,13 @@ func TestEnterSelectedWindowsVolumeSwitchesCurrentDirectory(t *testing.T) {
 	}
 }
 
-// feedInput sends input to the file manager in reads of at most 16 bytes,
-// the size the main loop reads.
-func feedInput(fm *FileManager, input string) {
-	for len(input) > 0 {
-		n := min(16, len(input))
-		fm.handleInput([]byte(input[:n]), n)
-		input = input[n:]
+// feedInput gives the file manager each chunk as one read, and handles its
+// input until the input ends. It reports whether a binding quit.
+func feedInput(fm *FileManager, chunks ...string) bool {
+	fm.input = &StdinReaderState{array: make([]byte, 1024), read: chunkReads(chunks...)}
+	for !fm.handleNextInput() {
 	}
+	return fm.quit
 }
 
 func TestHandleInputIgnoresLateTerminalReplies(t *testing.T) {
@@ -344,9 +382,6 @@ func TestHandleInputIgnoresLateTerminalReplies(t *testing.T) {
 	if _, err := os.Stat(clipboard); err != nil {
 		t.Fatalf("clipboard was cleared: %v", err)
 	}
-	if len(fm.pendingInput) != 0 {
-		t.Fatalf("left %q waiting", fm.pendingInput)
-	}
 
 	// Keys after the replies still work.
 	feedInput(fm, "j")
@@ -361,21 +396,25 @@ func TestHandleInputJoinsSplitKeySequence(t *testing.T) {
 		cols:    80,
 		entries: []os.DirEntry{testDirEntry{name: "a"}, testDirEntry{name: "b"}},
 	}
-	fm.handleInput([]byte("\x1b["), 2)
-	if fm.cursor != 0 {
-		t.Fatal("acted on half of a key sequence")
+	reads := chunkReads("\x1b[", "B") // down arrow
+	fm.input = &StdinReaderState{array: make([]byte, 1024), read: func(buf []byte) (int, error) {
+		if fm.input.n == 2 && fm.cursor != 0 {
+			t.Fatal("acted on half of a key sequence")
+		}
+		return reads(buf)
+	}}
+	for !fm.handleNextInput() {
 	}
-	fm.handleInput([]byte("B"), 1) // down arrow
 	if fm.cursor != 1 {
 		t.Fatalf("cursor = %d after a split down arrow, want 1", fm.cursor)
 	}
 }
 
 func TestHandleInputDoesNotWaitForeverOnUnfinishedSequence(t *testing.T) {
-	fm := &FileManager{rows: 20, cols: 80}
-	feedInput(fm, "\x1b["+strings.Repeat("1;", maxPendingEscapeBytes))
-	if len(fm.pendingInput) >= maxPendingEscapeBytes {
-		t.Fatalf("kept %d bytes waiting", len(fm.pendingInput))
+	fm := &FileManager{rows: 20, cols: 80, entries: []os.DirEntry{testDirEntry{name: "a"}, testDirEntry{name: "b"}}}
+	feedInput(fm, "\x1b["+strings.Repeat("0", maxCsiParamBytes+10), "j")
+	if fm.cursor != 1 {
+		t.Fatalf("cursor = %d after the sequence was given up and j, want 1", fm.cursor)
 	}
 }
 

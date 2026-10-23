@@ -113,6 +113,13 @@ func TestPromptTablesCoverBuiltinEnums(t *testing.T) {
 		"EditMode":      nil,
 		"EditOp":        nil,
 		"BindingAction": nil,
+		// The file manager's binding enums; FmBindings.go reads their
+		// members by name, which TestFmBindingEnumsMatch checks.
+		"FmMode":     nil,
+		"FmPrompt":   nil,
+		"FmDistance": nil,
+		"FmOp":       nil,
+		"FmAction":   nil,
 	}
 	enums := builtinEnums(t)
 	for name, d := range enums {
@@ -226,6 +233,11 @@ func TestPromptBuiltinsDocumented(t *testing.T) {
 		"EditMode":       userDocName,
 		"EditOp":         userDocName,
 		"BindingAction":  userDocName,
+		"FmMode":         userDocName,
+		"FmPrompt":       userDocName,
+		"FmDistance":     userDocName,
+		"FmOp":           userDocName,
+		"FmAction":       userDocName,
 	}
 	docs := map[string][]byte{}
 	for _, name := range []string{userDocName, funcDocName} {

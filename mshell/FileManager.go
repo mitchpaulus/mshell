@@ -220,8 +220,6 @@ type FileManager struct {
 	hostname string
 	username string
 
-	lastKey byte // for gg detection
-
 	previewCache  map[string][]string // cached preview lines per file path
 	previewReqCh  chan previewRequest  // sends requests to the preview worker
 	previewChan   chan previewResult   // receives results from the preview worker
@@ -237,166 +235,167 @@ type FileManager struct {
 
 	sixel sixelTerminal // whether and how images can be drawn
 
-	// The start of an escape sequence cut off at the end of the last read,
-	// kept until the rest arrives.
-	pendingInput []byte
-
 	// Search state
-	searching    bool   // true when typing a search query
-	searchQuery  []rune // current search input
 	searchActive bool   // true when a search has been committed
 	searchTerm   string // lowercase committed search term
 	searchMatches []int // indices into entries that match
 
 	ttyOut *os.File // where TUI output goes (may differ from stdout)
 
-	// Bookmark state
-	bookmarks       map[byte]string
-	pendingMark     bool // waiting for mark character after 'm'
-	showingBookmarks bool // showing bookmark selection after ';'
-
-	// Rename state
-	renaming       bool
-	renameInput    []rune
-	renameCursor   int // cursor position within renameInput
+	bookmarks map[byte]string
 
 	// Status message (shown once at bottom, cleared on first keypress)
 	statusMsg string
+
+	// The evaluator whose key bindings and definitions the file manager
+	// uses, and the context its quotes run in (FileManagerInput.go).
+	ev          *EvalState
+	context     ExecuteContext
+	definitions []MShellDefinition
+
+	// input is what the terminal sent, read with the shell's lexer, and
+	// keys what the key resolver keeps between keys.
+	input *StdinReaderState
+	keys  keyResolver[fmSnapshot, fmMode, *fmBindingEntry]
+	mode  fmMode
+	// popup is set while the pending keys wait for more, and the bindings
+	// that can follow are listed.
+	popup bool
+	// asking is set while a question's box is up.
+	asking     bool
+	line       fmLine
+	helpOffset int
+
+	// selected are the absolute paths of the selection, in the order they
+	// were selected.
+	selected pathSet
+
+	// startedIn is the working directory when the file manager started.
+	// quit is set by fmQuit and fmQuitNoCd, quitNoCd by fmQuitNoCd, and
+	// exitResult when a quote called exit.
+	startedIn  string
+	quit       bool
+	quitNoCd   bool
+	exitResult *EvalResult
+
+	// What the file manager turned on in the terminal, to turn off before
+	// another program gets it.
+	hasTerminal     bool
+	bracketedPaste  bool
+	kittyKeys       bool
+	kittyKeysPushed bool
 
 	// renderMu serializes render() calls between the main loop and the
 	// preview receiver goroutine.
 	renderMu sync.Mutex
 }
 
-// RunFileManager runs as a standalone subcommand (msh fm).
-// TUI goes to /dev/tty, final directory is printed to stdout.
-// If startDir is non-empty and is a valid directory, it is used instead of cwd.
+// RunFileManager runs as a standalone subcommand (msh fm). It loads the
+// startup files, as a script does, so the user's bindings work. The TUI
+// goes to /dev/tty, and the final directory is printed to stdout. If
+// startDir is non-empty and is a valid directory, it is used instead of
+// the working directory.
 func RunFileManager(startDir string) int {
-	fm := &FileManager{}
-	fm.stdInFd = int(os.Stdin.Fd())
-
 	// Open /dev/tty for TUI output so stdout stays clean for the directory result.
+	ttyOut := os.Stdout
 	if runtime.GOOS != "windows" {
-		tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
-		if err != nil {
-			fm.ttyOut = os.Stdout
-		} else {
-			fm.ttyOut = tty
+		if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {
+			ttyOut = tty
 			defer tty.Close()
 		}
-	} else {
-		fm.ttyOut = os.Stdout
 	}
 
-	cols, rows, err := term.GetSize(int(fm.ttyOut.Fd()))
+	ev, context, definitions, problem := loadFileManagerStartup()
+	fm, err := newFileManager(ev, context, definitions, ttyOut, startDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting terminal size: %s\n", err)
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fm.rows = rows
-	fm.cols = cols
-
-	fm.initUserInfo()
-	fm.bookmarks = loadBookmarks()
-
-	if startDir != "" {
-		if info, err := os.Stat(startDir); err == nil && info.IsDir() {
-			fm.currentDir, _ = filepath.Abs(startDir)
-		} else {
-			fm.statusMsg = fmt.Sprintf("Directory not found: %s", startDir)
-			fm.currentDir, err = os.Getwd()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error getting working directory: %s\n", err)
-				return 1
-			}
-		}
-	} else {
-		fm.currentDir, err = os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting working directory: %s\n", err)
-			return 1
-		}
+	if problem != "" && fm.statusMsg == "" {
+		fm.statusMsg = problem
 	}
-
-	fm.loadDirectory()
-
-	oldState, err := term.MakeRaw(fm.stdInFd)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error entering raw mode: %s\n", err)
+	if err := fm.run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fm.oldState = *oldState
-
-	fm.ttyOut.WriteString("\033[?1049h\033[?25l")
-
-	defer func() {
-		fm.ttyOut.WriteString("\033[?25h\033[?1049l")
-		term.Restore(fm.stdInFd, &fm.oldState)
-	}()
-
-	fm.mainLoop()
+	if fm.exitResult != nil {
+		return toProcessExitStatus(fm.exitResult.ExitCode)
+	}
 
 	// Print the final directory to stdout so callers can cd to it.
-	fmt.Fprintln(os.Stdout, fm.currentDir)
-
+	if fm.quitNoCd {
+		fmt.Fprintln(os.Stdout, fm.startedIn)
+	} else {
+		fmt.Fprintln(os.Stdout, fm.currentDir)
+	}
 	return 0
 }
 
-// RunFileManagerInteractive runs from within the mshell interactive session.
-// The terminal is already in raw mode from the interactive session.
-// If startDir is non-empty and is a valid directory, it is used instead of cwd.
-// Returns the directory the user was in when they quit.
-func RunFileManagerInteractive(stdInFd int, oldState *term.State, startDir string) string {
-	fm := &FileManager{}
-	fm.stdInFd = stdInFd
-	fm.oldState = *oldState
-	fm.ttyOut = os.Stdout
-
-	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
+// loadFileManagerStartup loads the startup files for msh fm, with their
+// standard output on standard error, so the directory printed at the end is
+// the only standard output. A problem with them is returned to be shown at
+// the bottom; the file manager starts anyway, with what loaded.
+func loadFileManagerStartup() (*EvalState, ExecuteContext, []MShellDefinition, string) {
+	ev := &EvalState{PositionalArgs: []string{}, CallStack: make(CallStack, 0, 10)}
+	ev.EnvironmentHistory()
+	context := ExecuteContext{Variables: map[string]MShellObject{}, Pbm: NewPathBinManager()}
+	PrebuildCoreBuiltins()
+	startup := context
+	startup.StandardOutput = os.Stderr
+	stack := MShellStack{}
+	definitions, err := stdLibDefinitions(&stack, startup, ev)
+	problem := ""
 	if err != nil {
-		return ""
+		fmt.Fprintln(os.Stderr, formatStartupErrorMessage(err, "", "", 0, 0))
+		problem = "Error loading startup files: " + firstLine(err.Error())
 	}
-	fm.rows = rows
-	fm.cols = cols
-
-	fm.initUserInfo()
-	fm.bookmarks = loadBookmarks()
-
-	if startDir != "" {
-		if info, err := os.Stat(startDir); err == nil && info.IsDir() {
-			fm.currentDir, _ = filepath.Abs(startDir)
-		} else {
-			fm.statusMsg = fmt.Sprintf("Directory not found: %s", startDir)
-			fm.currentDir, _ = os.Getwd()
-		}
-	} else {
-		fm.currentDir, _ = os.Getwd()
+	for _, e := range ev.StartupTypeErrors {
+		fmt.Fprintln(os.Stderr, e)
 	}
-	fm.loadDirectory()
-
-	// Terminal is already in raw mode from the interactive session.
-	// Just switch to alternate buffer and hide cursor.
-	fm.ttyOut.WriteString("\033[?1049h\033[?25l")
-
-	fm.mainLoop()
-
-	fm.ttyOut.WriteString("\033[?25h\033[?1049l")
-
-	return fm.currentDir
+	if len(ev.StartupTypeErrors) > 0 && problem == "" {
+		problem = "Type errors in the startup files' top-level code, which did not run."
+	}
+	ev.printAbbrWarnings()
+	return ev, context, definitions, problem
 }
 
-// RunFileManagerBuiltin runs from a builtin call during evaluation.
-// The terminal is in cooked mode, so this handles MakeRaw/Restore itself.
-// If startDir is non-empty and is a valid directory, it is used instead of cwd.
-// Returns the directory the user was in when they quit.
-func RunFileManagerBuiltin(startDir string) string {
-	fm := &FileManager{}
-	fm.stdInFd = int(os.Stdin.Fd())
-	fm.ttyOut = os.Stdout
-
-	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
+// RunFileManagerBuiltin runs from a builtin call during evaluation, with
+// the evaluator's bindings and definitions. The terminal is in cooked
+// mode, so this handles MakeRaw/Restore itself. If startDir is non-empty
+// and is a valid directory, it is used instead of cwd. It returns the
+// directory to change to, which is "" after fmQuitNoCd, and the result of
+// exit when a quote called it.
+func RunFileManagerBuiltin(ev *EvalState, context ExecuteContext, definitions []MShellDefinition, startDir string) (string, *EvalResult) {
+	fm, err := newFileManager(ev, context, definitions, os.Stdout, startDir)
 	if err != nil {
-		return ""
+		return "", nil
+	}
+	if err := fm.run(); err != nil {
+		return "", nil
+	}
+	if fm.exitResult != nil {
+		return "", fm.exitResult
+	}
+	if fm.quitNoCd {
+		return "", nil
+	}
+	return fm.currentDir, nil
+}
+
+// newFileManager makes a file manager that draws on ttyOut and starts in
+// startDir, or else the working directory.
+func newFileManager(ev *EvalState, context ExecuteContext, definitions []MShellDefinition, ttyOut *os.File, startDir string) (*FileManager, error) {
+	fm := &FileManager{
+		ev:          ev,
+		context:     context,
+		definitions: definitions,
+		ttyOut:      ttyOut,
+		stdInFd:     int(os.Stdin.Fd()),
+		input:       &StdinReaderState{array: make([]byte, 1024), read: os.Stdin.Read},
+	}
+	cols, rows, err := term.GetSize(int(ttyOut.Fd()))
+	if err != nil {
+		return nil, fmt.Errorf("Error getting terminal size: %s", err)
 	}
 	fm.rows = rows
 	fm.cols = cols
@@ -404,34 +403,30 @@ func RunFileManagerBuiltin(startDir string) string {
 	fm.initUserInfo()
 	fm.bookmarks = loadBookmarks()
 
+	fm.startedIn, err = os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("Error getting working directory: %s", err)
+	}
+	fm.currentDir = fm.startedIn
 	if startDir != "" {
 		if info, err := os.Stat(startDir); err == nil && info.IsDir() {
 			fm.currentDir, _ = filepath.Abs(startDir)
 		} else {
 			fm.statusMsg = fmt.Sprintf("Directory not found: %s", startDir)
-			fm.currentDir, _ = os.Getwd()
 		}
-	} else {
-		fm.currentDir, _ = os.Getwd()
 	}
 	fm.loadDirectory()
+	return fm, nil
+}
 
-	oldState, err := term.MakeRaw(fm.stdInFd)
-	if err != nil {
-		return ""
+// run takes the terminal and runs the file manager until it ends.
+func (fm *FileManager) run() error {
+	if err := fm.takeTerminal(); err != nil {
+		return fmt.Errorf("Error entering raw mode: %s", err)
 	}
-	fm.oldState = *oldState
-
-	fm.ttyOut.WriteString("\033[?1049h\033[?25l")
-
-	defer func() {
-		fm.ttyOut.WriteString("\033[?25h\033[?1049l")
-		term.Restore(fm.stdInFd, &fm.oldState)
-	}()
-
+	defer fm.releaseTerminal()
 	fm.mainLoop()
-
-	return fm.currentDir
+	return nil
 }
 
 func (fm *FileManager) initUserInfo() {
@@ -784,13 +779,15 @@ func (fm *FileManager) selectedImage() []byte {
 
 func (fm *FileManager) mainLoop() {
 	if term.IsTerminal(fm.stdInFd) && term.IsTerminal(int(fm.ttyOut.Fd())) {
-		detected := detectSixel(fm.ttyOut, fm.stdInFd, fm.cols, fm.rows)
+		detected, kitty := detectTerminal(fm.ttyOut, fm.stdInFd, fm.cols, fm.rows, os.Getenv("MSH_KITTY_KEYS") != "0")
 		setting, set := os.LookupEnv(cellPixelsEnvVar)
 		var message string
 		fm.sixel, message = applyCellPixelsSetting(detected, setting, set)
 		if message != "" && fm.statusMsg == "" {
 			fm.statusMsg = message
 		}
+		fm.kittyKeys = kitty
+		fm.setKittyKeys(true)
 	}
 	fm.startPreviewLoop()
 	fm.startFolderStateWorker()
@@ -803,24 +800,10 @@ func (fm *FileManager) mainLoop() {
 		fm.render()
 		fm.renderMu.Unlock()
 
-		buf := make([]byte, 16)
-		n, err := os.Stdin.Read(buf)
-		if err != nil || n == 0 {
-			return
-		}
-		if fm.handleInput(buf, n) {
+		if fm.handleNextInput() {
 			return
 		}
 	}
-}
-
-func (fm *FileManager) readModalKey() (byte, bool) {
-	buf := make([]byte, 16)
-	n, err := os.Stdin.Read(buf)
-	if err != nil || n == 0 {
-		return 0, false
-	}
-	return buf[0], true
 }
 
 func (fm *FileManager) loadDirectory() {
@@ -937,8 +920,16 @@ func (fm *FileManager) requireRealDirectory() bool {
 	return false
 }
 
+// visibleRows is how many entries the listing shows: the rows below the
+// header, less the prompt line and the message or summary at the bottom.
+// In help mode it is how many lines of the help are shown.
 func (fm *FileManager) visibleRows() int {
-	if fm.searching || fm.renaming || fm.statusMsg != "" || !fm.showingWindowsVolumes {
+	switch {
+	case fm.mode == fmModeHelp:
+		return fm.helpRows()
+	case fm.mode == fmModeInsert && fm.statusMsg != "":
+		return fm.rows - 3 // header, message and prompt line
+	case fm.mode == fmModeInsert || fm.statusMsg != "" || !fm.showingWindowsVolumes:
 		return fm.rows - 2 // header + bottom bar
 	}
 	return fm.rows - 1 // header only
@@ -1200,8 +1191,8 @@ func (fm *FileManager) writeHighlightedName(buf *bytes.Buffer, name string, isDi
 func (fm *FileManager) render() {
 	var buf bytes.Buffer
 
-	// Move cursor to top-left, clear screen
-	buf.WriteString("\033[H\033[2J")
+	// Hide the cursor, move it to top-left, clear screen
+	buf.WriteString("\033[?25l\033[H\033[2J")
 
 	leftW := fm.leftPaneWidth()
 	markerW := 0
@@ -1251,6 +1242,9 @@ func (fm *FileManager) render() {
 		}
 		clipStatus += fmt.Sprintf(" COPY %d %s", len(copyPaths), noun)
 	}
+	if fm.selected.len() > 0 {
+		clipStatus += fmt.Sprintf(" SELECTED %d", fm.selected.len())
+	}
 
 	headerRunes := utf8.RuneCountInString(header)
 	clipStatusRunes := utf8.RuneCountInString(clipStatus)
@@ -1272,6 +1266,15 @@ func (fm *FileManager) render() {
 		buf.WriteString("\033[39m") // reset fg, keep reverse
 	}
 	buf.WriteString("\033[0m")
+
+	if fm.mode == fmModeHelp {
+		fm.renderHelp(&buf)
+		if fm.popup {
+			fm.drawOverlayBox(&buf, fm.popupLines())
+		}
+		fm.ttyOut.Write(buf.Bytes())
+		return
+	}
 
 	// Preview content
 	previewLines := fm.getPreview()
@@ -1338,7 +1341,22 @@ func (fm *FileManager) render() {
 				name = truncateMiddle(name, availW)
 				nameRunes = availW
 			}
-			buf.WriteString(" ")
+			if fm.selected.has(entryPath) {
+				// A selected entry is marked in the space before its name.
+				buf.WriteString("\033[35m*")
+				switch {
+				case inCut:
+					buf.WriteString("\033[31m")
+				case inCopy:
+					buf.WriteString("\033[32m")
+				case entry.IsDir():
+					buf.WriteString("\033[34m")
+				default:
+					buf.WriteString("\033[39m")
+				}
+			} else {
+				buf.WriteString(" ")
+			}
 			if indent > 0 {
 				buf.WriteString(strings.Repeat(" ", indent))
 			}
@@ -1386,55 +1404,27 @@ func (fm *FileManager) render() {
 
 	// Image preview, drawn over the empty preview rows. Overlays are text
 	// drawn on top of the preview, so the image is left off while one shows.
-	overlay := fm.pendingMark || fm.showingBookmarks || fm.lastKey != 0
-	if image := fm.selectedImage(); image != nil && !overlay {
+	if image := fm.selectedImage(); image != nil && !fm.popup && !fm.asking {
 		buf.WriteString("\0337") // save cursor position
 		fmt.Fprintf(&buf, "\033[%d;%dH", imagePreviewRow, leftW+5)
 		buf.Write(image)
 		buf.WriteString("\0338") // restore cursor position
 	}
 
-	// Search bar at the bottom
-	if fm.searching {
-		buf.WriteString("\r\n")
-		searchLine := "/" + string(fm.searchQuery)
-		searchRunes := utf8.RuneCountInString(searchLine)
-		if searchRunes > fm.cols {
-			searchLine = string([]rune(searchLine)[:fm.cols])
+	// The bottom: the prompt line, with a message above it, or a message or
+	// the directory summary.
+	cursorCol := 0
+	if fm.mode == fmModeInsert {
+		if fm.statusMsg != "" {
+			buf.WriteString("\r\n")
+			fm.writeStatus(&buf)
 		}
-		buf.WriteString(searchLine)
-		// Show cursor at end of search input
-		buf.WriteString("\033[?25h")
-	}
-
-	// Rename bar at the bottom
-	if fm.renaming {
 		buf.WriteString("\r\n")
-		prefix := "rename: "
-		renameLine := prefix + string(fm.renameInput)
-		renameRunes := utf8.RuneCountInString(renameLine)
-		if renameRunes > fm.cols {
-			renameLine = string([]rune(renameLine)[:fm.cols])
-		}
-		buf.WriteString(renameLine)
-		// Position cursor
-		cursorCol := utf8.RuneCountInString(prefix) + fm.renameCursor + 1
-		buf.WriteString(fmt.Sprintf("\033[%d;%dH", fm.rows, cursorCol))
-		buf.WriteString("\033[?25h")
-	}
-
-	// Status message at the bottom
-	if fm.statusMsg != "" && !fm.searching && !fm.renaming {
+		cursorCol = fm.writeLine(&buf)
+	} else if fm.statusMsg != "" {
 		buf.WriteString("\r\n")
-		msg := fm.statusMsg
-		msgRunes := utf8.RuneCountInString(msg)
-		if msgRunes > fm.cols {
-			msg = string([]rune(msg)[:fm.cols])
-		}
-		buf.WriteString("\033[33m") // yellow
-		buf.WriteString(msg)
-		buf.WriteString("\033[0m")
-	} else if summary := fm.directorySummary(); summary != "" && !fm.searching && !fm.renaming {
+		fm.writeStatus(&buf)
+	} else if summary := fm.directorySummary(); summary != "" {
 		buf.WriteString("\r\n")
 		summary = " " + summary
 		if utf8.RuneCountInString(summary) > fm.cols {
@@ -1445,42 +1435,25 @@ func (fm *FileManager) render() {
 		buf.WriteString("\033[0m")
 	}
 
-	// Bookmark overlay
-	if fm.pendingMark || fm.showingBookmarks {
-		fm.renderBookmarkOverlay(&buf)
-	} else if fm.lastKey != 0 {
-		fm.renderPrefixOverlay(&buf)
+	if fm.popup {
+		fm.drawOverlayBox(&buf, fm.popupLines())
+	}
+	if cursorCol > 0 {
+		fmt.Fprintf(&buf, "\033[%d;%dH\033[?25h", fm.rows, cursorCol)
 	}
 
 	fm.ttyOut.Write(buf.Bytes())
 }
 
-func (fm *FileManager) renderPrefixOverlay(buf *bytes.Buffer) {
-	var title string
-	var bindings [][2]string
-	switch fm.lastKey {
-	case 'y':
-		title = " Yank "
-		bindings = [][2]string{
-			{"y", "copy entry to file-manager clipboard"},
-			{"f", "file name → system clipboard"},
-			{"p", "full path → system clipboard"},
-			{"g", "git-relative path → system clipboard"},
-		}
-	case 'g':
-		title = " Go "
-		bindings = [][2]string{
-			{"g", "jump to top"},
-		}
-	default:
-		return
+// writeStatus writes the status message, in one row.
+func (fm *FileManager) writeStatus(buf *bytes.Buffer) {
+	msg := terminalSafeText(fm.statusMsg, false)
+	if utf8.RuneCountInString(msg) > fm.cols {
+		msg = string([]rune(msg)[:fm.cols])
 	}
-
-	lines := []string{title}
-	for _, b := range bindings {
-		lines = append(lines, fmt.Sprintf("  %s  %s", b[0], b[1]))
-	}
-	fm.drawOverlayBox(buf, lines)
+	buf.WriteString("\033[33m") // yellow
+	buf.WriteString(msg)
+	buf.WriteString("\033[0m")
 }
 
 func (fm *FileManager) drawOverlayBox(buf *bytes.Buffer, lines []string) {
@@ -1526,9 +1499,11 @@ func (fm *FileManager) drawOverlayBox(buf *bytes.Buffer, lines []string) {
 	}
 }
 
-func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
+// bookmarkLines are the lines of the question that sets a bookmark, or
+// goes to one.
+func (fm *FileManager) bookmarkLines(set bool) []string {
 	var lines []string
-	if fm.pendingMark {
+	if set {
 		lines = append(lines, " Set bookmark (0-9, a-z, A-Z): ")
 	} else {
 		lines = append(lines, " Go to bookmark: ")
@@ -1551,7 +1526,7 @@ func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
 	if len(lines) == 1 {
 		lines = append(lines, "  (no bookmarks)")
 	}
-	fm.drawOverlayBox(buf, lines)
+	return lines
 }
 
 func (fm *FileManager) getPreview() []string {
@@ -1937,357 +1912,29 @@ func formatPreviewSize(size int64) string {
 	return fmt.Sprintf("%.1f PiB", value/1024)
 }
 
-func escapeSequenceLength(buf []byte) int {
-	if len(buf) >= 5 && buf[0] == 0x1b && buf[1] == '[' && buf[2] == '1' && buf[3] == '5' && buf[4] == '~' {
-		return 5
-	}
-	if len(buf) >= 3 && buf[0] == 0x1b && buf[1] == '[' {
-		switch buf[2] {
-		case 'A', 'B', 'C', 'D', 'F', 'H':
-			return 3
-		}
-	}
-	return 1
-}
-
-func (fm *FileManager) handleInput(buf []byte, n int) bool {
-	fm.renderMu.Lock()
-	defer fm.renderMu.Unlock()
-
-	input := append(fm.pendingInput, buf[:n]...)
-	fm.pendingInput = nil
-	for i := 0; i < len(input); {
-		length, complete := csiSequenceLength(input[i:])
-		if !complete {
-			// Wait for the rest of the sequence.
-			fm.pendingInput = append([]byte(nil), input[i:]...)
-			break
-		}
-		if isTerminalReply(input[i : i+length]) {
-			i += length
-			continue
-		}
-
-		fm.statusMsg = ""
-		consumed, quit := fm.handleInputEvent(input[i:])
-		if quit {
-			return true
-		}
-		if consumed <= 0 {
-			consumed = 1
-		}
-		i += consumed
-	}
-	return false
-}
-
-// maxPendingEscapeBytes bounds how much of an unfinished escape sequence is
-// kept waiting for the rest. Terminal replies and key sequences are far
-// shorter.
-const maxPendingEscapeBytes = 256
-
-// csiSequenceLength returns the length of the CSI sequence (ESC [ ...)
-// at the start of input, or 1 if input does not start with one. complete is
-// false when input ends before the sequence does. A sequence longer than
-// maxPendingEscapeBytes counts as complete, so it is never kept waiting.
-func csiSequenceLength(input []byte) (length int, complete bool) {
-	if len(input) < 2 || input[0] != 0x1b || input[1] != '[' {
-		return 1, true
-	}
-	for i := 2; i < len(input); i++ {
-		b := input[i]
-		if b >= 0x40 && b <= 0x7e { // final byte
-			return i + 1, true
-		}
-		if b < 0x20 || b > 0x3f { // not a parameter or intermediate byte
-			return 1, true
-		}
-	}
-	if len(input) >= maxPendingEscapeBytes {
-		return 1, true
-	}
-	return len(input), false
-}
-
-// isTerminalReply reports whether seq, a complete CSI sequence, is one of
-// the terminal's replies to the queries sent when the file manager starts:
-// device attributes (ESC [ ? ... c) or a size (ESC [ ... t). A reply that
-// arrives after startup stops waiting for it must not be taken as keys; the
-// 'c' at the end of the device attributes reply would clear the clipboard.
-// No key sends a CSI sequence ending in 'c' or 't'.
-func isTerminalReply(seq []byte) bool {
-	if len(seq) < 3 || seq[0] != 0x1b || seq[1] != '[' {
-		return false
-	}
-	final := seq[len(seq)-1]
-	return final == 'c' || final == 't'
-}
-
-func (fm *FileManager) handleInputEvent(buf []byte) (int, bool) {
-	if fm.searching {
-		return fm.handleSearchInput(buf), false
-	}
-
-	if fm.renaming {
-		return fm.handleRenameInput(buf), false
-	}
-
-	key := buf[0]
-
-	if fm.pendingMark {
-		fm.pendingMark = false
-		if isBookmarkChar(key) {
-			fm.bookmarks[key] = fm.currentDir
-			saveBookmarks(fm.bookmarks)
-		}
-		return 1, false
-	}
-
-	if fm.showingBookmarks {
-		fm.showingBookmarks = false
-		if isBookmarkChar(key) {
-			if dir, ok := fm.bookmarks[key]; ok {
-				fm.currentDir = dir
-				fm.cursor = 0
-				fm.offset = 0
-				fm.loadDirectory()
-			}
-		}
-		return 1, false
-	}
-
-	// Check for escape sequences
-	if len(buf) >= 3 && buf[0] == 0x1b && buf[1] == '[' {
-		switch buf[2] {
-		case 'A': // Up arrow
-			fm.cursor--
-			fm.clampCursor()
-			fm.adjustScroll()
-			fm.lastKey = 0
-			return 3, false
-		case 'B': // Down arrow
-			fm.cursor++
-			fm.clampCursor()
-			fm.adjustScroll()
-			fm.lastKey = 0
-			return 3, false
-		case 'C': // Right arrow - enter directory
-			fm.enterSelected()
-			fm.lastKey = 0
-			return 3, false
-		case 'D': // Left arrow - parent directory
-			fm.goParent()
-			fm.lastKey = 0
-			return 3, false
-		}
-
-		// F5 = \033[15~
-		if len(buf) >= 5 && buf[2] == '1' && buf[3] == '5' && buf[4] == '~' {
-			if fm.showingWindowsVolumes {
-				fm.showWindowsVolumes()
-			} else {
-				fm.loadDirectory()
-			}
-			fm.clampCursor()
-			fm.adjustScroll()
-			fm.lastKey = 0
-			return 5, false
-		}
-	}
-
-	switch key {
-	case 'q':
-		return 1, true
-	case 'j':
-		fm.cursor++
-		fm.clampCursor()
-		fm.adjustScroll()
-	case 'k':
-		fm.cursor--
-		fm.clampCursor()
-		fm.adjustScroll()
-	case 'h':
-		fm.goParent()
-	case 'l', 13: // l or Enter
-		fm.enterSelected()
-	case 'G':
-		fm.cursor = len(fm.entries) - 1
-		fm.clampCursor()
-		fm.adjustScroll()
-	case 'g':
-		if fm.lastKey == 'y' {
-			fm.yankSystemClipboard(yankGitPath)
-			fm.lastKey = 0
-			return 1, false
-		}
-		if fm.lastKey == 'g' {
-			fm.cursor = 0
-			fm.offset = 0
-			fm.lastKey = 0
-			return 1, false
-		}
-		fm.lastKey = 'g'
-		return 1, false
-	case 4: // Ctrl-d
-		fm.cursor += 10
-		fm.clampCursor()
-		fm.adjustScroll()
-	case 21: // Ctrl-u
-		fm.cursor -= 10
-		fm.clampCursor()
-		fm.adjustScroll()
-	case 'e':
-		if fm.requireRealDirectory() {
-			fm.openEditor()
-		}
-	case 'r':
-		if !fm.requireRealDirectory() {
-			return 1, false
-		}
-		fm.startRename()
-		return 1, false
-	case '/':
-		fm.searching = true
-		fm.searchQuery = fm.searchQuery[:0]
-		fm.ttyOut.WriteString("\033[?25h") // show cursor
-		return 1, false
-	case 'n':
-		fm.searchNext()
-	case 'N':
-		fm.searchPrev()
-	case 'd':
-		if fm.requireRealDirectory() {
-			fm.clipboardCut()
-		}
-	case 'y':
-		if fm.lastKey == 'y' {
-			if fm.requireRealDirectory() {
-				fm.clipboardCopy()
-			}
-			fm.lastKey = 0
-			return 1, false
-		}
-		fm.lastKey = 'y'
-		return 1, false
-	case 'f':
-		if fm.lastKey == 'y' {
-			fm.yankSystemClipboard(yankFileName)
-			fm.lastKey = 0
-			return 1, false
-		}
-	case 'p':
-		if fm.lastKey == 'y' {
-			fm.yankSystemClipboard(yankFullPath)
-			fm.lastKey = 0
-			return 1, false
-		}
-		if fm.requireRealDirectory() {
-			fm.clipboardPaste()
-		}
-	case 'c':
-		clearClipboard()
-	case 'x':
-		if fm.requireRealDirectory() {
-			fm.deleteEntry()
-		}
-	case 'm':
-		fm.pendingMark = true
-		return 1, false
-	case ';':
-		fm.showingBookmarks = true
-		return 1, false
-	}
-
-	if key != 'g' && key != 'y' {
-		fm.lastKey = 0
-	}
-	return 1, false
-}
-
-func (fm *FileManager) handleSearchInput(buf []byte) int {
-	key := buf[0]
-
-	// Escape cancels search
-	if key == 0x1b {
-		fm.searching = false
-		fm.ttyOut.WriteString("\033[?25l")
-		return escapeSequenceLength(buf)
-	}
-
-	// Enter commits search
-	if key == 13 {
-		fm.searching = false
-		fm.ttyOut.WriteString("\033[?25l")
-		fm.commitSearch()
-		return 1
-	}
-
-	// Backspace
-	if key == 127 {
-		if len(fm.searchQuery) > 0 {
-			fm.searchQuery = fm.searchQuery[:len(fm.searchQuery)-1]
-			fm.updateSearchLive()
-		}
-		return 1
-	}
-
-	// Ctrl-U clears the search input
-	if key == 21 {
-		fm.searchQuery = fm.searchQuery[:0]
-		fm.updateSearchLive()
-		return 1
-	}
-
-	// Ctrl-W deletes the last word
-	if key == 23 {
-		if len(fm.searchQuery) > 0 {
-			// Skip trailing spaces
-			i := len(fm.searchQuery) - 1
-			for i >= 0 && fm.searchQuery[i] == ' ' {
-				i--
-			}
-			// Delete back to previous space or start
-			for i >= 0 && fm.searchQuery[i] != ' ' {
-				i--
-			}
-			fm.searchQuery = fm.searchQuery[:i+1]
-			fm.updateSearchLive()
-		}
-		return 1
-	}
-
-	// Printable characters
-	if key >= 32 && key < 127 {
-		fm.searchQuery = append(fm.searchQuery, rune(key))
-		fm.updateSearchLive()
-	}
-	return 1
-}
-
-func (fm *FileManager) updateSearchLive() {
-	if len(fm.searchQuery) == 0 {
+// updateSearchLive follows the search line as it changes: the matches are
+// those of the query.
+func (fm *FileManager) updateSearchLive(query string) {
+	if query == "" {
 		fm.searchMatches = fm.searchMatches[:0]
 		fm.searchActive = false
 		return
 	}
-	query := strings.ToLower(string(fm.searchQuery))
-	fm.searchTerm = query
-	fm.searchMatches = fm.searchMatches[:0]
-	for i, e := range fm.entries {
-		if strings.Contains(strings.ToLower(e.Name()), query) {
-			fm.searchMatches = append(fm.searchMatches, i)
-		}
-	}
+	fm.searchTerm = strings.ToLower(query)
+	fm.buildSearchMatches()
 	fm.searchActive = true
 }
 
-func (fm *FileManager) commitSearch() {
-	if len(fm.searchQuery) == 0 {
+// commitSearch puts the cursor on the first match of the query at or
+// after it.
+func (fm *FileManager) commitSearch(query string) {
+	if query == "" {
 		fm.searchActive = false
 		fm.searchMatches = fm.searchMatches[:0]
 		return
 	}
-	fm.searchTerm = strings.ToLower(string(fm.searchQuery))
+	fm.searchTerm = strings.ToLower(query)
+	fm.searchActive = true
 	fm.buildSearchMatches()
 	if len(fm.searchMatches) > 0 {
 		// Jump to first match at or after cursor
@@ -2344,123 +1991,12 @@ func (fm *FileManager) searchPrev() {
 	fm.adjustScroll()
 }
 
-func (fm *FileManager) startRename() {
-	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
-		return
-	}
-	name := fm.entries[fm.cursor].Name()
-	fm.renaming = true
-	fm.renameInput = []rune(name)
-
-	// Position cursor before the extension
-	ext := filepath.Ext(name)
-	if len(ext) > 0 && len(ext) < len(name) {
-		fm.renameCursor = utf8.RuneCountInString(name) - utf8.RuneCountInString(ext)
-	} else {
-		fm.renameCursor = len(fm.renameInput)
-	}
-}
-
-func (fm *FileManager) handleRenameInput(buf []byte) int {
-	key := buf[0]
-
-	// Escape cancels
-	if key == 0x1b {
-		// Check for arrow keys: ESC [ A/B/C/D
-		if len(buf) >= 3 && buf[1] == '[' {
-			switch buf[2] {
-			case 'C': // Right
-				if fm.renameCursor < len(fm.renameInput) {
-					fm.renameCursor++
-				}
-			case 'D': // Left
-				if fm.renameCursor > 0 {
-					fm.renameCursor--
-				}
-			case 'H': // Home
-				fm.renameCursor = 0
-			case 'F': // End
-				fm.renameCursor = len(fm.renameInput)
-			}
-			return 3
-		}
-		fm.renaming = false
-		fm.ttyOut.WriteString("\033[?25l")
-		return 1
-	}
-
-	// Enter commits rename
-	if key == 13 {
-		fm.renaming = false
-		fm.ttyOut.WriteString("\033[?25l")
-		fm.commitRename()
-		return 1
-	}
-
-	// Backspace
-	if key == 127 {
-		if fm.renameCursor > 0 {
-			fm.renameInput = append(fm.renameInput[:fm.renameCursor-1], fm.renameInput[fm.renameCursor:]...)
-			fm.renameCursor--
-		}
-		return 1
-	}
-
-	// Ctrl-U clears to start
-	if key == 21 {
-		fm.renameInput = fm.renameInput[fm.renameCursor:]
-		fm.renameCursor = 0
-		return 1
-	}
-
-	// Ctrl-W delete word backwards
-	if key == 23 {
-		if fm.renameCursor > 0 {
-			i := fm.renameCursor - 1
-			for i > 0 && fm.renameInput[i] == ' ' {
-				i--
-			}
-			for i > 0 && fm.renameInput[i-1] != ' ' && fm.renameInput[i-1] != '.' {
-				i--
-			}
-			fm.renameInput = append(fm.renameInput[:i], fm.renameInput[fm.renameCursor:]...)
-			fm.renameCursor = i
-		}
-		return 1
-	}
-
-	// Ctrl-A go to start
-	if key == 1 {
-		fm.renameCursor = 0
-		return 1
-	}
-
-	// Ctrl-E go to end
-	if key == 5 {
-		fm.renameCursor = len(fm.renameInput)
-		return 1
-	}
-
-	// Ctrl-K delete to end
-	if key == 11 {
-		fm.renameInput = fm.renameInput[:fm.renameCursor]
-		return 1
-	}
-
-	// Printable characters
-	if key >= 32 && key < 127 {
-		fm.renameInput = append(fm.renameInput[:fm.renameCursor], append([]rune{rune(key)}, fm.renameInput[fm.renameCursor:]...)...)
-		fm.renameCursor++
-	}
-	return 1
-}
-
-func (fm *FileManager) commitRename() {
+// commitRename renames the current entry, and puts the cursor on it.
+func (fm *FileManager) commitRename(newName string) {
 	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
 		return
 	}
 	oldName := fm.entries[fm.cursor].Name()
-	newName := string(fm.renameInput)
 	if newName == "" || newName == oldName {
 		return
 	}
@@ -2469,6 +2005,7 @@ func (fm *FileManager) commitRename() {
 	newPath := filepath.Join(fm.currentDir, newName)
 	err := os.Rename(oldPath, newPath)
 	if err != nil {
+		fm.statusMsg = "Rename: " + err.Error()
 		return
 	}
 
@@ -2539,12 +2076,18 @@ func (fm *FileManager) goParent() {
 	}
 }
 
+// openEditor opens the selected files, or the current one, in $EDITOR.
+// Directories are left out.
 func (fm *FileManager) openEditor() {
-	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
-		return
+	paths, missing := fm.targets()
+	var files []string
+	for _, p := range paths {
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			files = append(files, p)
+		}
 	}
-	entry := fm.entries[fm.cursor]
-	if entry.IsDir() {
+	fm.noteMissing(missing)
+	if len(files) == 0 {
 		return
 	}
 
@@ -2552,41 +2095,23 @@ func (fm *FileManager) openEditor() {
 	if editor == "" {
 		editor = "vi"
 	}
+	fm.runWithTerminal(func() {
+		if err := fm.runEditor(editor, files...); err != nil {
+			fmt.Fprintf(os.Stderr, "editor %q exited with error: %v\n", editor, err)
+			waitForEnter()
+		}
+	})
+}
 
-	filePath := filepath.Join(fm.currentDir, entry.Name())
-
-	// Restore terminal
-	fm.ttyOut.WriteString("\033[?25h\033[?1049l")
-	term.Restore(fm.stdInFd, &fm.oldState)
-
-	cmd := exec.Command(editor, filePath)
+// runEditor runs the editor on files, in the directory shown, with the
+// terminal as its input and output.
+func (fm *FileManager) runEditor(editor string, files ...string) error {
+	cmd := exec.Command(editor, files...)
 	cmd.Dir = fm.currentDir
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = fm.ttyOut
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "editor %q exited with error: %v\nPress Enter to continue...", editor, err)
-		buf := make([]byte, 1)
-		os.Stdin.Read(buf)
-	}
-
-	// Re-enter raw mode and alternate buffer
-	newState, _ := term.MakeRaw(fm.stdInFd)
-	if newState != nil {
-		fm.oldState = *newState
-	}
-	fm.ttyOut.WriteString("\033[?1049h\033[?25l")
-
-	// Refresh terminal size
-	cols, rows, err := term.GetSize(int(fm.ttyOut.Fd()))
-	if err == nil {
-		fm.rows = rows
-		fm.cols = cols
-	}
-
-	fm.loadDirectory()
-	fm.clampCursor()
-	fm.adjustScroll()
+	return cmd.Run()
 }
 
 func isBinaryFile(path string) bool {
@@ -2609,32 +2134,8 @@ func (fm *FileManager) openFileWindows(entry os.DirEntry) {
 	editor := os.Getenv("EDITOR")
 	if editor != "" && !isBinaryFile(filePath) {
 		// Open text file in editor, same as 'e' binding
-		fm.ttyOut.WriteString("\033[?25h\033[?1049l")
-		term.Restore(fm.stdInFd, &fm.oldState)
-
-		cmd := exec.Command(editor, filePath)
-		cmd.Dir = fm.currentDir
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		err := cmd.Run()
-
-		// Re-enter raw mode and alternate buffer
-		newState, _ := term.MakeRaw(fm.stdInFd)
-		if newState != nil {
-			fm.oldState = *newState
-		}
-		fm.ttyOut.WriteString("\033[?1049h\033[?25l")
-
-		cols, rows, sizeErr := term.GetSize(int(fm.ttyOut.Fd()))
-		if sizeErr == nil {
-			fm.rows = rows
-			fm.cols = cols
-		}
-
-		fm.loadDirectory()
-		fm.clampCursor()
-		fm.adjustScroll()
+		var err error
+		fm.runWithTerminal(func() { err = fm.runEditor(editor, filePath) })
 
 		if err == nil {
 			return
@@ -2663,32 +2164,8 @@ func (fm *FileManager) openFileUnix(entry os.DirEntry) {
 	editor := os.Getenv("EDITOR")
 	if editor != "" && !isBinaryFile(filePath) {
 		// Open text file in editor, same as 'e' binding
-		fm.ttyOut.WriteString("\033[?25h\033[?1049l")
-		term.Restore(fm.stdInFd, &fm.oldState)
-
-		cmd := exec.Command(editor, filePath)
-		cmd.Dir = fm.currentDir
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		err := cmd.Run()
-
-		// Re-enter raw mode and alternate buffer
-		newState, _ := term.MakeRaw(fm.stdInFd)
-		if newState != nil {
-			fm.oldState = *newState
-		}
-		fm.ttyOut.WriteString("\033[?1049h\033[?25l")
-
-		cols, rows, sizeErr := term.GetSize(int(fm.ttyOut.Fd()))
-		if sizeErr == nil {
-			fm.rows = rows
-			fm.cols = cols
-		}
-
-		fm.loadDirectory()
-		fm.clampCursor()
-		fm.adjustScroll()
+		var err error
+		fm.runWithTerminal(func() { err = fm.runEditor(editor, filePath) })
 
 		if err == nil {
 			return
@@ -2709,22 +2186,6 @@ func (fm *FileManager) openFileUnix(entry os.DirEntry) {
 
 // Clipboard actions
 
-func (fm *FileManager) clipboardCut() {
-	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
-		return
-	}
-	absPath := filepath.Join(fm.currentDir, fm.entries[fm.cursor].Name())
-	_ = addClipboardPath("cut", absPath)
-}
-
-func (fm *FileManager) clipboardCopy() {
-	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
-		return
-	}
-	absPath := filepath.Join(fm.currentDir, fm.entries[fm.cursor].Name())
-	_ = addClipboardPath("copy", absPath)
-}
-
 type yankKind int
 
 const (
@@ -2733,36 +2194,46 @@ const (
 	yankGitPath
 )
 
+// yankSystemClipboard puts the names or paths of the selected entries, or
+// of the current one, on the system clipboard, one per line.
 func (fm *FileManager) yankSystemClipboard(kind yankKind) {
-	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+	paths, missing := fm.targets()
+	defer fm.noteMissing(missing)
+	if len(paths) == 0 {
 		return
 	}
-	name := fm.entries[fm.cursor].Name()
-	absPath := filepath.Join(fm.currentDir, name)
 
-	var text, label string
-	switch kind {
-	case yankFileName:
-		text = name
-		label = "name"
-	case yankFullPath:
-		text = absPath
-		label = "path"
-	case yankGitPath:
-		rel, err := gitRelativePath(absPath)
-		if err != nil {
-			fm.statusMsg = err.Error()
-			return
+	texts := make([]string, len(paths))
+	var label string
+	for i, absPath := range paths {
+		switch kind {
+		case yankFileName:
+			texts[i] = filepath.Base(absPath)
+			label = "name"
+		case yankFullPath:
+			texts[i] = absPath
+			label = "path"
+		case yankGitPath:
+			rel, err := gitRelativePath(absPath)
+			if err != nil {
+				fm.statusMsg = err.Error()
+				return
+			}
+			texts[i] = rel
+			label = "git path"
 		}
-		text = rel
-		label = "git path"
 	}
+	text := strings.Join(texts, "\n")
 
 	if err := writeSystemClipboard(text); err != nil {
 		fm.statusMsg = fmt.Sprintf("Clipboard: %s", err.Error())
 		return
 	}
-	fm.statusMsg = fmt.Sprintf("Copied %s: %s", label, text)
+	if len(texts) == 1 {
+		fm.statusMsg = fmt.Sprintf("Copied %s: %s", label, text)
+	} else {
+		fm.statusMsg = fmt.Sprintf("Copied %d %ss", len(texts), label)
+	}
 }
 
 func gitRelativePath(absPath string) (string, error) {
@@ -2844,66 +2315,20 @@ func (fm *FileManager) pasteClipboardPaths(op string, paths []string) bool {
 	return true
 }
 
-// promptConflict shows an overlay asking the user how to handle a name conflict.
+// promptConflict asks the user how to handle a name conflict.
 // Returns 0=cancel, 1=overwrite, 2=version number.
 func (fm *FileManager) promptConflict(name string) int {
-	lines := []string{
+	key, ok := fm.ask([]string{
 		fmt.Sprintf(" \"%s\" already exists ", name),
 		"",
 		"  o  Overwrite",
 		"  v  Rename with version number",
 		"  Esc  Cancel",
-	}
-
-	// Find box width
-	boxW := 0
-	for _, l := range lines {
-		runes := utf8.RuneCountInString(l)
-		if runes > boxW {
-			boxW = runes
-		}
-	}
-	boxW += 2 // padding
-	if boxW > fm.cols-4 {
-		boxW = fm.cols - 4
-	}
-
-	startCol := (fm.cols - boxW) / 2
-	if startCol < 1 {
-		startCol = 1
-	}
-	startRow := (fm.rows-len(lines))/2 + 1
-	if startRow < 2 {
-		startRow = 2
-	}
-
-	var buf bytes.Buffer
-	for i, line := range lines {
-		row := startRow + i
-		if row > fm.rows {
-			break
-		}
-		buf.WriteString(fmt.Sprintf("\033[%d;%dH", row, startCol))
-		buf.WriteString("\033[7m")
-		lineRunes := utf8.RuneCountInString(line)
-		if lineRunes > boxW {
-			line = truncateMiddle(line, boxW)
-			lineRunes = boxW
-		}
-		buf.WriteString(line)
-		pad := boxW - lineRunes
-		if pad > 0 {
-			buf.WriteString(strings.Repeat(" ", pad))
-		}
-		buf.WriteString("\033[0m")
-	}
-	fm.ttyOut.Write(buf.Bytes())
-
-	key, ok := fm.readModalKey()
+	})
 	if !ok {
 		return 0
 	}
-	switch key {
+	switch answerRune(key) {
 	case 'o':
 		return 1
 	case 'v':
@@ -2931,42 +2356,47 @@ func versionedPath(dest string) string {
 
 // Delete to trash
 
+// deleteEntry moves the selected entries, or the current one, to the
+// trash, after a question.
 func (fm *FileManager) deleteEntry() {
-	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+	paths, missing := fm.targets()
+	defer fm.noteMissing(missing)
+	if len(paths) == 0 || !fm.promptDelete(paths) {
 		return
 	}
-	entry := fm.entries[fm.cursor]
-	name := entry.Name()
-	absPath := filepath.Join(fm.currentDir, name)
-
-	if !fm.promptDelete(entry) {
-		return
+	for _, p := range paths {
+		if err := TrashFile(p); err != nil {
+			fm.statusMsg = fmt.Sprintf("Trash: %s", err.Error())
+			break
+		}
 	}
-
-	if err := TrashFile(absPath); err != nil {
-		return
-	}
-
 	fm.loadDirectory()
 	fm.clampCursor()
 	fm.adjustScroll()
 }
 
-// promptDelete shows a confirmation overlay. Returns true if the user confirms.
-func (fm *FileManager) promptDelete(entry os.DirEntry) bool {
-	name := entry.Name()
-	lines := []string{
-		fmt.Sprintf(" Delete \"%s\"? ", name),
-	}
-
-	// For non-empty directories, show entry count
-	if entry.IsDir() {
-		dirPath := filepath.Join(fm.currentDir, name)
-		if subEntries, err := os.ReadDir(dirPath); err == nil {
+// promptDelete asks before entries go to the trash. Returns true if the
+// user confirms.
+func (fm *FileManager) promptDelete(paths []string) bool {
+	var lines []string
+	if len(paths) == 1 {
+		lines = append(lines, fmt.Sprintf(" Delete \"%s\"? ", filepath.Base(paths[0])))
+		// For non-empty directories, show entry count
+		if subEntries, err := os.ReadDir(paths[0]); err == nil {
 			subEntries = filterIgnoredFileManagerEntries(subEntries)
 			if len(subEntries) > 0 {
-			lines = append(lines, fmt.Sprintf(" (directory with %d entries) ", len(subEntries)))
+				lines = append(lines, fmt.Sprintf(" (directory with %d entries) ", len(subEntries)))
+			}
 		}
+	} else {
+		lines = append(lines, fmt.Sprintf(" Delete %d entries? ", len(paths)))
+		// As many names as fit, with the question's other rows.
+		shown := min(len(paths), max(1, fm.rows-8))
+		for _, p := range paths[:shown] {
+			lines = append(lines, "  "+filepath.Base(p))
+		}
+		if shown < len(paths) {
+			lines = append(lines, fmt.Sprintf("  ... and %d more", len(paths)-shown))
 		}
 	}
 
@@ -2974,55 +2404,8 @@ func (fm *FileManager) promptDelete(entry os.DirEntry) bool {
 	lines = append(lines, "  y  Confirm")
 	lines = append(lines, "  Esc  Cancel")
 
-	// Find box width
-	boxW := 0
-	for _, l := range lines {
-		runes := utf8.RuneCountInString(l)
-		if runes > boxW {
-			boxW = runes
-		}
-	}
-	boxW += 2
-	if boxW > fm.cols-4 {
-		boxW = fm.cols - 4
-	}
-
-	startCol := (fm.cols - boxW) / 2
-	if startCol < 1 {
-		startCol = 1
-	}
-	startRow := (fm.rows-len(lines))/2 + 1
-	if startRow < 2 {
-		startRow = 2
-	}
-
-	var buf bytes.Buffer
-	for i, line := range lines {
-		row := startRow + i
-		if row > fm.rows {
-			break
-		}
-		buf.WriteString(fmt.Sprintf("\033[%d;%dH", row, startCol))
-		buf.WriteString("\033[7m")
-		lineRunes := utf8.RuneCountInString(line)
-		if lineRunes > boxW {
-			line = truncateMiddle(line, boxW)
-			lineRunes = boxW
-		}
-		buf.WriteString(line)
-		pad := boxW - lineRunes
-		if pad > 0 {
-			buf.WriteString(strings.Repeat(" ", pad))
-		}
-		buf.WriteString("\033[0m")
-	}
-	fm.ttyOut.Write(buf.Bytes())
-
-	key, ok := fm.readModalKey()
-	if !ok {
-		return false
-	}
-	return key == 'y'
+	key, ok := fm.ask(lines)
+	return ok && answerRune(key) == 'y'
 }
 
 // Bookmarks
@@ -3084,40 +2467,17 @@ func loadClipboard() ([]string, []string) {
 	if trimmed == "" {
 		return nil, nil
 	}
-	lines := strings.Split(trimmed, "\n")
-	if len(lines) == 0 {
-		return nil, nil
-	}
-
-	var cutPaths []string
-	var copyPaths []string
+	clipboard := newClipboardLists(nil, nil)
 	dirty := false
-	for _, line := range lines {
-		if line == "" {
+	for line := range strings.SplitSeq(trimmed, "\n") {
+		op, path, found := strings.Cut(line, "\t")
+		if !found || path == "" || (op != "cut" && op != "copy") {
 			dirty = true
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) != 2 {
-			dirty = true
-			continue
-		}
-		op := parts[0]
-		path := parts[1]
-		if path == "" {
-			dirty = true
-			continue
-		}
-		if op == "cut" {
-			copyPaths = removePath(copyPaths, path)
-			cutPaths = appendUniquePath(cutPaths, path)
-		} else if op == "copy" {
-			cutPaths = removePath(cutPaths, path)
-			copyPaths = appendUniquePath(copyPaths, path)
-		} else {
-			dirty = true
-		}
+		clipboard.add(op, path)
 	}
+	cutPaths, copyPaths := clipboard.lists()
 	if dirty {
 		_ = saveClipboard(cutPaths, copyPaths)
 	}
@@ -3154,32 +2514,104 @@ func clearClipboard() error {
 	return os.Remove(path)
 }
 
-func appendUniquePath(paths []string, path string) []string {
-	if slices.Contains(paths, path) {
-			return paths
-		}
-	return append(paths, path)
+// pathSet is a set of paths that keeps the order they were added in.
+// Adding, taking out and looking up a path take no scan of the set.
+type pathSet struct {
+	// paths are in the order they were added. A path taken out is left as
+	// "", until the gaps are half the list.
+	paths []string
+	// at is where each path of the set is in paths.
+	at map[string]int
 }
 
-func removePath(paths []string, path string) []string {
-	for i, existing := range paths {
-		if existing == path {
-			return append(paths[:i], paths[i+1:]...)
-		}
-	}
-	return paths
+func (s *pathSet) has(path string) bool {
+	_, ok := s.at[path]
+	return ok
 }
 
-func addClipboardPath(op string, path string) error {
-	cutPaths, copyPaths := loadClipboard()
-	if op == "cut" {
-		copyPaths = removePath(copyPaths, path)
-		cutPaths = appendUniquePath(cutPaths, path)
-	} else if op == "copy" {
-		cutPaths = removePath(cutPaths, path)
-		copyPaths = appendUniquePath(copyPaths, path)
+func (s *pathSet) len() int { return len(s.at) }
+
+// add puts a path after the others, unless it is in the set already.
+func (s *pathSet) add(path string) {
+	if s.has(path) {
+		return
 	}
-	return saveClipboard(cutPaths, copyPaths)
+	if s.at == nil {
+		s.at = make(map[string]int)
+	}
+	s.at[path] = len(s.paths)
+	s.paths = append(s.paths, path)
+}
+
+func (s *pathSet) remove(path string) {
+	i, ok := s.at[path]
+	if !ok {
+		return
+	}
+	s.paths[i] = ""
+	delete(s.at, path)
+	if 2*len(s.at) < len(s.paths) {
+		s.paths = slices.DeleteFunc(s.paths, func(p string) bool { return p == "" })
+		for i, p := range s.paths {
+			s.at[p] = i
+		}
+	}
+}
+
+// list gives the paths, in the order they were added.
+func (s *pathSet) list() []string {
+	out := make([]string, 0, len(s.at))
+	for _, p := range s.paths {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// clipboardLists are the cut and copy lists.
+type clipboardLists struct {
+	cut, copy pathSet
+}
+
+func newClipboardLists(cutPaths []string, copyPaths []string) *clipboardLists {
+	c := &clipboardLists{}
+	for _, p := range cutPaths {
+		c.add("cut", p)
+	}
+	for _, p := range copyPaths {
+		c.add("copy", p)
+	}
+	return c
+}
+
+// add puts a path in the cut or the copy list, after any it is already in
+// there, and takes it out of the other.
+func (c *clipboardLists) add(op string, path string) {
+	to, from := &c.cut, &c.copy
+	if op == "copy" {
+		to, from = &c.copy, &c.cut
+	}
+	from.remove(path)
+	to.add(path)
+}
+
+// lists gives the cut and copy lists, in the order their paths were added.
+func (c *clipboardLists) lists() ([]string, []string) {
+	return c.cut.list(), c.copy.list()
+}
+
+// addClipboardPaths adds paths to the cut or the copy list, reading and
+// writing the clipboard once.
+func addClipboardPaths(op string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	clipboard := newClipboardLists(loadClipboard())
+	for _, p := range paths {
+		clipboard.add(op, p)
+	}
+	return saveClipboard(clipboard.lists())
 }
 
 func saveBookmarks(bookmarks map[byte]string) error {

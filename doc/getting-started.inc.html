@@ -303,6 +303,10 @@ and Alt-S puts <code>sudo</code> in front of the line.
     </tbody>
 </table>
 
+<p>
+Every type is declared in full in <a href="#getting-started-binding-types">Types</a>.
+</p>
+
 <h2 id="getting-started-keys">Keys</h2>
 
 <p>
@@ -334,9 +338,11 @@ Which keys the shell can tell apart depends on the terminal.
 Most terminals send keys in an old encoding in which some keys are the same:
 Tab is Ctrl-I, Enter is Ctrl-M, many terminals send Ctrl-H for Ctrl-Backspace,
 and Ctrl with Shift on a letter is Ctrl alone.
-Escape followed by a key is Alt with that key:
-when that Alt key is bound it runs, and otherwise the key acts on its own, so an Escape pressed out of habit loses nothing.
-So a lone Escape is not a key in this encoding, and Escape waits for the next key to know what it is.
+In it, Alt and a key is sent as Escape and then the key, so the shell tells them apart by how they arrive.
+An Escape that arrives on its own is <code>keyEscape</code>, and acts when you press it.
+An Escape that arrives together with a key is Alt and that key when a binding uses it, and otherwise Escape and then the key.
+Nothing waits for a time: a terminal sends a key's bytes together, so this is right whether you type fast or slow, and over ssh.
+The <a href="#getting-started-file-manager">file manager</a> reads keys the same way.
 </p>
 
 <p>
@@ -359,7 +365,7 @@ Ctrl-C twice, or Ctrl-D, ends it.
 r'x' keyCtrl                             18
 r':'                                     3a                       +401 ms
 keyLeft keyAlt                           1b 5b 31 3b 33 44        +960 ms
-r'x' keyAlt  (or r'x' alone, when that is not bound) 1b 78                    +512 ms</code>
+r'x' keyAlt  (or keyEscape then r'x', when that is not bound) 1b 78           +512 ms</code>
 </pre>
 
 <h2 id="getting-started-edit-ops">Editor operations</h2>
@@ -584,9 +590,411 @@ one with no keys or more than 8, a <code>within</code> or <code>idleBefore</code
 an operation after <code>editAccept</code> or <code>editExit</code>, or one that a newer binding conflicts with.
 </p>
 
+<h2 id="getting-started-binding-types">Types</h2>
+
 <p>
+The types of key bindings, as <code>mshell</code> declares them.
 These types and their members are built in, so their names cannot be used for your own types, members or definitions.
 </p>
+
+<pre>
+⟦ [[awk '/^enum NamedKey/,/^type Binding =/' ../mshell/Prompt.go] [msh --html]] |; ⟧
+</pre>
+
+<h1 id="getting-started-file-manager">File manager <a class="section-link" href="#getting-started-file-manager" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
+
+<p>
+<code>mshell</code> has a file manager built in: the entries of a directory on the left, a preview of the one under the cursor on the right.
+Ctrl-O opens it from the shell, and when you quit with <code>q</code>, the shell changes to the directory shown.
+In a script, <code>mshFileManager</code> opens it, starting in the directory it is given.
+<code>msh fm</code> opens it from any shell, starting in the directory given, or the working directory,
+and prints the directory you quit in, so <code>cd "$(msh fm)"</code> follows it.
+</p>
+
+<p>
+Its keys are bindings, as the shell's are, in a table of their own.
+<code>init.msh</code> adds to it with <code>fmBindingAdd</code>, which takes an <code>FmBinding</code>.
+<code>msh fm</code> loads the standard library and <code>init.msh</code> before it starts, as a script does, so your bindings work there too.
+What they print goes to standard error, so the directory is the only thing <code>msh fm</code> prints.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Go home, or to the repositories, with g h and g r. They join g g in the popup.</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;g&#39;</span> <span class="mshellRUNE">r&#39;h&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">~</span> <span class="mshellLITERAL">fmCd</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmOps</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">description</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;home&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;g&#39;</span> <span class="mshellRUNE">r&#39;r&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">~/repos</span> <span class="mshellLITERAL">fmCd</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmOps</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">description</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;repositories&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+
+<span class="mshellLINECOMMENT"># lazygit in the directory shown.</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;L&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">lazygit</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellEXECUTE">;</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">fmRun</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmOps</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">description</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;lazygit&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+
+<span class="mshellLINECOMMENT"># Search for TODO in one key.</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;t&#39;</span> <span class="mshellLITERAL">keyAlt</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">fmPromptSearch</span> <span class="mshellLITERAL">fmPrompt</span> <span class="mshellSINGLEQUOTESTRING">&#39;TODO&#39;</span> <span class="mshellLITERAL">editInsert</span> <span class="mshellLITERAL">fmLineAccept</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmOps</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+
+<span class="mshellLINECOMMENT"># Half a screen with Ctrl-D and Ctrl-U, as in Vim.</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;d&#39;</span> <span class="mshellLITERAL">keyCtrl</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellFLOAT">50.0</span> <span class="mshellLITERAL">fmPercent</span> <span class="mshellLITERAL">fmDownBy</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmOps</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">description</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;half a page down&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;u&#39;</span> <span class="mshellLITERAL">keyCtrl</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellFLOAT">50.0</span> <span class="mshellLITERAL">fmPercent</span> <span class="mshellLITERAL">fmUpBy</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmOps</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">description</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;half a page up&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Key</th> <th>Type</th> <th>Description</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>keys</code></td> <td><code>[Key]</code></td> <td>The keys to press, in order, at most 8, as for the shell's <a href="#getting-started-keys">bindings</a>.</td> </tr>
+        <tr> <td><code>action</code></td> <td><code>FmAction</code></td> <td>What the keys do: <code>fmOps FmProgram</code>, a fixed program, or <code>fmFunc (FmState -- Maybe[FmProgram])</code>, a quotation that is given the file manager's state and returns the program to run, or <code>none</code> to decline.</td> </tr>
+        <tr> <td><code>mode</code> (optional)</td> <td><code>FmMode</code></td> <td>The keymap the binding is in (<a href="#getting-started-fm-modes">below</a>); <code>fmModeNormal</code> when not given.</td> </tr>
+        <tr> <td><code>within</code> (optional)</td> <td><code>int</code></td> <td>The longest time, in milliseconds, between two of its keys.</td> </tr>
+        <tr> <td><code>idleBefore</code> (optional)</td> <td><code>int</code></td> <td>The shortest time, in milliseconds, with no key before its first key.</td> </tr>
+        <tr> <td><code>description</code> (optional)</td> <td><code>str</code></td> <td>What the binding does, shown in the list of keys that can follow a key, and on the help screen.</td> </tr>
+    </tbody>
+</table>
+
+<p>
+An <code>FmProgram</code> is a list of <code>FmOp</code> and <code>EditOp</code> values, <code>[FmOp | EditOp]</code>:
+the prompt line is edited with the shell's line edits, so <code>editDeleteWordLeft</code> means the same thing in both places.
+A list written in place is a program; a list kept in a variable as <code>[EditOp]</code> is not, and is made one with <code>as FmProgram</code>.
+Every type is declared in full in <a href="#getting-started-fm-types">Types</a>.
+</p>
+
+<h2 id="getting-started-fm-modes">Modes</h2>
+
+<p>
+The file manager has three keymaps, an <code>FmMode</code>.
+</p>
+
+<ul>
+  <li><code>fmModeNormal</code>: browsing. A key is a command, and a key with no binding does nothing.</li>
+  <li><code>fmModeInsert</code>: the prompt line at the bottom, for search, rename, and prompts of your own.
+      Keys edit the line, and a key that types text and has no binding types it.</li>
+  <li><code>fmModeHelp</code>: the help screen, which lists every binding.</li>
+</ul>
+
+<p>
+A program can cross modes: <code>fmPrompt</code> switches to the prompt line, <code>fmLineAccept</code> and <code>fmLineCancel</code> back,
+and <code>fmHelp</code> and <code>fmHelpClose</code> to the help screen and back.
+<code>[fmPromptSearch fmPrompt 'TODO' editInsert fmLineAccept]</code> searches for <code>TODO</code> on one key.
+<code>fmBindingAdd</code> follows the mode through a program, and an operation that cannot run where it stands makes the binding inert:
+<code>[fmDown editLeft]</code> never fires.
+</p>
+
+<h2 id="getting-started-fm-ops">Operations</h2>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Operation</th> <th>Does</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td colspan="2"><em>In <code>fmModeNormal</code>. These only move the cursor, so they can be <a href="#getting-started-fm-sequences">taken back</a>.</em></td> </tr>
+        <tr> <td><code>fmDown</code>, <code>fmUp</code></td> <td>Move the cursor one entry.</td> </tr>
+        <tr> <td><code>fmTop</code>, <code>fmBottom</code></td> <td>Move the cursor to the first or last entry.</td> </tr>
+        <tr> <td><code>fmDownBy FmDistance</code>, <code>fmUpBy FmDistance</code></td> <td>Move the cursor by a distance: <code>fmRows int</code> entries, or <code>fmPercent float</code> percent of the rows shown, so <code>50.0 fmPercent</code> is half a screen and follows the window as it is resized. It is at least one entry, and a distance of 0 or less makes the binding inert.</td> </tr>
+        <tr> <td><code>fmSearchNext</code>, <code>fmSearchPrev</code></td> <td>Move the cursor to the next or previous match of the last search.</td> </tr>
+        <tr> <td><code>fmCursorTo str</code></td> <td>Put the cursor on the entry with this name, if there is one.</td> </tr>
+        <tr> <td colspan="2"><em>In <code>fmModeNormal</code>.</em></td> </tr>
+        <tr> <td><code>fmOpen</code></td> <td>Enter the directory under the cursor, or open the file: a text file in <code>$EDITOR</code>, anything else with the system's opener.</td> </tr>
+        <tr> <td><code>fmParent</code></td> <td>Show the parent directory, with the cursor on the one you left. On Windows, at a drive's root, show the drives.</td> </tr>
+        <tr> <td><code>fmCd str</code></td> <td>Show this directory, absolute or under the one shown. A bare <code>~/repos</code> is a <code>str</code> after <code>~</code> is replaced.</td> </tr>
+        <tr> <td><code>fmReload</code></td> <td>Read the directory again.</td> </tr>
+        <tr> <td><code>fmOpenEditor</code></td> <td>Open the selected files, or the file under the cursor, in <code>$EDITOR</code> (<code>vi</code> when that is not set).</td> </tr>
+        <tr> <td><code>fmToggle</code></td> <td>Add the entry under the cursor to the selection, or take it out.</td> </tr>
+        <tr> <td><code>fmSelectionInvert</code>, <code>fmSelectionClear</code></td> <td>Toggle every entry of the directory shown; empty the selection.</td> </tr>
+        <tr> <td><code>fmPrompt FmPrompt</code></td> <td>Open the prompt line (<a href="#getting-started-fm-prompts">below</a>).</td> </tr>
+        <tr> <td><code>fmCut</code>, <code>fmCopy</code></td> <td>Add the selected entries, or the one under the cursor, to the file-manager clipboard, to be moved or copied.</td> </tr>
+        <tr> <td><code>fmPaste</code></td> <td>Move or copy what the clipboard holds into the directory shown, asking for each name that exists already.</td> </tr>
+        <tr> <td><code>fmClipboardClear</code></td> <td>Empty the file-manager clipboard.</td> </tr>
+        <tr> <td><code>fmYankName</code>, <code>fmYankPath</code>, <code>fmYankGitPath</code></td> <td>Put the name, the full path, or the path from the root of the git repository, of the selected entries or the one under the cursor, on the system clipboard, one per line.</td> </tr>
+        <tr> <td><code>fmTrash</code></td> <td>Move the selected entries, or the one under the cursor, to the trash, after asking.</td> </tr>
+        <tr> <td><code>fmBookmarkSet</code>, <code>fmBookmarkGo</code></td> <td>Ask for a bookmark's key, <code>0</code>&ndash;<code>9</code>, <code>a</code>&ndash;<code>z</code> or <code>A</code>&ndash;<code>Z</code>, and set it to the directory shown, or go to it.</td> </tr>
+        <tr> <td><code>fmHelp</code></td> <td>Show the help screen, in <code>fmModeHelp</code>.</td> </tr>
+        <tr> <td colspan="2"><em>In <code>fmModeInsert</code>, with the shell's line edits: <code>editInsert</code>, <code>editSelfInsert</code>, <code>editSetLine</code>, <code>editLeft</code>, <code>editRight</code>, <code>editWordLeft</code>, <code>editWordRight</code>, <code>editLineStart</code>, <code>editLineEnd</code>, <code>editBackspace</code>, <code>editDelete</code>, <code>editDeleteWordLeft</code>, <code>editDeleteToStart</code> and <code>editDeleteToEnd</code>. A word ends at a space or a <code>.</code>, so in <code>report.final.pdf</code>, with the cursor before <code>.pdf</code>, Ctrl-W deletes <code>final</code>.</em></td> </tr>
+        <tr> <td><code>fmLineAccept</code></td> <td>Close the line, and do what its prompt does with it.</td> </tr>
+        <tr> <td><code>fmLineCancel</code></td> <td>Close the line, and do nothing.</td> </tr>
+        <tr> <td colspan="2"><em>In <code>fmModeHelp</code>, with the moves above, which scroll the help.</em></td> </tr>
+        <tr> <td><code>fmHelpClose</code></td> <td>Close the help, and go back to the listing as it was.</td> </tr>
+        <tr> <td colspan="2"><em>In any mode.</em></td> </tr>
+        <tr> <td><code>fmRun ( -- )</code></td> <td>Run the quotation with the terminal (<a href="#getting-started-fm-run">below</a>).</td> </tr>
+        <tr> <td><code>fmRunWait ( -- )</code></td> <td>The same, and then wait for a key, so what it printed can be read.</td> </tr>
+        <tr> <td><code>fmRunOps (FmState -- Maybe[FmProgram])</code></td> <td>The same as <code>fmRun</code>, but the quotation is given the state, and the program it returns runs afterwards.</td> </tr>
+        <tr> <td><code>fmMessage str</code></td> <td>Show the text at the bottom until the next key.</td> </tr>
+        <tr> <td><code>fmQuit</code></td> <td>Quit; the shell changes to the directory shown, and <code>msh fm</code> prints it. It must be the last operation.</td> </tr>
+        <tr> <td><code>fmQuitNoCd</code></td> <td>Quit and leave the directory as it was: <code>msh fm</code> prints the directory it started in. It must be the last operation.</td> </tr>
+    </tbody>
+</table>
+
+<p>
+The operations of a program run in order, and the screen is drawn once after the last.
+When an operation finds itself in a mode it cannot run in, as an <code>editInsert</code> after a rename prompt that did not open in an empty directory,
+the program stops there, and a message names it.
+The operations that need a real directory do nothing on Windows' list of drives.
+</p>
+
+<h2 id="getting-started-fm-selection">The selection</h2>
+
+<p>
+Space selects the entry under the cursor and moves down, <code>v</code> inverts the selection and <code>u</code> clears it.
+Selected entries are marked with a <code>*</code>, and the top row says how many there are.
+Entries stay selected when you change directory, so entries from several directories can be cut or copied together.
+<code>fmCut</code>, <code>fmCopy</code>, <code>fmTrash</code>, the yanks and <code>fmOpenEditor</code> act on every selected entry when there are any,
+or else on the entry under the cursor, and then clear the selection.
+A selected entry that no longer exists is left out, and the message after says how many were.
+The selection lasts while the file manager runs.
+The file-manager clipboard is a file, shared by every file manager you open, until it is pasted or cleared.
+</p>
+
+<h2 id="getting-started-fm-prompts">Prompts</h2>
+
+<p>
+<code>fmPrompt</code> opens the prompt line at the bottom, in <code>fmModeInsert</code>. What it starts as, and what Enter does, come from the <code>FmPrompt</code>.
+</p>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Prompt</th> <th>Opens with</th> <th>On <code>fmLineAccept</code></th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>fmPromptSearch</code></td> <td><code>/</code> and an empty line; the matches are highlighted as you type</td> <td>Put the cursor on the first match at or after it. Case does not matter.</td> </tr>
+        <tr> <td><code>fmPromptRename</code></td> <td><code>rename:</code> and the name of the entry under the cursor, the cursor before its extension</td> <td>Rename the entry, and put the cursor on it.</td> </tr>
+        <tr> <td><code>fmPromptAsk str str (str FmState -- Maybe[FmProgram])</code></td> <td>The first string as the label, the second as the line, the cursor at its end</td> <td>Run the quotation with the line and the state, and then the program it returns.</td> </tr>
+    </tbody>
+</table>
+
+<p>
+The line holds at most 4096 bytes, so any path fits. An edit that would make it longer is not done, and a message says so.
+The quotation of <code>fmPromptAsk</code> runs after the line has closed, so the state it is given is in <code>fmModeNormal</code>,
+and like a <code>fmFunc</code> quotation it runs on its own stack and is stopped after 1 second.
+Anything slow or interactive goes in the program it returns, as an <code>fmRun</code> or <code>fmRunWait</code>:
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># A new directory, named at a prompt, with the cursor put on it.</span>
+<span class="mshellDEF">def</span> <span class="mshellLITERAL">newDir</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellSTR">str</span> <span class="mshellLITERAL">FmState</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">new</span> <span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">FmProgram</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellVARSTORE">name!</span><span class="mshellCOMMA">,</span> <span class="mshellVARSTORE">s!</span>
+    <span class="mshellVARRETRIEVE">@name</span> <span class="mshellSINGLEQUOTESTRING">&#39;&#39;</span> <span class="mshellEQUALS">=</span> <span class="mshellIF">if</span>
+        <span class="mshellLITERAL">none</span>
+    <span class="mshellELSE">else</span>
+        <span class="mshellFORMATSTRINGSTART">$&#34;{</span><span class="mshellVARRETRIEVE">@s</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">dir</span><span class="mshellQUESTION">?</span><span class="mshellFORMATSTRINGMID">}/{</span><span class="mshellVARRETRIEVE">@name</span><span class="mshellFORMATSTRINGEND">}&#34;</span> <span class="mshellLITERAL">mkdir</span>
+        <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">fmReload</span> <span class="mshellVARRETRIEVE">@name</span> <span class="mshellLITERAL">fmCursorTo</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">just</span>
+    <span class="mshellEND">end</span>
+<span class="mshellEND">end</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;a&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;New directory: &#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;&#39;</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">newDir</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">fmPromptAsk</span> <span class="mshellLITERAL">fmPrompt</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmOps</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">description</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;new directory&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+
+<span class="mshellLINECOMMENT"># A shell command in the directory shown; its output stays until a key is pressed.</span>
+<span class="mshellDEF">def</span> <span class="mshellLITERAL">shellCommand</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellSTR">str</span> <span class="mshellLITERAL">FmState</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">new</span> <span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">FmProgram</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellLITERAL">drop</span> <span class="mshellVARSTORE">cmd!</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">sh</span> <span class="mshellLITERAL">-c</span> <span class="mshellVARRETRIEVE">@cmd</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellEXECUTE">;</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">fmRunWait</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">just</span>
+<span class="mshellEND">end</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;!&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;sh: &#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;&#39;</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">shellCommand</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">fmPromptAsk</span> <span class="mshellLITERAL">fmPrompt</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmOps</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">description</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;shell command&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<h2 id="getting-started-fm-run">Running commands</h2>
+
+<p>
+<code>fmRun</code> gives the terminal to its quotation, as <code>editRun</code> does in the shell:
+the quotation runs in the foreground, on its own empty stack, with no time limit, in the directory shown,
+and its output goes to the terminal, under <code>msh fm</code> too.
+When it ends, the file manager takes the screen back, reads the directory again, and keeps the cursor on the same entry.
+If the quotation changed directory, the file manager shows the new one.
+If it failed, its error is printed, and the file manager waits for Enter before drawing over it.
+<code>fmRunWait</code> also waits for any key when it succeeds, and <code>fmRunOps</code> runs the program its quotation returns.
+The mode and the prompt line are kept, so <code>fmRun</code> pressed while renaming comes back to the same line.
+<code>exit</code> in the quotation ends the file manager, and then does what <code>exit</code> does anywhere.
+</p>
+
+<h2 id="getting-started-fm-func">Quotations</h2>
+
+<p>
+A <code>fmFunc</code> quotation, and the quotations of <code>fmPromptAsk</code> and <code>fmRunOps</code>, are given an <code>FmState</code>.
+A <code>fmFunc</code> returns <code>just</code> the program to run, or <code>none</code> to decline,
+and runs as a shell binding's quotation does: on its own stack, stopped after 1 second, with what it prints not shown, and a failure shown at the bottom.
+</p>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Key</th> <th>Type</th> <th>Description</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>dir</code></td> <td><code>str</code></td> <td>The directory shown, absolute.</td> </tr>
+        <tr> <td><code>current</code></td> <td><code>Maybe[str]</code></td> <td>The entry under the cursor, absolute, or <code>none</code> in an empty directory.</td> </tr>
+        <tr> <td><code>selected</code></td> <td><code>[str]</code></td> <td>The selected entries, absolute, in the order they were selected.</td> </tr>
+        <tr> <td><code>mode</code></td> <td><code>FmMode</code></td> <td>The mode the keys were pressed in.</td> </tr>
+        <tr> <td><code>line</code></td> <td><code>Maybe[FmLine]</code></td> <td>In <code>fmModeInsert</code>, the prompt line: <code>{prompt: FmPrompt, before: str, after: str}</code>, split at its cursor. A binding can match on <code>prompt</code> to act only in search, or only in a prompt of its own.</td> </tr>
+        <tr> <td><code>keys</code></td> <td><code>[Key]</code></td> <td>The keys that ran the binding.</td> </tr>
+    </tbody>
+</table>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Run the current entry with Enter when it is an mshell script; anything else opens as before.</span>
+<span class="mshellDEF">def</span> <span class="mshellLITERAL">runScript</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">FmState</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">new</span> <span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">FmProgram</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellCOLON">:</span><span class="mshellLITERAL">current</span><span class="mshellQUESTION">?</span> <span class="mshellMATCH">match</span>
+        <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">f</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@f</span> <span class="mshellSINGLEQUOTESTRING">&#39;.msh&#39;</span> <span class="mshellLITERAL">endsWith</span> <span class="mshellIF">if</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">msh</span> <span class="mshellVARRETRIEVE">@f</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellEXECUTE">;</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">fmRun</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellELSE">else</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">fmOpen</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellEND">end</span> <span class="mshellLITERAL">just</span><span class="mshellCOMMA">,</span>
+        <span class="mshellLITERAL">none</span> <span class="mshellCOLON">:</span> <span class="mshellLITERAL">none</span><span class="mshellCOMMA">,</span>
+    <span class="mshellEND">end</span>
+<span class="mshellEND">end</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">keyEnter</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">runScript</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">fmFunc</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+
+<span class="mshellLINECOMMENT"># The root of the git repository, found by a command.</span>
+<span class="mshellDEF">def</span> <span class="mshellLITERAL">gitRoot</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">FmState</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">new</span> <span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">FmProgram</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellCOLON">:</span><span class="mshellLITERAL">dir</span><span class="mshellQUESTION">?</span> <span class="mshellVARSTORE">d!</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">git</span> <span class="mshellLITERAL">-C</span> <span class="mshellVARRETRIEVE">@d</span> <span class="mshellLITERAL">rev-parse</span> <span class="mshellLITERAL">--show-toplevel</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISK">*</span> <span class="mshellQUESTION">?</span> <span class="mshellVARSTORE">code!</span> <span class="mshellVARSTORE">out!</span>
+    <span class="mshellVARRETRIEVE">@code</span> <span class="mshellINTEGER">0</span> <span class="mshellEQUALS">=</span> <span class="mshellIF">if</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellVARRETRIEVE">@out</span> <span class="mshellLITERAL">chomp</span> <span class="mshellLITERAL">fmCd</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">just</span> <span class="mshellELSE">else</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;Not in a git repository&#39;</span> <span class="mshellLITERAL">fmMessage</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">just</span> <span class="mshellEND">end</span>
+<span class="mshellEND">end</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;g&#39;</span> <span class="mshellRUNE">r&#39;R&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">gitRoot</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">fmRunOps</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmOps</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">description</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;git root&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+
+<span class="mshellLINECOMMENT"># Zip the selected entries into archive.zip in the directory shown.</span>
+<span class="mshellDEF">def</span> <span class="mshellLITERAL">zipSelected</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">FmState</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">new</span> <span class="mshellLITERAL">Maybe</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">FmProgram</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellCOLON">:</span><span class="mshellLITERAL">selected</span><span class="mshellQUESTION">?</span> <span class="mshellVARSTORE">files!</span>
+    <span class="mshellVARRETRIEVE">@files</span> <span class="mshellLITERAL">len</span> <span class="mshellINTEGER">0</span> <span class="mshellEQUALS">=</span> <span class="mshellIF">if</span>
+        <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;Nothing selected&#39;</span> <span class="mshellLITERAL">fmMessage</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">just</span>
+    <span class="mshellELSE">else</span>
+        <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;zip&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;-r&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;archive.zip&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARRETRIEVE">@files</span> <span class="mshellPLUS">+</span> <span class="mshellEXECUTE">;</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">fmRunWait</span> <span class="mshellLITERAL">fmSelectionClear</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">just</span>
+    <span class="mshellEND">end</span>
+<span class="mshellEND">end</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;z&#39;</span> <span class="mshellRUNE">r&#39;a&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">zipSelected</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">fmFunc</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">description</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;zip the selection&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+
+<span class="mshellLINECOMMENT"># Today&#39;s date at the cursor in the prompt line.</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;d&#39;</span> <span class="mshellLITERAL">keyAlt</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">drop</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">now</span> <span class="mshellLITERAL">isoDateFmt</span> <span class="mshellLITERAL">editInsert</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">just</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">fmFunc</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">mode</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">fmModeInsert</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+<code>runScript</code> binds Enter in <code>fmModeNormal</code>, so it replaces the default binding of Enter,
+and returns <code>[fmOpen]</code> for any other file, to do what that binding did.
+It could not decline instead: a declined binding leaves the key to its own action, and in <code>fmModeNormal</code> a key has none.
+Bindings are tested like any other definition, with an <code>FmState</code> made by hand:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">dir</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;/tmp&#39;</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">current</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;/tmp/a.msh&#39;</span> <span class="mshellLITERAL">just</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">selected</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">mode</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">fmModeNormal</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">line</span><span class="mshellCOLON">:</span> <span class="mshellLITERAL">none</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">keyEnter</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">runScript</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<h2 id="getting-started-fm-sequences">Sequences, the popup, and help</h2>
+
+<p>
+Sequences work as they do <a href="#getting-started-key-sequences">in the shell</a>, with the cursor in place of the line:
+a move that begins a longer binding moves at once, and is taken back when the longer binding completes.
+Any other operation, and any quotation, runs as soon as its last key comes, so it cannot also be the start of a longer binding,
+and of two bindings that conflict, the newer wins and the older is kept but never fires.
+Most of the file manager's keys are like that, so this comes up more often than in the shell.
+<code>d</code> is cut, and adding <code>d d</code> makes <code>d</code> inert, with a warning every time <code>init.msh</code> runs.
+To replace a key with a sequence, erase it first:
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># ranger&#39;s keys for cut and trash. Erasing first keeps d from being reported as inert.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;d&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmBindingErase</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;x&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmBindingErase</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;d&#39;</span> <span class="mshellRUNE">r&#39;d&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">fmCut</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmOps</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">description</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;cut&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+<span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">keys</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;d&#39;</span> <span class="mshellRUNE">r&#39;D&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">action</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">fmTrash</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">fmOps</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">description</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;move to the trash&#39;</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">fmBindingAdd</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+While keys wait for more, as after <code>y</code> or <code>g</code>, a box lists the bindings that can follow, with their descriptions, or their operations when they have none.
+It waits for the next key with no time limit. A key that does not continue the sequence closes it and acts on its own, so Escape closes it and does nothing else.
+</p>
+
+<p>
+<code>?</code> shows the help screen: every binding in force, for each mode, and then every binding that does not fire, with the reason.
+It is the one place <code>msh fm</code> shows why a binding does nothing.
+It scrolls with the keys that move the cursor, and <code>q</code>, Escape or <code>?</code> closes it.
+</p>
+
+<h2 id="getting-started-fm-default-keys">The default keymap</h2>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Keys (<code>fmModeNormal</code>)</th> <th>Program</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>r'q'</code>, <code>r'Q'</code></td> <td><code>[fmQuit]</code>, <code>[fmQuitNoCd]</code></td> </tr>
+        <tr> <td><code>r'j'</code>, <code>keyDown</code>; <code>r'k'</code>, <code>keyUp</code></td> <td><code>[fmDown]</code>; <code>[fmUp]</code></td> </tr>
+        <tr> <td><code>r'h'</code>, <code>keyLeft</code></td> <td><code>[fmParent]</code></td> </tr>
+        <tr> <td><code>r'l'</code>, <code>keyRight</code>, <code>keyEnter</code></td> <td><code>[fmOpen]</code></td> </tr>
+        <tr> <td><code>r'g' r'g'</code>, <code>keyHome</code>; <code>r'G'</code>, <code>keyEnd</code></td> <td><code>[fmTop]</code>; <code>[fmBottom]</code></td> </tr>
+        <tr> <td><code>r'd' keyCtrl</code>, <code>r'u' keyCtrl</code></td> <td><code>[10 fmRows fmDownBy]</code>, <code>[10 fmRows fmUpBy]</code></td> </tr>
+        <tr> <td><code>keyPageDown</code>, <code>keyPageUp</code></td> <td><code>[100.0 fmPercent fmDownBy]</code>, <code>[100.0 fmPercent fmUpBy]</code></td> </tr>
+        <tr> <td><code>r'e'</code></td> <td><code>[fmOpenEditor]</code></td> </tr>
+        <tr> <td><code>r'r'</code>, <code>r'/'</code></td> <td><code>[fmPromptRename fmPrompt]</code>, <code>[fmPromptSearch fmPrompt]</code></td> </tr>
+        <tr> <td><code>r'n'</code>, <code>r'N'</code></td> <td><code>[fmSearchNext]</code>, <code>[fmSearchPrev]</code></td> </tr>
+        <tr> <td><code>r'd'</code>, <code>r'y' r'y'</code>, <code>r'p'</code>, <code>r'c'</code></td> <td><code>[fmCut]</code>, <code>[fmCopy]</code>, <code>[fmPaste]</code>, <code>[fmClipboardClear]</code></td> </tr>
+        <tr> <td><code>r'y' r'f'</code>, <code>r'y' r'p'</code>, <code>r'y' r'g'</code></td> <td><code>[fmYankName]</code>, <code>[fmYankPath]</code>, <code>[fmYankGitPath]</code></td> </tr>
+        <tr> <td><code>r'x'</code></td> <td><code>[fmTrash]</code></td> </tr>
+        <tr> <td><code>r' '</code>, <code>r'v'</code>, <code>r'u'</code></td> <td><code>[fmToggle fmDown]</code>, <code>[fmSelectionInvert]</code>, <code>[fmSelectionClear]</code></td> </tr>
+        <tr> <td><code>r'm'</code>, <code>r';'</code></td> <td><code>[fmBookmarkSet]</code>, <code>[fmBookmarkGo]</code></td> </tr>
+        <tr> <td><code>keyF5</code></td> <td><code>[fmReload]</code></td> </tr>
+        <tr> <td><code>r'?'</code></td> <td><code>[fmHelp]</code></td> </tr>
+    </tbody>
+</table>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Keys (<code>fmModeInsert</code>)</th> <th>Program</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>keyEnter</code></td> <td><code>[fmLineAccept]</code></td> </tr>
+        <tr> <td><code>keyEscape</code>, <code>r'c' keyCtrl</code></td> <td><code>[fmLineCancel]</code></td> </tr>
+        <tr> <td><code>keyLeft</code>, <code>r'b' keyCtrl</code>; <code>keyRight</code>, <code>r'f' keyCtrl</code></td> <td><code>[editLeft]</code>; <code>[editRight]</code></td> </tr>
+        <tr> <td><code>r'b' keyAlt</code>, <code>r'f' keyAlt</code></td> <td><code>[editWordLeft]</code>, <code>[editWordRight]</code></td> </tr>
+        <tr> <td><code>keyHome</code>, <code>r'a' keyCtrl</code>; <code>keyEnd</code>, <code>r'e' keyCtrl</code></td> <td><code>[editLineStart]</code>; <code>[editLineEnd]</code></td> </tr>
+        <tr> <td><code>keyBackspace</code>; <code>keyDelete</code></td> <td><code>[editBackspace]</code>; <code>[editDelete]</code></td> </tr>
+        <tr> <td><code>r'w' keyCtrl</code>, <code>r'h' keyCtrl</code>, <code>keyBackspace keyCtrl</code></td> <td><code>[editDeleteWordLeft]</code></td> </tr>
+        <tr> <td><code>r'u' keyCtrl</code>; <code>r'k' keyCtrl</code></td> <td><code>[editDeleteToStart]</code>; <code>[editDeleteToEnd]</code></td> </tr>
+    </tbody>
+</table>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Keys (<code>fmModeHelp</code>)</th> <th>Program</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>r'j'</code>, <code>keyDown</code>; <code>r'k'</code>, <code>keyUp</code></td> <td><code>[fmDown]</code>; <code>[fmUp]</code></td> </tr>
+        <tr> <td><code>r'd' keyCtrl</code>; <code>r'u' keyCtrl</code></td> <td><code>[10 fmRows fmDownBy]</code>; <code>[10 fmRows fmUpBy]</code></td> </tr>
+        <tr> <td><code>keyPageDown</code>; <code>keyPageUp</code></td> <td><code>[100.0 fmPercent fmDownBy]</code>; <code>[100.0 fmPercent fmUpBy]</code></td> </tr>
+        <tr> <td><code>r'g' r'g'</code>, <code>keyHome</code>; <code>r'G'</code>, <code>keyEnd</code></td> <td><code>[fmTop]</code>; <code>[fmBottom]</code></td> </tr>
+        <tr> <td><code>r'q'</code>, <code>keyEscape</code>, <code>r'?'</code></td> <td><code>[fmHelpClose]</code></td> </tr>
+    </tbody>
+</table>
+
+<h2 id="getting-started-fm-questions">Pastes and questions</h2>
+
+<p>
+A paste never runs keys.
+In the prompt line it goes in at the cursor as one edit, once line breaks at its end are dropped;
+it is refused whole, with a message saying why, if it holds any other control character or would make the line too long.
+Anywhere else it is refused, and the bottom row says so.
+</p>
+
+<p>
+Three things ask before they act: <code>fmTrash</code> (<code>y</code> confirms), <code>fmPaste</code> when a name exists already
+(<code>o</code> overwrites, <code>v</code> adds a version number), and the bookmarks, which ask for the bookmark's key.
+A question shows its answers and reads one key, which reaches no binding. Escape, or any key it does not offer, is no.
+Their answers are fixed; what you can change is the key that asks.
+</p>
+
+<h2 id="getting-started-fm-builtins">Adding, removing and listing</h2>
+
+<p>
+<code>fmBindingAdd</code>, <code>fmBindingErase</code> and <code>fmBindingList</code> work as <a href="#getting-started-binding-builtins"><code>bindingAdd</code>, <code>bindingErase</code> and <code>bindingList</code></a> do, over the file manager's table.
+A binding that can never fire is kept, listed, inert and shown on the help screen, and the interactive shell prints a warning about it:
+for the shell's reasons, and for an operation that cannot run in the mode it stands in (any <code>EditOp</code> that is not a line edit, in every mode),
+an operation after <code>fmQuit</code> or <code>fmQuitNoCd</code>, or a distance of 0 or less.
+The prompt line has its own keymap, apart from the shell's line, so a key you change in the shell is not changed there:
+bind it in both if you want it in both.
+</p>
+
+<h2 id="getting-started-fm-types">Types</h2>
+
+<p>
+The file manager's types, as <code>mshell</code> declares them.
+These types and their members are built in, so their names cannot be used for your own types, members or definitions.
+<code>[FmOp | EditOp]</code> is the same type as <code>FmProgram</code>.
+</p>
+
+<pre>
+⟦ [[awk '/^enum FmMode/,/^type FmBinding/' ../mshell/Prompt.go] [msh --html]] |; ⟧
+</pre>
 
 <h1 id="getting-started-github-actions">GitHub Actions <a class="section-link" href="#getting-started-github-actions" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
 

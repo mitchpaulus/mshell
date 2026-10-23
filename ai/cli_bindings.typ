@@ -249,7 +249,7 @@ The same study gives the numbers to set windows against: a mean gap between keys
   [A binding returns what to do (murex), typed], [A binding that calls into the editor (fish `commandline`, zsh widgets, PSReadLine): untyped, and hard to test],
   [Declining, to fall through (murex `Continue`, Atuin rule lists)], [`when` expressions over named context (VS Code): `none` from a quotation does the same with the full language],
   [Showing a pending prefix (Emacs echo area, VS Code status bar)], [—],
-  [Sequence times only if asked (fish)], [Vim's 1 s default, and any escape delay: a lone Escape is a key only where the kitty protocol makes it one (section 10)],
+  [Sequence times only if asked (fish)], [Vim's 1 s default, and any escape delay: a lone Escape is told from Alt and a key by read boundaries, not by time (section 10)],
   [Refusing bad bindings when they are added (fish, Emacs, PSReadLine)], [Silent acceptance (readline, zsh)],
 )
 
@@ -390,7 +390,7 @@ In the legacy encoding, which every terminal speaks, the bytes are read as:
   [`0x09`], [`keyTab` (never `r'i' keyCtrl`)],
   [`0x0d`], [`keyEnter` (never `r'm' keyCtrl`)],
   [`0x0a`], [`r'j' keyCtrl`],
-  [`0x1b` and a key], [that key with `keyAlt`, when `keyAlt` and it has a binding; otherwise the key alone. A lone Escape is not a key here (section 10).],
+  [`0x1b` and a key], [in one read, that key with `keyAlt`, when `keyAlt` and it has a binding; otherwise `keyEscape` and then the key. An `0x1b` that ends a read is `keyEscape` (section 10).],
   [`0x1c`--`0x1f`], [`r'\' keyCtrl`, `r']' keyCtrl`, `r'^' keyCtrl`, `r'_' keyCtrl`],
   [`0x7f`], [`keyBackspace`],
   [`ESC` then a byte], [that key with `keyAlt`: `ESC x` is `r'x' keyAlt`, `ESC X` is `r'x' keyShift keyAlt`, `ESC .` is `r'.' keyAlt`],
@@ -877,9 +877,12 @@ Keys are only as good as the decoder under them. Three changes there, all below 
 + *Decode every key, bound or not.* The lexer produces a key value (base key and modifiers) for every key it can read, including the modifiers on Home, End and arrows and every Alt chord.
   Whether a key does anything is the keymap's business. Today the lexer drops what nothing binds.
 + *No escape delay.* In the legacy encoding ESC and a key is Alt and the key, and a lone Escape can be told from it only by waiting for a byte that may not come
-  (fish waits 30 ms, tmux 10, Neovim 50). Here the lexer reads the next byte with a blocking read, as it does today, and makes the pair Alt and the key.
-  When `keyAlt` and that key has no binding, the key acts on its own, so an Escape pressed out of habit loses nothing.
-  So in the legacy encoding a lone Escape is not a key, as Ctrl-I is not; with the kitty protocol it is `CSI 27 u`, a key like any other, with no waiting.
+  (fish waits 30 ms, tmux 10, Neovim 50). Here the lexer looks at read boundaries instead, as crossterm does (changed by `ai/fm-bindings.typ`, section 10.2, 2026-10-22):
+  an ESC that ends what one read returned is `keyEscape`, unless the read filled the buffer;
+  an ESC followed in the same read by a key is Alt and the key when `keyAlt` and it has a binding, and otherwise `keyEscape` and then the key.
+  Nothing waits for time, and Escape acts when it is pressed.
+  (This section first had the lexer read the byte after ESC with a blocking read, so a lone Escape was not a key in the legacy encoding; the file manager needs one.)
+  With the kitty protocol Escape is `CSI 27 u`, a key like any other.
 + *The kitty keyboard protocol, when the terminal has it.* At startup the shell asks (`CSI ? u`, followed by DA1 so that a terminal without it still answers).
   If it does, the editor pushes flags 1 and 4 (`CSI > 5 u`: disambiguate, and report alternate keys, as fish asks for) while it reads a line,
   and pops them (`CSI < u`) before running anything, including `editRun`, so programs inherit the terminal as they expect.

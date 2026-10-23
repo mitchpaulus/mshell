@@ -94,8 +94,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The interactive shell uses the kitty keyboard protocol in terminals that have it, so Escape, Ctrl-I and Tab, and Ctrl-Shift chords are distinct keys.
   Set `MSH_KITTY_KEYS=0` to turn it off.
 - `msh keys` shows each key pressed as a binding writes it, with the bytes the terminal sent.
+- File manager key bindings: every key of the file manager is a binding, which `init.msh` can add, replace or remove:
+  `{keys: [r'g' r'h'], action: [~ fmCd] fmOps, description: 'home'} fmBindingAdd`.
+  A binding runs a list of file manager operations (`fmCd`, `fmToggle`, `fmRun`, ...) and the shell's line edits, or a quotation that returns them from the file manager's state.
+  A binding can open a prompt of its own and run a quotation with what was typed (`fmPromptAsk`), and run a command and keep its output on screen until a key is pressed (`fmRunWait`).
+  The box that lists the keys that can follow `y` or `g` shows your bindings too, with their descriptions.
+- The file manager:
+  - `?` shows a help screen with every binding, and every binding that never fires with the reason.
+  - Space selects entries, `v` inverts the selection and `u` clears it; cut, copy, trash, the yanks and `e` act on every selected entry, across directories.
+  - `Q` quits without changing directory.
+  - Home, End, Page Up and Page Down move the cursor.
+  - Search and rename share one line editor with the shell's keys: search has a cursor, and both have Delete, Ctrl-B, Ctrl-F, Alt-B, Alt-F, and Ctrl-C to cancel.
 - Functions for key bindings
   - `bindingAdd`, `bindingErase` and `bindingList` manage them.
+  - `fmBindingAdd`, `fmBindingErase` and `fmBindingList` manage the file manager's.
   - `editInEditor` edits the line in `$EDITOR`, for `editRunOps`.
 
 ### Changed
@@ -104,6 +116,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The interactive shell's personal key sequences are gone: `jf`, `vl`, `qq`, `;r`, `;j`, F1 and Alt-D.
   Letters typed in those pairs now appear at once, and `vlc` and `qq` can be typed. Add any you want back to `init.msh` with `bindingAdd`.
 - Modifiers on Home, End, the arrows and Delete, and Alt with any key, are now read as keys that can be bound, instead of being dropped.
+- A lone Escape is a key in the old terminal encoding, and acts when it is pressed.
+  Escape and a key arrive together only as Alt and the key; Escape and then a key, typed one after the other, is no longer Alt and that key.
+- `msh fm` loads the standard library and `init.msh`, as a script does, so bindings and definitions work there.
+  Programs the file manager runs, such as `$EDITOR`, write to the terminal, not to the standard output of `msh fm`.
+- A paste in the file manager no longer runs as keys: it goes into the prompt line, and elsewhere it is refused with a message.
 - The interactive shell writes a debug log only when started with `--debug`.
   The log is `mshell.log` in the history directory, readable only by you, instead of `/tmp/mshell.log`.
   Without `--debug`, no log file is opened, so a key press no longer waits on an fsync,
@@ -202,6 +219,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The file manager's rename and search lines take any character, such as `é`, Delete in the rename line deletes instead of typing `~`, and Up or Down no longer closes the search line.
 - Binary data works with `len` and `+`, and takes negative indexes and slices (`-16:`) as strings do.
 - Pressing TAB to complete a command's arguments no longer changes the interactive shell's variables: completion definitions run in a scope of their own.
 - Running or type checking a startup file itself (the init file, or the standard library through `MSHSTDLIB`) no longer also loads it as a startup file first, which defined everything in it twice.

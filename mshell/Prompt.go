@@ -21,7 +21,8 @@ import (
 // builtinDeclSource declares the types of the prompt builtins, the
 // Cipher that encrypt and decrypt take (Crypto.go), the types of the
 // abbreviation builtins (Abbr.go), the types of the key binding
-// builtins (Bindings.go), and the cells parseExcel gives (Excel.go). They are
+// builtins (Bindings.go) and of the file manager's (FmBindings.go), and
+// the cells parseExcel gives (Excel.go). They are
 // part of the binary: the type checker and the runtime declare them before
 // any file, and no file can declare their names again.
 const builtinDeclSource = `
@@ -112,6 +113,37 @@ end
 enum BindingAction = bindingOps [EditOp] | bindingFunc (EditState -- Maybe[[EditOp]]) end
 
 type Binding = {keys: [Key], action: BindingAction, mode?: EditMode, within?: int, idleBefore?: int, description?: str}
+
+enum FmMode = fmModeNormal | fmModeInsert | fmModeHelp end
+
+enum FmPrompt = fmPromptSearch | fmPromptRename | fmPromptAsk str str (str FmState -- Maybe[[FmOp | EditOp]]) end
+
+type FmLine = {prompt: FmPrompt, before: str, after: str}
+
+type FmState = {dir: str, current: Maybe[str], selected: [str], mode: FmMode, line: Maybe[FmLine], keys: [Key]}
+
+enum FmDistance = fmRows int | fmPercent float end
+
+enum FmOp =
+      fmDown | fmUp | fmTop | fmBottom | fmDownBy FmDistance | fmUpBy FmDistance
+    | fmSearchNext | fmSearchPrev | fmCursorTo str
+    | fmOpen | fmParent | fmCd str | fmReload | fmOpenEditor
+    | fmToggle | fmSelectionInvert | fmSelectionClear
+    | fmPrompt FmPrompt
+    | fmCut | fmCopy | fmPaste | fmClipboardClear
+    | fmYankName | fmYankPath | fmYankGitPath
+    | fmTrash | fmBookmarkSet | fmBookmarkGo | fmHelp
+    | fmLineAccept | fmLineCancel
+    | fmHelpClose
+    | fmRun ( -- ) | fmRunWait ( -- ) | fmRunOps (FmState -- Maybe[[FmOp | EditOp]])
+    | fmMessage str | fmQuit | fmQuitNoCd
+end
+
+type FmProgram = [FmOp | EditOp]
+
+enum FmAction = fmOps FmProgram | fmFunc (FmState -- Maybe[FmProgram]) end
+
+type FmBinding = {keys: [Key], action: FmAction, mode?: FmMode, within?: int, idleBefore?: int, description?: str}
 `
 
 // builtinDeclFile is the file the built-in declarations' tokens name.
@@ -519,23 +551,15 @@ func (state *TermState) userPrompt() (promptRender, bool) {
 
 	// A quote that finished with its list is shown, even if the time ran
 	// out as it finished.
-	var problem string
 	var render promptRender
-	switch {
-	case run.err != nil:
-		problem = run.err.Error()
-	case run.result.ExitCalled:
-		problem = "The prompt called 'exit'; that does not end the shell.\n"
-	case run.result.Success && len(stack) == 1:
+	problem := run.problem("The prompt", "the shell", promptTimeout)
+	if problem == "" && len(stack) != 1 {
+		problem = fmt.Sprintf("The prompt must leave one list on the stack, and left %d values.\n", len(stack))
+	} else if problem == "" {
 		var err error
-		render, err = renderPrompt(stack[0])
-		if err != nil {
+		if render, err = renderPrompt(stack[0]); err != nil {
 			problem = err.Error() + ".\n"
 		}
-	case run.result.Success:
-		problem = fmt.Sprintf("The prompt must leave one list on the stack, and left %d values.\n", len(stack))
-	default:
-		problem = run.failure("The prompt", promptTimeout)
 	}
 	if problem != "" {
 		if problem != state.promptProblem {
@@ -563,7 +587,12 @@ type userQuoteRun struct {
 // runUserQuote runs quote on stack, and stops it, together with any
 // command it runs, after timeout or when cancel is requested.
 func (state *TermState) runUserQuote(quote *MShellQuotation, stack *MShellStack, context ExecuteContext, timeout time.Duration, cancel *evalCancel) userQuoteRun {
-	ev := &state.evalState
+	return state.evalState.runUserQuote(quote, stack, context, state.stdLibDefs, timeout, cancel)
+}
+
+// runUserQuote runs a quote with the definitions given, as the TermState
+// method does.
+func (ev *EvalState) runUserQuote(quote *MShellQuotation, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, timeout time.Duration, cancel *evalCancel) userQuoteRun {
 	var timedOut atomic.Bool
 	timer := time.AfterFunc(timeout, func() {
 		timedOut.Store(true)
@@ -572,7 +601,7 @@ func (state *TermState) runUserQuote(quote *MShellQuotation, stack *MShellStack,
 
 	var errOut bytes.Buffer
 	ev.cancel, ev.failOut = cancel, &errOut
-	result, err := ev.EvaluateQuote(quote, stack, context, state.stdLibDefs)
+	result, err := ev.EvaluateQuote(quote, stack, context, definitions)
 	ev.cancel, ev.failOut = nil, nil
 	timer.Stop()
 	return userQuoteRun{result: result, err: err, timedOut: timedOut.Load(), cancelled: cancel.requested.Load(), errOut: errOut.String()}
@@ -613,6 +642,21 @@ func (run userQuoteRun) failure(what string, timeout time.Duration) string {
 		// A command run with '!' stops the quote without a message.
 		return fmt.Sprintf("%s stopped with exit code %d.\n", what, run.result.ExitCode)
 	}
+}
+
+// problem says why a quote run with a time limit gave nothing to use, or
+// is "" when it succeeded. what names the quote, starting a sentence, and
+// owner is what its exit does not end.
+func (run userQuoteRun) problem(what, owner string, timeout time.Duration) string {
+	switch {
+	case run.err != nil:
+		return run.err.Error()
+	case run.result.ExitCalled:
+		return what + " called 'exit'; that does not end " + owner + ".\n"
+	case run.result.Success:
+		return ""
+	}
+	return run.failure(what, timeout)
 }
 
 // timeoutText is a time limit in words: "3 seconds", "1 second".

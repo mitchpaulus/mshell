@@ -545,6 +545,9 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("bindingAdd", "(Binding -- )")
 	b.reg("bindingErase", "([Key] -- )")
 	b.reg("bindingList", "( -- new [Binding])")
+	b.reg("fmBindingAdd", "(FmBinding -- )")
+	b.reg("fmBindingErase", "([Key] -- )")
+	b.reg("fmBindingList", "( -- new [FmBinding])")
 	// Name below, value on top.
 	b.reg("setenv", "(str | path str | path -- )")
 	b.reg("unsetenv", "(str | path -- )")
