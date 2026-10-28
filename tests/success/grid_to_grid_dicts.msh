@@ -1,0 +1,16 @@
+# toGrid on a list of dicts: a column for each key, in sorted order.
+[
+    {name: "Ada", age: 36, score: 9.5, ok: true, file: `a.txt`, day: 2024-01-02}
+    {name: "Bob", age: 40, score: 7.25, ok: false, file: `b.txt`, day: 2024-02-03}
+] toGrid g!
+@g gridCols str wl
+@g gridRows str wl
+@g "age" gridCol sum str wl
+@g :1: :name? wl
+@g :1: :file? str wl
+@g :0: :score? str wl
+@g "age" 1 41 gridSetCell "age" gridCol sum str wl
+
+# Dicts typed as {str: T}: the column names are data.
+[{v: 1} {v: 2}] as [{int}] counts!
+@counts toGrid "v" gridCol sum str wl

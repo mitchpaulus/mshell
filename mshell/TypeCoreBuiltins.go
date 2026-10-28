@@ -687,9 +687,16 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	compact[0].keepOut = 1
 	compact[1].newListOut = 1
 	// Every column of a grid from toGrid holds strings; their names are data.
+	// From dicts, each key is a column. When the dicts' keys are known,
+	// TypeCoreGrid.go gives the columns; here their names are data.
+	cell := res.gridCell()
 	t.setName(res.names.Intern("toGrid"), []coreSig{{
 		ins:    []TypeId{ar.MakeList(ar.MakeList(TidStr))},
 		outs:   []TypeId{ar.MakeGridOf(TKGrid, ar.MakeRecord(nil, RecordField{Status: FieldOptional, Type: TidStr}))},
+		newOut: 1,
+	}, {
+		ins:    []TypeId{ar.MakeList(ar.MakeStrDict(cell))},
+		outs:   []TypeId{ar.MakeGridOf(TKGrid, ar.MakeRecord(nil, RecordField{Status: FieldOptional, Type: cell}))},
 		newOut: 1,
 	}})
 	b.reg("parseCsv", "(str | path -- new [[str]])")

@@ -3309,6 +3309,56 @@ func buildGridFromStringRows(rows *MShellList) (*MShellGrid, error) {
 	return newGrid, nil
 }
 
+// buildGridFromDicts makes a grid with a column for each key of the first
+// dict, in sorted order. Every dict must have exactly those keys, and every
+// value must be a str, int, float, datetime, binary, path or bool.
+func buildGridFromDicts(rows *MShellList) (*MShellGrid, error) {
+	first := rows.Items[0].(*MShellDict)
+	colNames := make([]string, 0, len(first.Items))
+	for k := range first.Items {
+		colNames = append(colNames, k)
+	}
+	sort.Strings(colNames)
+
+	newGrid := NewGrid()
+	newGrid.RowCount = len(rows.Items)
+	for _, colName := range colNames {
+		newGrid.AddColumn(NewGridColumn(colName, newGrid.RowCount))
+	}
+
+	for rowIdx, item := range rows.Items {
+		row, ok := item.(*MShellDict)
+		if !ok {
+			return nil, fmt.Errorf("toGrid requires every row to be a dictionary when the first one is. Row %d was %s.\n", rowIdx, item.TypeName())
+		}
+		for colIdx, colName := range colNames {
+			val, ok := row.Items[colName]
+			if !ok {
+				return nil, checkedErrorf("toGrid: row %d has no key '%s', which the first row has.\n", rowIdx, colName)
+			}
+			switch val.(type) {
+			case MShellString, MShellInt, MShellFloat, *MShellDateTime, MShellBinary, MShellPath, MShellBool:
+			default:
+				return nil, fmt.Errorf("toGrid: row %d, key '%s' holds a %s; a cell must be a str, int, float, datetime, binary, path or bool.\n", rowIdx, colName, val.TypeName())
+			}
+			newGrid.Columns[colIdx].GenericData[rowIdx] = val
+		}
+		if len(row.Items) != len(colNames) {
+			for k := range row.Items {
+				if _, exists := first.Items[k]; !exists {
+					return nil, checkedErrorf("toGrid: row %d has the key '%s', which the first row does not have.\n", rowIdx, k)
+				}
+			}
+		}
+	}
+
+	for _, col := range newGrid.Columns {
+		optimizeColumnStorage(col)
+	}
+
+	return newGrid, nil
+}
+
 func isContainerType(obj MShellObject) bool {
 	switch obj.(type) {
 	case *MShellList, *MShellDict, *MShellGrid, *MShellGridView, *MShellGridRow:
@@ -10352,7 +10402,16 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: toGrid requires a list of rows, got %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
 
-					grid, err := buildGridFromStringRows(rows)
+					isDicts := false
+					if len(rows.Items) > 0 {
+						_, isDicts = rows.Items[0].(*MShellDict)
+					}
+					var grid *MShellGrid
+					if isDicts {
+						grid, err = buildGridFromDicts(rows)
+					} else {
+						grid, err = buildGridFromStringRows(rows)
+					}
 					if err != nil {
 						return state.failErr(err, fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
 					}

@@ -40,6 +40,9 @@ Grids support:
 <p>
 For ingestion from delimited text or other row-oriented sources, use <code>toGrid</code> to convert
 <code>[[str]]</code> into a Grid. The first row is treated as the header row.
+<code>toGrid</code> also takes a list of dictionaries: each key becomes a column, in sorted order, and each dictionary a row.
+Every dictionary must have the same keys,
+and each value must be a <code>str</code>, <code>int</code>, <code>float</code>, <code>datetime</code>, <code>binary</code>, <code>path</code> or <code>bool</code>.
 </p>
 
 <h1 id="grid-literal-syntax">Literal Syntax <a class="section-link" href="#grid-literal-syntax" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
@@ -246,6 +249,9 @@ Each column can have optional metadata specified as a dictionary immediately aft
 
 <span class="mshellLINECOMMENT"># Or build one from parsed row data</span>
 <span class="mshellSTRING">"x,y\n1,2\n3,4\n"</span> <span class="mshellLITERAL">parseCsv</span> <span class="mshellLITERAL">toGrid</span> <span class="mshellVARSTORE">csvGrid!</span>
+
+<span class="mshellLINECOMMENT"># Or from a list of dictionaries, one per row</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_CURLY">{</span><span class="mshellSTRING">"x"</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"y"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"a"</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellSTRING">"x"</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">3</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"y"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"b"</span><span class="mshellRIGHT_CURLY">}</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">toGrid</span> <span class="mshellVARSTORE">dictGrid!</span>
 
 <span class="mshellLINECOMMENT"># Get row count</span>
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLITERAL">gridRows</span>  <span class="mshellLINECOMMENT"># 2</span>

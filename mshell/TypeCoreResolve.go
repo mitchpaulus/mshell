@@ -451,6 +451,11 @@ func (r *coreResolver) unknownSchema() TypeId {
 	return r.arena.MakeRecord(nil, RecordField{Status: FieldOpen})
 }
 
+// gridCell is every value toGrid takes as a cell of a dict row.
+func (r *coreResolver) gridCell() TypeId {
+	return r.arena.MakeUnion([]TypeId{TidStr, TidInt, TidFloat, TidDateTime, TidBytes, TidPath, TidBool})
+}
+
 // schemaGeneric reads a builtin signature's `Grid_s`, `GridView_s` or
 // `GridRow_s`: a grid kind whose schema is the generic s.
 func schemaGeneric(name string) (TypeKind, string, bool) {
