@@ -574,7 +574,10 @@ Reading a column by a literal name gives that column's type, and reading a colum
 </pre>
 
 <p>
-A grid whose columns are not known, written <code><span class="mshellLITERAL">Grid</span></code> in a signature, or made by <code><span class="mshellLITERAL">toGrid</span></code>, can be read but not written, and its cells are of unknown type.
+A grid whose columns are not known, written <code><span class="mshellLITERAL">Grid</span></code> in a signature, can be read but not written, and its cells are of unknown type.
+A grid from <code><span class="mshellLITERAL">toGrid</span></code> on string rows has columns whose names are not known, each holding strings.
+From a list of dictionaries, it has a column for each key the dictionaries' type names, at that key's type:
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">b</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"x"</span><span class="mshellRIGHT_CURLY">}</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">toGrid</span></code> is a <code>Grid{a: int, b: str}</code>.
 Use <code><span class="mshellLITERAL">select</span></code> to take the columns you need.
 </p>
 

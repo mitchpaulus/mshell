@@ -49,6 +49,13 @@ func TestFailureKinds(t *testing.T) {
 		// toGrid: no rows is checked, a row that is not a list a mismatch.
 		{`[] toGrid`, CheckedFailure},
 		{`[5] toGrid`, TypeMismatch},
+		// toGrid on dicts: keys that differ from the first dict's are
+		// checked, a row that is not a dict or a cell of another kind a
+		// mismatch.
+		{`[{a: 1} {b: 1}] toGrid`, CheckedFailure},
+		{`[{a: 1} {a: 1, b: 2}] toGrid`, CheckedFailure},
+		{`[{a: 1} 5] toGrid`, TypeMismatch},
+		{`[{a: [1]}] toGrid`, TypeMismatch},
 		// tryAs: a target that does not resolve is a mismatch.
 		{`5 tryAs Nope`, TypeMismatch},
 	}

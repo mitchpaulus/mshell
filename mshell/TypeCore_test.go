@@ -379,6 +379,15 @@ func TestCoreChecker(t *testing.T) {
 		{`"a,b\n1,2" parseCsv toGrid :0: :a? 1 + wl`, false, "no matching overload for '+'"},
 		{`"a,b\n1,2" parseCsv toGrid g!  @g "a" 0 "x" gridSetCell drop`, true, ""},
 		{`"a,b\n1,2" parseCsv toGrid "a" (toInt?) updateCol g!  @g "a" 0 "x" gridSetCell drop`, false, "writes a cell"},
+		// toGrid on dicts: a column for each key, at the key's type.
+		{`[{a: 1, b: "x"} {a: 2, b: "y"}] toGrid "a" gridCol sum wl`, true, ""},
+		{`[{a: 1, b: "x"}] toGrid "a" 0 "s" gridSetCell drop`, false, "writes a cell at its column's type"},
+		{`[{a: 1}] toGrid "c" gridCol drop`, false, "the grid has no column 'c'"},
+		{`[{a: 1} {a: 2, b: 3}] toGrid "b" gridCol drop`, true, ""},
+		{`{} as {int} d!  [@d] toGrid :0: :v? 1 + wl`, true, ""},
+		{`[{a: [1]}] toGrid drop`, false, "a cell must be"},
+		{`def f ([{name: str}] -- Grid) toGrid end`, false, "the other keys may hold anything"},
+		{`[{a: 1} "s"] toGrid drop`, false, "no matching overload for 'toGrid'"},
 		// select, exclude, derive, map, +, joins, pivot and groupBy compute
 		// the result's columns.
 		{`[| a, b; 1, "x" |] ["b"] select "b" gridCol (str) map drop`, true, ""},

@@ -1,0 +1,2 @@
+# toGrid on dicts: no dict may have a key the first one does not have.
+[{a: 1} {a: 3, b: 4}] toGrid drop

@@ -1,0 +1,4 @@
+# toGrid on dicts: a written shape's other keys may hold anything.
+def rows ([{name: str}] -- Grid)
+    toGrid
+end

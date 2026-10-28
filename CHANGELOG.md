@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `toGrid` takes a list of dictionaries: each key becomes a column and each dictionary a row.
+  Values may be `str`, `int`, `float`, `datetime`, `binary`, `path` or `bool`, and every dictionary must have the same keys.
+  With dictionaries whose keys are known, the type checker knows the grid's columns: `[{a: 1, b: "x"}] toGrid` is a `Grid{a: int, b: str}`.
 - `parseToml`: parse a TOML document from a string, binary, or file path. It gives a `Maybe[{Toml}]`, `none` for text that is not valid TOML. `Toml` is a new built-in type.
 - `ExcelCell`: a built-in type for a cell `parseExcel` gives, `str | float | bool | ExcelError`, so stored rows can be typed `[[ExcelCell]]`.
   An error cell is an `excelError` holding the error's text, such as `"#DIV/0!"`.

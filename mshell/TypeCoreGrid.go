@@ -340,6 +340,8 @@ func (c *coreChecker) gridWord(tok Token) bool {
 		return c.gridColumns(tok)
 	case "map":
 		return c.gridMap(tok)
+	case "toGrid":
+		return c.gridFromDicts(tok)
 	case "extend":
 		return c.gridExtend(tok)
 	case "join", "leftJoin", "outerJoin":
@@ -814,6 +816,63 @@ func (c *coreChecker) gridMap(tok Token) bool {
 		}
 	}
 	c.pushNewGrid(out)
+	return true
+}
+
+// gridFromDicts checks `[dicts] toGrid`: a new grid with a column for
+// each key of the dicts, whose type is the key's value type. Every dict
+// must have the keys the first one has, so a required key is a required
+// column and an optional key an optional one. It reports false when the
+// list's element type is not a dict type known here, for the table's
+// forms.
+func (c *coreChecker) gridFromDicts(tok Token) bool {
+	n := len(c.stack)
+	if n-c.floor < 1 {
+		return false
+	}
+	c.force(n - 1)
+	lt := c.unfold(c.subst.Apply(c.arena, c.stack[n-1].t))
+	if c.arena.nodes[lt].Kind != TKList {
+		return false
+	}
+	et := c.unfold(c.subst.Apply(c.arena, TypeId(c.arena.nodes[lt].A)))
+	if c.arena.nodes[et].Kind != TKRecord || c.hasVars(et) {
+		return false
+	}
+	cell := c.res.gridCell()
+	r := c.schemaOf(et)
+	column := func(f RecordField, what string) (RecordField, bool) {
+		switch f.Status {
+		case FieldAbsent:
+			return f, true
+		case FieldOpen:
+			c.gridError(tok, "'toGrid' needs to know the type of every value in the dicts, but "+what+" may hold anything;"+
+				" say what they hold, as in {str: int} or {name: str, *: str}")
+			return f, false
+		}
+		if !c.rel.Sub(f.Type, cell) {
+			c.gridError(tok, "'toGrid' makes a column of each key, and a cell must be "+c.format(cell)+"; "+what+" is "+c.format(f.Type))
+			return f, false
+		}
+		if f.Status != FieldRequired {
+			f.Status = FieldOptional
+		}
+		return f, true
+	}
+	fields := make([]RecordField, len(r.Fields))
+	for i, f := range r.Fields {
+		g, ok := column(f, "the key '"+c.names.Name(f.Name)+"'")
+		if !ok {
+			return true
+		}
+		fields[i] = g
+	}
+	rest, ok := column(r.Rest, "the other keys")
+	if !ok {
+		return true
+	}
+	c.stack = c.stack[:n-1]
+	c.pushNewGrid(c.arena.MakeRecord(fields, rest))
 	return true
 }
 

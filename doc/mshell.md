@@ -812,7 +812,8 @@ A new dict may gain keys: `{} "name" "Ada" set "age" 36 set` is a `{name: str, a
 
 A list has one element type; `[1 "a"]` is `[int | str]`, and indexing gives the element type.
 A stored `[int]` does not fit a `[int | str]` parameter.
-A grid's type includes each column's type, worked out from literals and grid words (no syntax); reading a missing column is an error; a grid with unknown columns (`Grid`, `toGrid`) is read only.
+A grid's type includes each column's type, worked out from literals and grid words (no syntax); reading a missing column is an error; a grid with unknown columns (`Grid`) is read only.
+`toGrid` on a list of dicts has a column for each key the dicts' type names: `[{a: 1, b: "x"}] toGrid` is `Grid{a: int, b: str}`.
 
 A quotation literal given to a word (`map`, `filter`, `each`, a def's quotation parameter) is checked against what the word passes it.
 A stored quotation is typed on its own; an overloaded word in it is decided by its later use, or needs an annotation.
@@ -1326,7 +1327,7 @@ end wl # Output: 11
 - `uuid`: Generate a random (version 4) UUID per RFC 9562, as a canonical lowercase hyphenated string (e.g. `9a9fc320-8284-440d-a740-d038cf95b667`). `( -- str)`
 - `uuid7`: Generate a time-ordered (version 7) UUID per RFC 9562. The first 48 bits are a Unix millisecond timestamp, so the values sort chronologically; the rest is random. `( -- str)`
 - `parseCsv`: Parse a CSV file into a list of lists of strings. Input can be a path/literal file name, or the string contents itself. (`path|str -- [[str]])`
-- `toGrid`: Build a Grid from a list of string rows. The first row supplies column headers and remaining rows become string-valued data rows. (`[[str]] -- Grid`)
+- `toGrid`: Build a Grid from a list of string rows, or from a list of dicts. For string rows, the first row supplies column headers and remaining rows become string-valued data rows. For dicts, each key becomes a column (sorted) and each dict a row; every dict must have the same keys. (`[[str]] -- Grid`, `[{str | int | float | datetime | binary | path | bool}] -- Grid`)
 - `gridValues`: Extract Grid or GridView cell values as row-major lists, without a header row and without coercing cell types. (`Grid|GridView -- [[a]]`)
 - `toCsvCell`: Escape a single CSV cell. If the value contains `,`, `"`, or a newline, wraps the value in double quotes and doubles any embedded quotes; otherwise returns the input unchanged. (`str -- str`)
 - `toCsv`: Serialize a list of rows, or a `Grid` or `GridView`, to a CSV string. Cells are escaped as `toCsvCell` does, joined with `,`, and each row ends with `\n`. A grid is written with a header row of its column names first; `none` is an empty cell, `just v` is written as `v`, and any other value is written in its `str` form. (`[[str]] -- str`) / (`Grid|GridView -- str`)
