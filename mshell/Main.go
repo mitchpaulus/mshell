@@ -4777,10 +4777,10 @@ _msh_completion() {
 
     if [[ $COMP_CWORD -eq 1 ]]; then
         if [[ "$cur" == -* ]]; then
-            COMPREPLY=( $(compgen -W "--html --lex --parse --version --help -h -c" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--html --lex --parse --type-check-only --version --help -h -c" -- "$cur") )
             return 0
         fi
-        COMPREPLY=( $(compgen -W "bin edit lsp completions keys" -- "$cur") )
+        COMPREPLY=( $(compgen -W "bin edit lsp completions keys fm" -- "$cur") )
         return 0
     fi
 
@@ -4809,7 +4809,7 @@ _msh_completion() {
     esac
 
     if [[ "$cur" == -* ]]; then
-        COMPREPLY=( $(compgen -W "--html --lex --parse --version --help -h -c" -- "$cur") )
+        COMPREPLY=( $(compgen -W "--html --lex --parse --type-check-only --version --help -h -c" -- "$cur") )
         return 0
     fi
 
@@ -4822,18 +4822,94 @@ complete -F _msh_completion msh mshell
 }
 
 func fishCompletionScript() string {
-	return `function __msh_register_completions --argument-names cmd
-    complete -c $cmd -f -l html -d 'Render the input as HTML'
-    complete -c $cmd -f -l lex -d 'Print tokens from the input'
-    complete -c $cmd -f -l parse -d 'Print the parsed AST as JSON'
-    complete -c $cmd -f -l version -d 'Print version information'
-    complete -c $cmd -f -s c -r -d 'Execute INPUT as the program'
-    complete -c $cmd -f -s h -l help -d 'Show help'
+	return `# Succeeds when the words between the command name and the cursor match
+# the patterns in $argv, one pattern per word.
+function __msh_words_match
+    set -l words (commandline -opc)
+    set -e words[1]
+    test (count $words) -eq (count $argv); or return 1
+    for i in (seq (count $argv))
+        string match -q -- $argv[$i] $words[$i]; or return 1
+    end
+    return 0
+end
 
-    complete -c $cmd -f -n '__fish_use_subcommand' -a 'bin edit lsp completions keys'
-    complete -c $cmd -f -n '__fish_seen_subcommand_from bin' -a 'add remove list path edit audit debug'
-    complete -c $cmd -f -n '__fish_seen_subcommand_from edit' -a 'init'
-    complete -c $cmd -x -n '__fish_seen_subcommand_from completions' -a 'bash fish nushell elvish'
+# Succeeds when every word in $argv is an option.
+function __msh_all_options
+    for word in $argv
+        switch $word
+            case -c -
+                return 1
+            case '-*'
+                continue
+            case '*'
+                return 1
+        end
+    end
+    return 0
+end
+
+# Succeeds while every word after the command name is an option.
+# Options must come before the script; later words go to the script.
+function __msh_before_script
+    set -l words (commandline -opc)
+    set -e words[1]
+    __msh_all_options $words
+end
+
+# Succeeds when the next word cannot be a file.
+function __msh_no_files
+    set -l words (commandline -opc)
+    set -e words[1]
+    # The word after -c is the program text.
+    if test "$words[-1]" = -c
+        set -e words[-1]
+        __msh_all_options $words; and return 0
+    end
+    switch "$words[1]"
+        case bin
+            # Only 'bin add' takes a path: add <path> or add <name> <path>.
+            if test "$words[2]" = add; and test (count $words) -le 3
+                return 1
+            end
+            return 0
+        case edit completions lsp keys fm
+            return 0
+    end
+    return 1
+end
+
+function __msh_register_completions --argument-names cmd
+    complete -c $cmd -n __msh_before_script -l html -d 'Render the input as HTML'
+    complete -c $cmd -n __msh_before_script -l lex -d 'Print tokens from the input'
+    complete -c $cmd -n __msh_before_script -l parse -d 'Print the parsed AST as JSON'
+    complete -c $cmd -n __msh_before_script -l type-check-only -d 'Type check the input without running it'
+    complete -c $cmd -n __msh_before_script -l version -d 'Print version information'
+    complete -c $cmd -n __msh_before_script -s c -x -d 'Execute INPUT as the program'
+    complete -c $cmd -n __msh_before_script -s h -l help -d 'Show help'
+
+    complete -c $cmd -n __msh_words_match -a bin -d 'Manage msh_bins.txt entries'
+    complete -c $cmd -n __msh_words_match -a edit -d 'Edit common msh files'
+    complete -c $cmd -n __msh_words_match -a completions -d 'Print shell completion script'
+    complete -c $cmd -n __msh_words_match -a lsp -d 'Run the language server'
+    complete -c $cmd -n __msh_words_match -a fm -d 'Open the built-in file manager'
+    complete -c $cmd -n __msh_words_match -a keys -d 'Show each key pressed as a key binding writes it'
+
+    complete -c $cmd -f -n __msh_no_files
+
+    complete -c $cmd -n '__msh_words_match bin' -a add -d 'Add/replace a bin entry'
+    complete -c $cmd -n '__msh_words_match bin' -a remove -d 'Remove a bin entry by binary name'
+    complete -c $cmd -n '__msh_words_match bin' -a list -d 'Print the bin map file contents'
+    complete -c $cmd -n '__msh_words_match bin' -a path -d 'Print the msh_bins.txt file path'
+    complete -c $cmd -n '__msh_words_match bin' -a edit -d 'Edit the bin map file'
+    complete -c $cmd -n '__msh_words_match bin' -a audit -d 'Report invalid or missing bin map entries'
+    complete -c $cmd -n '__msh_words_match bin' -a debug -d 'Print PATH/bin map lookup details for a binary'
+    complete -c $cmd -n '__msh_words_match bin remove' -a "($cmd bin list 2>/dev/null)"
+    complete -c $cmd -n '__msh_words_match bin debug' -a "($cmd bin list 2>/dev/null) (__fish_complete_command)"
+
+    complete -c $cmd -n '__msh_words_match edit' -a init -d 'Edit init.msh'
+    complete -c $cmd -n '__msh_words_match completions' -a 'bash fish nushell elvish'
+    complete -c $cmd -n '__msh_words_match fm' -a '(__fish_complete_directories)'
 end
 
 __msh_register_completions msh
@@ -4847,7 +4923,7 @@ func nushellCompletionScript() string {
 }
 
 def "msh_commands" [] {
-  [bin edit lsp completions keys]
+  [bin edit lsp completions keys fm]
 }
 
 def "msh_bin_subcommands" [] {
@@ -4862,6 +4938,7 @@ export extern "msh" [
   --html
   --lex
   --parse
+  --type-check-only
   --version
   --help
   -h
@@ -4888,6 +4965,7 @@ export extern "mshell" [
   --html
   --lex
   --parse
+  --type-check-only
   --version
   --help
   -h
@@ -4915,7 +4993,7 @@ export extern "mshell completions" [
 func elvishCompletionScript() string {
 	return `fn _msh_complete { |@args|
   if (== (count $args) 0) {
-    put bin edit lsp completions keys --html --lex --parse --version --help -h -c
+    put bin edit lsp completions keys fm --html --lex --parse --type-check-only --version --help -h -c
     return
   }
 
