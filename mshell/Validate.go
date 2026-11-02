@@ -3,14 +3,17 @@ package main
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // Validation (ai/type-core-calculus.typ, "Validation: tryAs and is"): does a
 // value conform to a type? `tryAs T` and the match pattern `is T x` ask it at
-// run time. The value is never copied or changed: `tryAs` gives `just` the
-// same value, or `none`.
+// run time. The value is never copied or changed: `tryAs` gives `ok` with
+// the same value, or `err` with why it does not conform.
 //
 // The types are the checker's own: the runtime resolves a target with the
 // same resolver, against the same declarations (design doc, "Type
@@ -37,7 +40,13 @@ import (
 //
 // The walk uses an explicit work stack, so a deep value cannot overflow the
 // Go stack, and counts its steps against a budget: running out is an error
-// that stops the program, never a quiet `none`.
+// that stops the program, never a quiet `err`.
+//
+// Why a value does not conform is found by running the failed validation
+// again, recording where each value sits (explainFailure). Whether a value
+// conforms does not depend on the order of the walk, so the second walk
+// fails too; it takes dict keys in sorted order, so the same value always
+// gets the same reason. A validation that succeeds pays nothing for it.
 
 // validateBudget is the most steps one validation may take: one per value
 // and per alias or union looked through. A variable only so tests can
@@ -160,6 +169,23 @@ func (state *EvalState) validateValue(value MShellObject, target MShellParseItem
 	return ok, asChecked(err)
 }
 
+// tryValidate validates value against the target of a tryAs, as
+// validateValue, and when it does not conform says why.
+func (state *EvalState) tryValidate(value MShellObject, target MShellParseItem, cache *runtimeTarget) (bool, string, error) {
+	env := state.runtimeTypeEnv()
+	defer env.mu.Unlock()
+	env.resolveTarget(target, cache)
+	if cache.err != "" {
+		return false, "", errors.New(cache.err)
+	}
+	ok, err := env.validate(value, cache.t)
+	if err != nil || ok {
+		return ok, "", asChecked(err)
+	}
+	why, err := env.explainFailure(value, cache.t)
+	return false, why, asChecked(err)
+}
+
 // validateMember is a union member, the runtime kind it holds, and whether
 // it is the unknown type, which every value has.
 type validateMember struct {
@@ -179,7 +205,40 @@ type validator struct {
 	seen map[validatePair]struct{}
 	// kids holds a dict's values to check, with their types.
 	kids []validateTask
+	// kidKeys holds the key of each of kids, when explaining.
+	kidKeys []string
+
+	// The rest is used only to say why a value does not conform: the
+	// failed validation is run again with explain set, and the walk then
+	// records where each value sits, as a step from the container holding
+	// it, and the reason the first failing value fails.
+	explain bool
+	steps   []validateStep
+	// workAt holds the step of each value in work.
+	workAt []int32
+	// at is the step of the value being checked, next the step of the
+	// value child is given; -1 is the validated value itself.
+	at, next int32
+	// why is the reason of the first failure, and whyAt its step.
+	why   string
+	whyAt int32
 }
+
+// validateStep is where a value sits in the container holding it: at a
+// list index, under a dict key, or in a payload slot of an enum member.
+type validateStep struct {
+	parent int32
+	kind   uint8
+	key    string
+	index  int
+	arity  int
+}
+
+const (
+	stepIndex uint8 = iota
+	stepKey
+	stepPayload
+)
 
 type validateTask struct {
 	v MShellObject
@@ -204,7 +263,15 @@ func (env *runtimeTypes) validate(value MShellObject, t TypeId) (bool, error) {
 	v := &env.v
 	v.env, v.budget, v.work = env, validateBudget, v.work[:0]
 	ok, err := v.run(value, t)
-	// Keep small buffers for the next validation, not large ones.
+	v.reset()
+	if err != nil {
+		return false, errValidateBudget{t: FormatType(env.c.arena, env.c.names, t)}
+	}
+	return ok, nil
+}
+
+// reset keeps small buffers for the next validation, not large ones.
+func (v *validator) reset() {
 	if cap(v.work) > 1<<16 {
 		v.work = nil
 	}
@@ -213,19 +280,220 @@ func (env *runtimeTypes) validate(value MShellObject, t TypeId) (bool, error) {
 	} else {
 		clear(v.seen)
 	}
+}
+
+// explainFailure says why value does not conform to t, which a validation
+// found: where in the value the first failing part is, and why it fails.
+// The caller holds env.mu.
+func (env *runtimeTypes) explainFailure(value MShellObject, t TypeId) (string, error) {
+	v := &env.v
+	v.env, v.budget, v.work = env, validateBudget, v.work[:0]
+	v.explain, v.steps, v.workAt, v.at, v.next, v.why, v.whyAt = true, nil, nil, -1, -1, "", -1
+	defer func() {
+		v.explain, v.steps, v.workAt, v.kidKeys, v.why = false, nil, nil, nil, ""
+		v.reset()
+	}()
+	ok, err := v.run(value, t)
 	if err != nil {
-		return false, errValidateBudget{t: FormatType(env.c.arena, env.c.names, t)}
+		return "", errValidateBudget{t: FormatType(env.c.arena, env.c.names, t)}
 	}
-	return ok, nil
+	target := shortText(FormatType(env.c.arena, env.c.names, t), 60)
+	if ok || v.why == "" {
+		// Not expected: the same walk failed before.
+		return "not of type " + target, nil
+	}
+	if v.whyAt < 0 && strings.HasPrefix(v.why, "expected ") {
+		// The value itself has another type: the reason names the target.
+		return v.why, nil
+	}
+	var sb strings.Builder
+	sb.WriteString("not of type ")
+	sb.WriteString(target)
+	sb.WriteString(": ")
+	if v.whyAt >= 0 {
+		sb.WriteString("at ")
+		v.writePath(&sb, v.whyAt)
+		sb.WriteString(", ")
+	}
+	sb.WriteString(v.why)
+	return sb.String(), nil
+}
+
+// stepTo records the step of the next child from the value being checked,
+// when explaining. It is kept out of line, so validating without
+// explaining stays as fast as it can.
+//
+//go:noinline
+func (v *validator) stepTo(kind uint8, key string, index, arity int) {
+	v.steps = append(v.steps, validateStep{parent: v.at, kind: kind, key: key, index: index, arity: arity})
+	v.next = int32(len(v.steps) - 1)
+}
+
+// writePath writes the path to a step, as jq writes one: .a.b[0]["odd key"].
+// An enum payload is written (member), or (member i) when the member has
+// several.
+func (v *validator) writePath(sb *strings.Builder, at int32) {
+	var path []int32
+	for ; at >= 0; at = v.steps[at].parent {
+		path = append(path, at)
+	}
+	for i := len(path) - 1; i >= 0; i-- {
+		s := v.steps[path[i]]
+		switch s.kind {
+		case stepIndex:
+			sb.WriteString("[" + strconv.Itoa(s.index) + "]")
+		case stepKey:
+			if plainKey(s.key) {
+				sb.WriteString("." + s.key)
+			} else {
+				sb.WriteString("[" + strconv.Quote(s.key) + "]")
+			}
+		case stepPayload:
+			if s.arity > 1 {
+				sb.WriteString("(" + s.key + " " + strconv.Itoa(s.index) + ")")
+			} else {
+				sb.WriteString("(" + s.key + ")")
+			}
+		}
+	}
+}
+
+// plainKey reports whether a dict key can be written after a dot.
+func plainKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i, r := range key {
+		if r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (i > 0 && r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// fail records why the value at the current step fails, when explaining
+// and no failure was recorded yet, and reports false.
+//
+//go:noinline
+func (v *validator) fail(why string) bool {
+	if v.explain && v.why == "" {
+		v.why, v.whyAt = why, v.at
+	}
+	return false
+}
+
+// mismatch is the reason a value is not of the type t.
+func (v *validator) mismatch(value MShellObject, t TypeId) string {
+	c := v.env.c
+	want := FormatType(c.arena, c.names, t)
+	// Name what a named union stands for, when that is short.
+	body := t
+	for i := 0; i < 64 && c.arena.nodes[body].Kind == TKAlias; i++ {
+		body = c.arena.aliases[c.arena.nodes[body].A].Body
+	}
+	if n := c.arena.nodes[body]; n.Kind == TKUnion {
+		var sb strings.Builder
+		for i, m := range c.arena.unionMembers[n.Extra] {
+			if i > 0 {
+				sb.WriteString(" | ")
+			}
+			sb.WriteString(FormatType(c.arena, c.names, m))
+		}
+		if b := sb.String(); b != want && len(b) <= 60 {
+			want += " (" + b + ")"
+		}
+	}
+	return "expected " + shortText(want, 80) + ", found " + describeValue(value)
+}
+
+// describeValue names a value's kind, with the value itself when it is
+// short.
+func describeValue(value MShellObject) string {
+	switch o := value.(type) {
+	case MShellInt:
+		return "int " + o.ToString()
+	case MShellFloat:
+		f := o.ToString()
+		if !strings.ContainsAny(f, ".eEnN") {
+			f += ".0"
+		}
+		return "float " + f
+	case MShellBool:
+		return "bool " + o.ToString()
+	case MShellString:
+		return "str " + strconv.Quote(shortText(o.Content, 40))
+	case MShellNull:
+		return "null"
+	case MShellPath:
+		return "path " + strconv.Quote(shortText(o.Path, 40))
+	case *MShellList:
+		return "a list of " + plural(len(o.Items), "item")
+	case *MShellDict:
+		return "a dict with " + plural(len(o.Items), "key")
+	case *Maybe:
+		if o.obj == nil {
+			return "none"
+		}
+		return "just " + describeValue(o.obj)
+	case Maybe:
+		if o.obj == nil {
+			return "none"
+		}
+		return "just " + describeValue(o.obj)
+	case *MShellEnum:
+		return o.Member + " (" + o.EnumName + ")"
+	case MShellBinary:
+		return "binary"
+	case *MShellDateTime:
+		return "datetime"
+	case MShellRune:
+		return "rune"
+	case *MShellQuotation:
+		return "a quotation"
+	case *MShellGrid, *MShellGridView, *MShellGridRow:
+		return "a grid"
+	}
+	return value.TypeName()
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return strconv.Itoa(n) + " " + word + "s"
+}
+
+// shortText cuts s to at most n bytes, marking the cut.
+func shortText(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n - 3
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
 }
 
 // run checks a value, and everything pushed while checking it.
 func (v *validator) run(value MShellObject, t TypeId) (bool, error) {
 	v.work = append(v.work, validateTask{v: value, t: t})
+	if v.explain {
+		v.workAt = append(v.workAt, -1)
+	}
 	for len(v.work) > 0 {
 		task := v.work[len(v.work)-1]
 		v.work = v.work[:len(v.work)-1]
-		ok, err := v.visit(task.v, task.t)
+		var ok bool
+		var err error
+		if v.explain {
+			v.at = v.workAt[len(v.workAt)-1]
+			v.workAt = v.workAt[:len(v.workAt)-1]
+			ok, err = v.visitExplained(task.v, task.t)
+		} else {
+			ok, err = v.visit(task.v, task.t)
+		}
 		if err != nil || !ok {
 			v.work = v.work[:0]
 			return false, err
@@ -305,6 +573,9 @@ func (v *validator) visit(value MShellObject, t TypeId) (bool, error) {
 			}
 			elem := TypeId(n.A)
 			for i := len(l.Items) - 1; i >= 0; i-- {
+				if v.explain {
+					v.stepTo(stepIndex, "", i, 0)
+				}
 				if ok, err := v.child(l.Items[i], elem); err != nil || !ok {
 					return false, err
 				}
@@ -351,6 +622,16 @@ func (v *validator) visit(value MShellObject, t TypeId) (bool, error) {
 	}
 }
 
+// visitExplained is visit, recording a value not of the type as the reason
+// of the failure, when no other reason was recorded.
+func (v *validator) visitExplained(value MShellObject, t TypeId) (bool, error) {
+	ok, err := v.visit(value, t)
+	if !ok && err == nil {
+		v.fail(v.mismatch(value, t))
+	}
+	return ok, err
+}
+
 // plainList reports whether l has none of the redirects a command type
 // tracks: where stdout and stderr go. `<` and `&` change nothing a type says
 // (the checker types `[cat] "x" <` as `[str]`), so they are allowed.
@@ -382,11 +663,30 @@ func holdsContainers(value MShellObject) bool {
 // child checks an element: a value that may hold containers is pushed, any
 // other is checked now.
 func (v *validator) child(value MShellObject, t TypeId) (bool, error) {
+	if v.explain {
+		return v.childExplained(value, t)
+	}
 	if holdsContainers(value) {
 		v.work = append(v.work, validateTask{v: value, t: t})
 		return true, nil
 	}
 	return v.visit(value, t)
+}
+
+// childExplained is child when explaining: v.next is the element's step.
+//
+//go:noinline
+func (v *validator) childExplained(value MShellObject, t TypeId) (bool, error) {
+	if holdsContainers(value) {
+		v.work = append(v.work, validateTask{v: value, t: t})
+		v.workAt = append(v.workAt, v.next)
+		return true, nil
+	}
+	parent := v.at
+	v.at = v.next
+	ok, err := v.visitExplained(value, t)
+	v.at = parent
+	return ok, err
 }
 
 // smallContainer is the number of elements from which a container is
@@ -465,18 +765,22 @@ func (v *validator) firstMeeting(obj any, t TypeId) bool {
 func (v *validator) record(d *MShellDict, t TypeId, rec RecordType) (bool, error) {
 	names := v.env.c.names
 	v.kids = v.kids[:0]
+	if v.explain {
+		v.kidKeys = v.kidKeys[:0]
+	}
 	if rec.Rest.Status == FieldOpen {
 		// Only the declared fields are looked at.
 		for _, f := range rec.Fields {
-			x, ok := d.Items[names.Name(f.Name)]
+			name := names.Name(f.Name)
+			x, ok := d.Items[name]
 			switch f.Status {
 			case FieldRequired:
 				if !ok {
-					return false, nil
+					return v.fail("missing the field " + strconv.Quote(name)), nil
 				}
 			case FieldAbsent:
 				if ok {
-					return false, nil
+					return v.fail("the field " + strconv.Quote(name) + " is not allowed"), nil
 				}
 				continue
 			case FieldOpen:
@@ -484,6 +788,9 @@ func (v *validator) record(d *MShellDict, t TypeId, rec RecordType) (bool, error
 			}
 			if ok {
 				v.kids = append(v.kids, validateTask{v: x, t: f.Type})
+				if v.explain {
+					v.kidKeys = append(v.kidKeys, name)
+				}
 			}
 		}
 	} else {
@@ -494,24 +801,38 @@ func (v *validator) record(d *MShellDict, t TypeId, rec RecordType) (bool, error
 				required++
 			}
 		}
-		for key, x := range d.Items {
-			f := rec.Rest
-			if len(rec.Fields) > 0 {
-				if id, ok := names.Lookup(key); ok {
-					f = rec.FieldAt(id)
-				}
-			}
-			switch f.Status {
-			case FieldAbsent:
+		if v.explain {
+			if !v.explainKeys(d, rec, &required) {
 				return false, nil
-			case FieldOpen:
-				continue
-			case FieldRequired:
-				required--
 			}
-			v.kids = append(v.kids, validateTask{v: x, t: f.Type})
+		} else {
+			for key, x := range d.Items {
+				f := rec.Rest
+				if len(rec.Fields) > 0 {
+					if id, ok := names.Lookup(key); ok {
+						f = rec.FieldAt(id)
+					}
+				}
+				switch f.Status {
+				case FieldAbsent:
+					return false, nil
+				case FieldOpen:
+					continue
+				case FieldRequired:
+					required--
+				}
+				v.kids = append(v.kids, validateTask{v: x, t: f.Type})
+			}
 		}
 		if required > 0 {
+			if v.explain {
+				for _, f := range rec.Fields {
+					name := names.Name(f.Name)
+					if _, ok := d.Items[name]; f.Status == FieldRequired && !ok {
+						return v.fail("missing the field " + strconv.Quote(name)), nil
+					}
+				}
+			}
 			return false, nil
 		}
 	}
@@ -525,11 +846,45 @@ func (v *validator) record(d *MShellDict, t TypeId, rec RecordType) (bool, error
 	// child checks a value with no containers in place, which never comes
 	// back here, so kids is not overwritten while it is read.
 	for i := len(v.kids) - 1; i >= 0; i-- {
+		if v.explain {
+			v.stepTo(stepKey, v.kidKeys[i], 0, 0)
+		}
 		if ok, err := v.child(v.kids[i].v, v.kids[i].t); err != nil || !ok {
 			return false, err
 		}
 	}
 	return true, nil
+}
+
+// explainKeys is the loop of record over every key of d, when explaining:
+// it takes the keys in order, so the reason given is always the same, and
+// records the key of each value added to kids in kidKeys.
+func (v *validator) explainKeys(d *MShellDict, rec RecordType, required *int) bool {
+	names := v.env.c.names
+	keys := make([]string, 0, len(d.Items))
+	for key := range d.Items {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		f := rec.Rest
+		if len(rec.Fields) > 0 {
+			if id, ok := names.Lookup(key); ok {
+				f = rec.FieldAt(id)
+			}
+		}
+		switch f.Status {
+		case FieldAbsent:
+			return v.fail("the field " + strconv.Quote(key) + " is not allowed")
+		case FieldOpen:
+			continue
+		case FieldRequired:
+			*required--
+		}
+		v.kids = append(v.kids, validateTask{v: d.Items[key], t: f.Type})
+		v.kidKeys = append(v.kidKeys, key)
+	}
+	return true
 }
 
 func (v *validator) enum(e *MShellEnum, t TypeId, n TypeNode) (bool, error) {
@@ -552,6 +907,9 @@ func (v *validator) enum(e *MShellEnum, t TypeId, n TypeNode) (bool, error) {
 		pt := ctor.Payload[i]
 		if len(args) > 0 {
 			pt = c.rel.SubstParams(pt, args)
+		}
+		if v.explain {
+			v.stepTo(stepPayload, e.Member, i, len(e.Payload))
 		}
 		if ok, err := v.child(e.Payload[i], pt); err != nil || !ok {
 			return false, err

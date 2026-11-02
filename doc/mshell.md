@@ -802,7 +802,9 @@ The mark must match the body exactly: missing on an output that is new on every 
 
 ### Validating data
 
-`tryAs T` checks at run time that the value conforms to `T`, giving `just` the same value or `none`; it never copies.
+`tryAs T` checks at run time that the value conforms to `T`, giving `Result[T str]`: `ok` with the same value, or `err` with why it does not conform; it never copies.
+The reason gives the path to the first failing part and what was expected there, e.g. `not of type [Person]: at [1].age, expected int, found str "41"`.
+`?` stops the program with that reason.
 Every element, dict value and enum payload is checked; a written shape allows other keys; a value that contains itself conforms to a type it has.
 `T` cannot be a quotation type, an enum holding one, or a def's generic.
 A check over 67,108,864 (1 << 26) steps stops the program.
@@ -812,6 +814,10 @@ On a new value (`parseJson tryAs T ?`) any `T` is allowed; a stored value can on
 ```mshell
 type Person = {name: str, age: int}
 '[{"name": "Ada", "age": 36}]' parseJson tryAs [Person] ? (:age?) map sum wl
+$"{$HOME}/people.json" toPath parseJson tryAs [Person] match
+    ok people : @people len wl,
+    err why : @why wle,
+end
 ```
 
 ### Dicts

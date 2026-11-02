@@ -45,7 +45,7 @@ func strList(xs ...string) *MShellList {
 	return l
 }
 
-// tryAs gives `just` the value itself: validation never copies.
+// tryAs gives `ok` with the value itself: validation never copies.
 func TestTryAsKeepsTheValue(t *testing.T) {
 	file, err := parseMShellInput(`"[[1], [2, 3]]" parseJson tryAs [[int]]`, &TokenFile{"test"})
 	if err != nil {
@@ -60,9 +60,55 @@ func TestTryAsKeepsTheValue(t *testing.T) {
 		t.Fatalf("tryAs failed")
 	}
 	top, _ := stack.Pop()
-	m, ok := top.(*Maybe)
-	if !ok || m.obj != MShellObject(value) {
-		t.Fatalf("tryAs did not give just the same list: %#v", top)
+	r, ok := top.(*MShellEnum)
+	if !ok || r.EnumName != "Result" || r.Member != "ok" || r.Payload[0] != MShellObject(value) {
+		t.Fatalf("tryAs did not give ok with the same list: %#v", top)
+	}
+}
+
+// explainFor validates value against typ, with the declarations decls, and
+// returns why it does not conform.
+func explainFor(t *testing.T, decls string, value MShellObject, typ string) string {
+	t.Helper()
+	file, err := parseMShellInput(decls+"\n0 tryAs "+typ, &TokenFile{"test"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	node := file.Items[len(file.Items)-1].(*MShellTryAs)
+	state := &EvalState{}
+	if err := state.RegisterDeclarations(file.Items, file.Definitions); err != nil {
+		t.Fatal(err)
+	}
+	ok, why, err := state.tryValidate(value, node.Target, &node.resolved)
+	if err != nil || ok {
+		t.Fatalf("%s: ok %v, err %v", typ, ok, err)
+	}
+	return why
+}
+
+// A failed tryAs says where the first failing part is, also in a value that
+// contains itself or shares parts, and names the same part every time.
+func TestTryAsExplains(t *testing.T) {
+	self := NewList(0)
+	self.Items = []MShellObject{self, MShellInt{Value: 1}, MShellString{Content: "x"}}
+	if got, want := explainFor(t, "type T = [T | int]", self, "T"),
+		`not of type T: at [2], expected int | T, found str "x"`; got != want {
+		t.Fatalf("cycle:\n got %s\nwant %s", got, want)
+	}
+
+	// Two bad keys: the first in key order is named.
+	d := NewDict()
+	for _, k := range []string{"c", "a", "b"} {
+		d.Items[k] = MShellString{Content: k}
+	}
+	d.Items["b"] = MShellInt{Value: 1}
+	shared := NewList(0)
+	shared.Items = []MShellObject{d, d}
+	for i := 0; i < 20; i++ {
+		if got, want := explainFor(t, "", shared, "[{str: str}]"),
+			`not of type [{str: str}]: at [0].b, expected str, found int 1`; got != want {
+			t.Fatalf("keys:\n got %s\nwant %s", got, want)
+		}
 	}
 }
 

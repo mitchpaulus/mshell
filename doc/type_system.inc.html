@@ -411,18 +411,28 @@ The literal may hold stored values, such as a stored list of arguments (<code><s
 <p>
 <code><span class="mshellAS">as</span></code> does nothing at run time, so it cannot say what data from outside the script holds.
 <code><span class="mshellTRYAS">tryAs</span> <span class="mshellLITERAL">T</span></code> checks at run time that the value on top of the stack conforms to <code><span class="mshellLITERAL">T</span></code>.
-It replaces the value with <code><span class="mshellLITERAL">just</span></code> the same value when it does, and with <code><span class="mshellLITERAL">none</span></code> when it does not.
+It replaces the value with a <a href="data-types.html#data-type-result"><code><span class="mshellLITERAL">Result</span></code></a>:
+<code><span class="mshellLITERAL">ok</span></code> with the same value when it conforms,
+and <code><span class="mshellLITERAL">err</span></code> with a <code><span class="mshellSTR">str</span></code> saying why when it does not.
 The value is checked in place, not copied, and nothing about it changes.
 </p>
 
 <pre>
 <code><span class="mshellTYPE">type</span> <span class="mshellLITERAL">Person</span> <span class="mshellEQUALS">=</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span>
 
-<span class="mshellSINGLEQUOTESTRING">&#39;[{&#34;name&#34;: &#34;Ada&#34;, &#34;age&#34;: 36}]&#39;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellTRYAS">tryAs</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">Person</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
-    <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">people</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@people</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">age</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLITERAL">sum</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
-    <span class="mshellLITERAL">none</span> <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;not a list of people&#34;</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
-<span class="mshellEND">end</span><span class="mshellEOF"></span></code>
+<span class="mshellSINGLEQUOTESTRING">&#39;[{&#34;name&#34;: &#34;Ada&#34;, &#34;age&#34;: 36}, {&#34;name&#34;: &#34;Alan&#34;, &#34;age&#34;: &#34;41&#34;}]&#39;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellTRYAS">tryAs</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">Person</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">ok</span> <span class="mshellLITERAL">people</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@people</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">age</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLITERAL">sum</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">err</span> <span class="mshellLITERAL">why</span>   <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@why</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>   <span class="mshellLINECOMMENT"># not of type [Person]: at [1].age, expected int, found str &#34;41&#34;</span>
+<span class="mshellEND">end</span>
+<span class="mshellEOF"></span></code>
 </pre>
+
+<p>
+The reason names where in the value the check failed, written as a path like <code>.packages[1].name</code>,
+and what was expected there: a type, a missing field, or a field that is not allowed.
+<code><span class="mshellQUESTION">?</span></code> unwraps an <code><span class="mshellLITERAL">ok</span></code>, and stops the program with the reason on an <code><span class="mshellLITERAL">err</span></code>,
+so <code><span class="mshellLITERAL">parseJson</span> <span class="mshellTRYAS">tryAs</span> <span class="mshellLITERAL">T</span> <span class="mshellQUESTION">?</span></code> checks data and says what is wrong with it in one step.
+</p>
 
 <p>
 Every part of the value is checked: each element of a list, each value of a dictionary, each payload of an enum value.
@@ -433,7 +443,7 @@ A match arm can check a type too, with <a href="control-flow.html#control-flow-i
 
 <p>
 A quotation cannot be looked inside, so <code><span class="mshellLITERAL">T</span></code> cannot be a quotation type or an enum that holds one, and a def's generic is not known at run time.
-Checking a very large value stops with an error, not <code><span class="mshellLITERAL">none</span></code>, after 67,108,864 (1 &lt;&lt; 26) steps.
+Checking a very large value stops with an error, not <code><span class="mshellLITERAL">err</span></code>, after 67,108,864 (1 &lt;&lt; 26) steps.
 </p>
 
 <p>

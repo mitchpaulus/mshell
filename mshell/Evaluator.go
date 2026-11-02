@@ -1796,22 +1796,38 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 }
 
 // processTryAs runs `tryAs T`: it validates the top of the stack against T
-// in place and replaces it by `just` the same value, or `none`.
+// in place and replaces it by `ok` with the same value, or `err` with why
+// the value does not conform.
 func (state *EvalState) processTryAs(t *MShellTryAs, stack *MShellStack) *EvalResult {
 	value, err := stack.Pop()
 	if err != nil {
 		return state.mismatchPtr(fmt.Sprintf("%d:%d: 'tryAs' needs a value on the stack.\n", t.Tok.Line, t.Tok.Column))
 	}
-	conforms, err := state.validateValue(value, t.Target, &t.resolved)
+	conforms, why, err := state.tryValidate(value, t.Target, &t.resolved)
 	if err != nil {
 		return state.failErrPtr(err, fmt.Sprintf("%d:%d: 'tryAs %s': %s.\n", t.Tok.Line, t.Tok.Column, t.Target.DebugString(), err))
 	}
 	if conforms {
-		stack.Push(&Maybe{obj: value})
+		stack.Push(newResult(true, value))
 	} else {
-		stack.Push(&Maybe{obj: nil})
+		stack.Push(newResult(false, MShellString{Content: why}))
 	}
 	return nil
+}
+
+// newResult makes `v ok`, or `v err` when ok is false, in one allocation.
+func newResult(ok bool, v MShellObject) *MShellEnum {
+	r := &struct {
+		MShellEnum
+		one [1]MShellObject
+	}{}
+	r.one[0] = v
+	r.Payload = r.one[:]
+	r.EnumName, r.Member, r.MemberIndex = "Result", "ok", 0
+	if !ok {
+		r.Member, r.MemberIndex = "err", 1
+	}
+	return &r.MShellEnum
 }
 
 // processMatchBlock handles match...end blocks

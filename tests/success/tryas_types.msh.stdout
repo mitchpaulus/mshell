@@ -1,11 +1,13 @@
 4
-a friend's age is not an int
+not of type [Person]: at [0].friends[0].age, expected int, found str "4"
 2.5
 one
 1
 2
 2
-not shapes
+not of type [Shape]: at [0], expected Shape, found int 1
+expected Box[int], found a list of 1 item
+not of type [Box[int]]: at [1](box)[0], expected int, found str "x"
 int 5
 2 items
 x

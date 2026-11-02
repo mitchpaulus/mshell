@@ -29,8 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The enum's name is a match pattern for any of its members (`Shape s : ...`).
   Enums may have parameters (`enum Box[a] = box [a] | empty end`) and may refer to themselves.
   `str` gives `circle(2)`, `toJson` gives `{"circle": 2}`, and `=` compares the member and its payloads.
-- `tryAs T` checks at run time that a value conforms to the type `T`, and gives `just` the same value or `none`:
-  `"people.json" parseJson tryAs [Person] ?`.
+- `tryAs T` checks at run time that a value conforms to the type `T`, and gives a `Result[T str]`:
+  `ok` with the same value, or `err` with where and why the value does not conform,
+  such as `not of type [Person]: at [1].age, expected int, found str "41"`.
+  `"people.json" parseJson tryAs [Person] ?` stops with that message.
   Every element, dictionary value and enum payload is checked, in place, with no copy.
   The match pattern `is T name` does the same check in a match arm, and binds the value.
 - `del` removes a key from a dictionary: `{a: 1, b: 2} "a" del`. Nothing happens when the key is absent.
