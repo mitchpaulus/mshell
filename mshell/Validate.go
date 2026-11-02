@@ -43,10 +43,14 @@ import (
 // that stops the program, never a quiet `err`.
 //
 // Why a value does not conform is found by running the failed validation
-// again, recording where each value sits (explainFailure). Whether a value
-// conforms does not depend on the order of the walk, so the second walk
-// fails too; it takes dict keys in sorted order, so the same value always
-// gets the same reason. A validation that succeeds pays nothing for it.
+// again, keeping the path to the value being checked (explainFailure).
+// Whether a value conforms does not depend on the order of the walk, so the
+// second walk fails too. It takes list items and payloads in order and
+// dict keys in sorted order, so the same value always gets the same reason:
+// in each container, the values with no containers in them are checked
+// first, then the containers. A validation that succeeds pays nothing for
+// it, and explaining keeps only the path, so it needs memory for the depth
+// of the value, not its size.
 
 // validateBudget is the most steps one validation may take: one per value
 // and per alias or union looked through. A variable only so tests can
@@ -182,8 +186,7 @@ func (state *EvalState) tryValidate(value MShellObject, target MShellParseItem, 
 	if err != nil || ok {
 		return ok, "", asChecked(err)
 	}
-	why, err := env.explainFailure(value, cache.t)
-	return false, why, asChecked(err)
+	return false, env.explainFailure(value, cache.t), nil
 }
 
 // validateMember is a union member, the runtime kind it holds, and whether
@@ -205,39 +208,48 @@ type validator struct {
 	seen map[validatePair]struct{}
 	// kids holds a dict's values to check, with their types.
 	kids []validateTask
-	// kidKeys holds the key of each of kids, when explaining.
-	kidKeys []string
+	// kidKeys holds the key of each of kids, and keys a dict's keys to
+	// sort, when explaining.
+	kidKeys, keys []string
 
 	// The rest is used only to say why a value does not conform: the
 	// failed validation is run again with explain set, and the walk then
-	// records where each value sits, as a step from the container holding
-	// it, and the reason the first failing value fails.
+	// keeps the path to the value being checked, and the reason the first
+	// value found not to conform fails.
 	explain bool
-	steps   []validateStep
-	// workAt holds the step of each value in work.
-	workAt []int32
-	// at is the step of the value being checked, next the step of the
-	// value child is given; -1 is the validated value itself.
-	at, next int32
-	// why is the reason of the first failure, and whyAt its step.
-	why   string
-	whyAt int32
+	// workAt holds where each value in work sits in its container.
+	workAt []validateStep
+	// frames are the containers holding the value being checked, outermost
+	// first: the path to it. Each has the length of work before its values
+	// were pushed, so it is done once work is shorter.
+	frames []validateFrame
+	// inChild is set while child checks a value in place; next is where
+	// the value child is given sits.
+	inChild bool
+	next    validateStep
+	// why is the reason of the first failure, and whyPath where it is.
+	why, whyPath string
 }
 
 // validateStep is where a value sits in the container holding it: at a
 // list index, under a dict key, or in a payload slot of an enum member.
 type validateStep struct {
-	parent int32
-	kind   uint8
-	key    string
-	index  int
-	arity  int
+	kind  uint8
+	index int32
+	arity int32
+	key   string
+}
+
+type validateFrame struct {
+	base int
+	at   validateStep
 }
 
 const (
 	stepIndex uint8 = iota
 	stepKey
 	stepPayload
+	stepRoot
 )
 
 type validateTask struct {
@@ -283,77 +295,78 @@ func (v *validator) reset() {
 }
 
 // explainFailure says why value does not conform to t, which a validation
-// found: where in the value the first failing part is, and why it fails.
+// found: where in the value a failing part is, and why it fails.
 // The caller holds env.mu.
-func (env *runtimeTypes) explainFailure(value MShellObject, t TypeId) (string, error) {
+func (env *runtimeTypes) explainFailure(value MShellObject, t TypeId) string {
 	v := &env.v
 	v.env, v.budget, v.work = env, validateBudget, v.work[:0]
-	v.explain, v.steps, v.workAt, v.at, v.next, v.why, v.whyAt = true, nil, nil, -1, -1, "", -1
+	v.explain, v.workAt, v.frames, v.inChild, v.why, v.whyPath = true, v.workAt[:0], v.frames[:0], false, "", ""
 	defer func() {
-		v.explain, v.steps, v.workAt, v.kidKeys, v.why = false, nil, nil, nil, ""
+		v.explain, v.why, v.whyPath = false, "", ""
+		// The values are not kept alive by the buffers.
+		clear(v.workAt[:cap(v.workAt)])
+		clear(v.frames[:cap(v.frames)])
+		clear(v.kidKeys[:cap(v.kidKeys)])
+		clear(v.keys[:cap(v.keys)])
+		if cap(v.workAt) > 1<<16 {
+			v.workAt = nil
+		}
+		if cap(v.frames) > 1<<16 {
+			v.frames = nil
+		}
+		if cap(v.keys) > 1<<16 {
+			v.keys = nil
+		}
 		v.reset()
 	}()
 	ok, err := v.run(value, t)
-	if err != nil {
-		return "", errValidateBudget{t: FormatType(env.c.arena, env.c.names, t)}
-	}
 	target := shortText(FormatType(env.c.arena, env.c.names, t), 60)
-	if ok || v.why == "" {
-		// Not expected: the same walk failed before.
-		return "not of type " + target, nil
+	if err != nil || ok || v.why == "" {
+		// Not expected: the same value failed before. Explaining may run
+		// out of steps where validating did not, as it takes a dict's keys
+		// in another order; the value still does not conform.
+		return "not of type " + target
 	}
-	if v.whyAt < 0 && strings.HasPrefix(v.why, "expected ") {
+	if v.whyPath == "" && strings.HasPrefix(v.why, "expected ") {
 		// The value itself has another type: the reason names the target.
-		return v.why, nil
+		return v.why
 	}
 	var sb strings.Builder
 	sb.WriteString("not of type ")
 	sb.WriteString(target)
 	sb.WriteString(": ")
-	if v.whyAt >= 0 {
+	if v.whyPath != "" {
 		sb.WriteString("at ")
-		v.writePath(&sb, v.whyAt)
+		sb.WriteString(v.whyPath)
 		sb.WriteString(", ")
 	}
 	sb.WriteString(v.why)
-	return sb.String(), nil
+	return sb.String()
 }
 
-// stepTo records the step of the next child from the value being checked,
-// when explaining. It is kept out of line, so validating without
-// explaining stays as fast as it can.
-//
-//go:noinline
+// stepTo sets where the next child of the value being checked sits.
 func (v *validator) stepTo(kind uint8, key string, index, arity int) {
-	v.steps = append(v.steps, validateStep{parent: v.at, kind: kind, key: key, index: index, arity: arity})
-	v.next = int32(len(v.steps) - 1)
+	v.next = validateStep{kind: kind, key: key, index: int32(index), arity: int32(arity)}
 }
 
-// writePath writes the path to a step, as jq writes one: .a.b[0]["odd key"].
+// writeStep writes a step of a path, as jq writes one: .a.b[0]["odd key"].
 // An enum payload is written (member), or (member i) when the member has
 // several.
-func (v *validator) writePath(sb *strings.Builder, at int32) {
-	var path []int32
-	for ; at >= 0; at = v.steps[at].parent {
-		path = append(path, at)
-	}
-	for i := len(path) - 1; i >= 0; i-- {
-		s := v.steps[path[i]]
-		switch s.kind {
-		case stepIndex:
-			sb.WriteString("[" + strconv.Itoa(s.index) + "]")
-		case stepKey:
-			if plainKey(s.key) {
-				sb.WriteString("." + s.key)
-			} else {
-				sb.WriteString("[" + strconv.Quote(s.key) + "]")
-			}
-		case stepPayload:
-			if s.arity > 1 {
-				sb.WriteString("(" + s.key + " " + strconv.Itoa(s.index) + ")")
-			} else {
-				sb.WriteString("(" + s.key + ")")
-			}
+func writeStep(sb *strings.Builder, s validateStep) {
+	switch s.kind {
+	case stepIndex:
+		sb.WriteString("[" + strconv.Itoa(int(s.index)) + "]")
+	case stepKey:
+		if plainKey(s.key) {
+			sb.WriteString("." + s.key)
+		} else {
+			sb.WriteString("[" + strconv.Quote(s.key) + "]")
+		}
+	case stepPayload:
+		if s.arity > 1 {
+			sb.WriteString("(" + s.key + " " + strconv.Itoa(int(s.index)) + ")")
+		} else {
+			sb.WriteString("(" + s.key + ")")
 		}
 	}
 }
@@ -378,9 +391,41 @@ func plainKey(key string) bool {
 //go:noinline
 func (v *validator) fail(why string) bool {
 	if v.explain && v.why == "" {
-		v.why, v.whyAt = why, v.at
+		v.why, v.whyPath = why, v.path()
 	}
 	return false
+}
+
+// pathEnds is how many steps a path names at each end; the steps between
+// those of a longer path are written "...", so a deep value does not make
+// a long reason.
+const pathEnds = 16
+
+// path writes the path to the value being checked.
+func (v *validator) path() string {
+	// The first frame is the validated value itself.
+	frames := v.frames
+	if len(frames) > 0 {
+		frames = frames[1:]
+	}
+	n := len(frames)
+	if v.inChild {
+		n++
+	}
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		if n > 2*pathEnds && i == pathEnds {
+			sb.WriteString("...")
+			i = n - pathEnds - 1
+			continue
+		}
+		if i < len(frames) {
+			writeStep(&sb, frames[i].at)
+		} else {
+			writeStep(&sb, v.next)
+		}
+	}
+	return sb.String()
 }
 
 // mismatch is the reason a value is not of the type t.
@@ -480,7 +525,7 @@ func shortText(s string, n int) string {
 func (v *validator) run(value MShellObject, t TypeId) (bool, error) {
 	v.work = append(v.work, validateTask{v: value, t: t})
 	if v.explain {
-		v.workAt = append(v.workAt, -1)
+		v.workAt = append(v.workAt, validateStep{kind: stepRoot})
 	}
 	for len(v.work) > 0 {
 		task := v.work[len(v.work)-1]
@@ -488,8 +533,13 @@ func (v *validator) run(value MShellObject, t TypeId) (bool, error) {
 		var ok bool
 		var err error
 		if v.explain {
-			v.at = v.workAt[len(v.workAt)-1]
+			at := v.workAt[len(v.workAt)-1]
 			v.workAt = v.workAt[:len(v.workAt)-1]
+			n := len(v.frames)
+			for n > 0 && v.frames[n-1].base > len(v.work) {
+				n--
+			}
+			v.frames = append(v.frames[:n], validateFrame{base: len(v.work), at: at})
 			ok, err = v.visitExplained(task.v, task.t)
 		} else {
 			ok, err = v.visit(task.v, task.t)
@@ -572,14 +622,16 @@ func (v *validator) visit(value MShellObject, t TypeId) (bool, error) {
 				return true, nil
 			}
 			elem := TypeId(n.A)
-			for i := len(l.Items) - 1; i >= 0; i-- {
+			start := len(v.work)
+			for i, x := range l.Items {
 				if v.explain {
 					v.stepTo(stepIndex, "", i, 0)
 				}
-				if ok, err := v.child(l.Items[i], elem); err != nil || !ok {
+				if ok, err := v.child(x, elem); err != nil || !ok {
 					return false, err
 				}
 			}
+			v.takeInOrder(start)
 			return true, nil
 		case TKRecord:
 			d, ok := value.(*MShellDict)
@@ -626,10 +678,21 @@ func (v *validator) visit(value MShellObject, t TypeId) (bool, error) {
 // of the failure, when no other reason was recorded.
 func (v *validator) visitExplained(value MShellObject, t TypeId) (bool, error) {
 	ok, err := v.visit(value, t)
-	if !ok && err == nil {
+	if !ok && err == nil && v.why == "" {
 		v.fail(v.mismatch(value, t))
 	}
 	return ok, err
+}
+
+// takeInOrder reverses the values pushed since work had the length start,
+// so they are checked in the order they were pushed.
+func (v *validator) takeInOrder(start int) {
+	if len(v.work)-start > 1 {
+		slices.Reverse(v.work[start:])
+		if v.explain {
+			slices.Reverse(v.workAt[start:])
+		}
+	}
 }
 
 // plainList reports whether l has none of the redirects a command type
@@ -682,10 +745,9 @@ func (v *validator) childExplained(value MShellObject, t TypeId) (bool, error) {
 		v.workAt = append(v.workAt, v.next)
 		return true, nil
 	}
-	parent := v.at
-	v.at = v.next
+	v.inChild = true
 	ok, err := v.visitExplained(value, t)
-	v.at = parent
+	v.inChild = false
 	return ok, err
 }
 
@@ -845,14 +907,16 @@ func (v *validator) record(d *MShellDict, t TypeId, rec RecordType) (bool, error
 	}
 	// child checks a value with no containers in place, which never comes
 	// back here, so kids is not overwritten while it is read.
-	for i := len(v.kids) - 1; i >= 0; i-- {
+	start := len(v.work)
+	for i, k := range v.kids {
 		if v.explain {
 			v.stepTo(stepKey, v.kidKeys[i], 0, 0)
 		}
-		if ok, err := v.child(v.kids[i].v, v.kids[i].t); err != nil || !ok {
+		if ok, err := v.child(k.v, k.t); err != nil || !ok {
 			return false, err
 		}
 	}
+	v.takeInOrder(start)
 	return true, nil
 }
 
@@ -861,11 +925,12 @@ func (v *validator) record(d *MShellDict, t TypeId, rec RecordType) (bool, error
 // records the key of each value added to kids in kidKeys.
 func (v *validator) explainKeys(d *MShellDict, rec RecordType, required *int) bool {
 	names := v.env.c.names
-	keys := make([]string, 0, len(d.Items))
+	keys := v.keys[:0]
 	for key := range d.Items {
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
+	v.keys = keys
 	for _, key := range keys {
 		f := rec.Rest
 		if len(rec.Fields) > 0 {
@@ -903,7 +968,8 @@ func (v *validator) enum(e *MShellEnum, t TypeId, n TypeNode) (bool, error) {
 		return true, nil
 	}
 	args := c.arena.enumArgs[n.Extra]
-	for i := len(e.Payload) - 1; i >= 0; i-- {
+	start := len(v.work)
+	for i := range e.Payload {
 		pt := ctor.Payload[i]
 		if len(args) > 0 {
 			pt = c.rel.SubstParams(pt, args)
@@ -915,6 +981,7 @@ func (v *validator) enum(e *MShellEnum, t TypeId, n TypeNode) (bool, error) {
 			return false, err
 		}
 	}
+	v.takeInOrder(start)
 	return true, nil
 }
 

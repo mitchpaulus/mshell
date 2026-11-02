@@ -803,7 +803,8 @@ The mark must match the body exactly: missing on an output that is new on every 
 ### Validating data
 
 `tryAs T` checks at run time that the value conforms to `T`, giving `Result[T str]`: `ok` with the same value, or `err` with why it does not conform; it never copies.
-The reason gives the path to the first failing part and what was expected there, e.g. `not of type [Person]: at [1].age, expected int, found str "41"`.
+The reason gives the path to a failing part and what was expected there, e.g. `not of type [Person]: at [1].age, expected int, found str "41"`.
+When several parts fail, the same value always gets the same reason, but it need not name the earliest one.
 `?` stops the program with that reason.
 Every element, dict value and enum payload is checked; a written shape allows other keys; a value that contains itself conforms to a type it has.
 `T` cannot be a quotation type, an enum holding one, or a def's generic.
