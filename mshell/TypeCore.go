@@ -1911,6 +1911,10 @@ func (c *coreChecker) mayFit(sig *coreSig) bool {
 		if wk == TKPrim && got != want && got != TidBottom && want != TidUnknown {
 			return false
 		}
+		// Enums are nominal: a Maybe never fits a Result.
+		if wk == TKEnum && c.arena.nodes[got].A != c.arena.nodes[want].A {
+			return false
+		}
 	}
 	return true
 }

@@ -781,17 +781,30 @@ func tokenPos(t Token) string {
 // constructEnum runs a member's constructor: it takes the payload values
 // from the stack and pushes the enum value.
 func (state *EvalState) constructEnum(t *Token, info EnumMemberInfo, stack *MShellStack) *EvalResult {
-	var payload []MShellObject
-	if info.Arity > 0 {
-		if len(*stack) < info.Arity {
-			return state.mismatchPtr(fmt.Sprintf("%d:%d: '%s' takes %d value(s) from the stack.\n", t.Line, t.Column, t.Lexeme, info.Arity))
-		}
-		payload = make([]MShellObject, info.Arity)
+	if len(*stack) < info.Arity {
+		return state.mismatchPtr(fmt.Sprintf("%d:%d: '%s' takes %d value(s) from the stack.\n", t.Line, t.Column, t.Lexeme, info.Arity))
+	}
+	var e *MShellEnum
+	switch info.Arity {
+	case 0:
+		e = &MShellEnum{}
+	case 1:
+		// One allocation holds the value and its payload.
+		v := &struct {
+			MShellEnum
+			one [1]MShellObject
+		}{}
+		v.one[0], _ = stack.Pop()
+		v.Payload = v.one[:]
+		e = &v.MShellEnum
+	default:
+		e = &MShellEnum{Payload: make([]MShellObject, info.Arity)}
 		for i := info.Arity - 1; i >= 0; i-- {
-			payload[i], _ = stack.Pop()
+			e.Payload[i], _ = stack.Pop()
 		}
 	}
-	stack.Push(&MShellEnum{EnumName: info.EnumName, Member: t.Lexeme, MemberIndex: info.Ordinal, Payload: payload})
+	e.EnumName, e.Member, e.MemberIndex = info.EnumName, t.Lexeme, info.Ordinal
+	stack.Push(e)
 	return nil
 }
 
