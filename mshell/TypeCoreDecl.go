@@ -56,7 +56,17 @@ func (c *coreChecker) declareAll(items []MShellParseItem, defNames map[string]To
 		c.ctors = map[NameId]*coreCtor{}
 	}
 	if c.declared == nil {
-		c.declared = map[NameId]Token{}
+		// Sized for every name the items declare, so it does not grow.
+		n := 0
+		for _, item := range items {
+			switch d := item.(type) {
+			case *MShellTypeDecl:
+				n++
+			case *MShellEnumDecl:
+				n += 1 + len(d.Members)
+			}
+		}
+		c.declared = make(map[NameId]Token, n)
 	}
 	taken := c.declared
 	declErr := func(tok Token, hint string) {

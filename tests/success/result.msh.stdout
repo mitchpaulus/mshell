@@ -1,0 +1,13 @@
+5
+ok 5
+error: divide by zero
+error: overflow 5
+x
+ok(5)
+err(bad)
+{"ok": 5}
+{"err": "bad"}
+true
+false
+a result
+ok err

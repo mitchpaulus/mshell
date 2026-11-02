@@ -651,6 +651,23 @@ Two enum values are equal when they are the same member of the same enum with eq
 Member names are global.
 A member, an enum, a `type`, a definition and a builtin each need a name of their own.
 
+`Result` is a built-in enum for a value or the error that stopped it: `enum Result[a e] = ok a | err e end`.
+`?` unwraps an `ok` and fails on an `err`, with the error's `str` as the message.
+Because `ok` and `err` are words, quote them in a command list: `[echo 'ok']`.
+
+```mshell
+def safeDiv (int int -- Result[int str])
+    d! n!
+    @d 0 = if "divide by zero" err else @n @d / ok end
+end
+
+10 2 safeDiv ? str wl     # 5
+10 0 safeDiv match
+    ok v : @v str wl,
+    err e : $"error: {@e}" wl,
+end                       # error: divide by zero
+```
+
 ### Date/Times
 
 Date/times can be entered using a literal syntax, in ISO-8601 format.
@@ -785,7 +802,10 @@ The mark must match the body exactly: missing on an output that is new on every 
 
 ### Validating data
 
-`tryAs T` checks at run time that the value conforms to `T`, giving `just` the same value or `none`; it never copies.
+`tryAs T` checks at run time that the value conforms to `T`, giving `Result[T str]`: `ok` with the same value, or `err` with why it does not conform; it never copies.
+The reason gives the path to a failing part and what was expected there, e.g. `not of type [Person]: at [1].age, expected int, found str "41"`.
+When several parts fail, the same value always gets the same reason, but it need not name the earliest one.
+`?` stops the program with that reason.
 Every element, dict value and enum payload is checked; a written shape allows other keys; a value that contains itself conforms to a type it has.
 `T` cannot be a quotation type, an enum holding one, or a def's generic.
 A check over 67,108,864 (1 << 26) steps stops the program.
@@ -795,6 +815,10 @@ On a new value (`parseJson tryAs T ?`) any `T` is allowed; a stored value can on
 ```mshell
 type Person = {name: str, age: int}
 '[{"name": "Ada", "age": 36}]' parseJson tryAs [Person] ? (:age?) map sum wl
+$"{$HOME}/people.json" toPath parseJson tryAs [Person] match
+    ok people : @people len wl,
+    err why : @why wle,
+end
 ```
 
 ### Dicts
@@ -1691,7 +1715,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 - `isNone`: Check if Maybe is None. `(Maybe[a] -- bool)`
 - `just`: Wrap value in Maybe. `(a -- Maybe[a])`
 - `none`: Create a None Maybe. `( -- Maybe[a])`
-- `?`: If Maybe is None, fail immediately. If it is Just, unwrap and continue. `(Maybe[a] -- a)`
+- `?`: If Maybe is None, fail immediately. If it is Just, unwrap and continue. On a `Result`, `ok` unwraps and `err` fails with the error's `str` as the message. `(Maybe[a] -- a)` / `(Result[a e] -- a)`
 - `maybe`: Unwrap a Maybe, returning a default value if it is None. `(Maybe[a] a -- a)`
 - `bind`: This is a monadic bind operation. Allows for chaining operations on Maybe values with functions that themselves return Maybe values. `(Maybe[a] (a -- Maybe[b]) -- Maybe[b])`
 - `map`: Map a function over a Maybe value. If the Maybe is None, it returns None. If it is Just, it applies the function to the value. `(Maybe[a] (a -- b) -- Maybe[b])`

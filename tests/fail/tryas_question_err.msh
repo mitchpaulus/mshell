@@ -1,0 +1,4 @@
+# '?' on a failed tryAs stops with where and why the value does not conform.
+type Release = {tag: str, assets: [{name: str, size: int}]}
+"{\"tag\": \"v1\", \"assets\": [{\"name\": \"a.zip\", \"size\": 10}, {\"name\": \"b.zip\", \"size\": \"big\"}]}" parseJson tryAs Release ? drop
+"never" wl

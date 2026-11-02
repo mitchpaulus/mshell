@@ -1,6 +1,6 @@
 # `tryAs T` validates a value against T at run time, in place, and gives
-# `just` the same value, or `none`. Data from outside (parseJson) is new, so
-# it may be validated against any type.
+# `ok` with the same value, or `err` with why it does not conform. Data from
+# outside (parseJson) is new, so it may be validated against any type.
 
 type Manifest = {packages: [{name: str}]}
 type Cell = int | float | str | bool | null
@@ -8,60 +8,76 @@ type Config = {url: str, timeout?: float}
 
 # Conforming JSON gets the declared type; getters need no matching.
 "{\"packages\": [{\"name\": \"a\"}, {\"name\": \"b\"}]}" parseJson tryAs Manifest match
-    just m : @m :packages? (:name?) map ", " join wl,
-    none   : "no match" wl,
+    ok m  : @m :packages? (:name?) map ", " join wl,
+    err e : @e wl,
 end
 
-# A name that is a number does not conform.
-"{\"packages\": [{\"name\": 42}]}" parseJson tryAs Manifest match
-    just _ : "matched" wl,
-    none   : "rejected" wl,
+# A name that is a number does not conform; the err says where and why.
+"{\"packages\": [{\"name\": \"a\"}, {\"name\": 42}]}" parseJson tryAs Manifest match
+    ok _  : "matched" wl,
+    err e : @e wl,
 end
 
-# `?` unwraps, and stops the program on none.
+# A required key that is missing.
+"{\"packages\": [{\"title\": \"a\"}]}" parseJson tryAs Manifest match
+    ok _  : "matched" wl,
+    err e : @e wl,
+end
+
+# `?` unwraps, and stops the program on err.
 "{\"packages\": []}" parseJson tryAs Manifest ? :packages? len wl
 
 # Each element is validated against the union.
 "[1, 2.5, \"x\", true, null]" parseJson tryAs [Cell] match
-    just cs : @cs len wl,
-    none    : "cells bad" wl,
+    ok cs : @cs len wl,
+    err e : @e wl,
+end
+"[1, [2]]" parseJson tryAs [Cell] match
+    ok _  : "cells ok?" wl,
+    err e : @e wl,
 end
 
 # An optional key may be absent...
 "{\"url\": \"http://x\"}" parseJson tryAs Config match
-    just c : @c :url? wl,
-    none   : "cfg1 bad" wl,
+    ok c  : @c :url? wl,
+    err e : @e wl,
 end
 
 # ...but when present it must have the declared type.
 "{\"url\": \"http://x\", \"timeout\": \"soon\"}" parseJson tryAs Config match
-    just _ : "cfg2 matched" wl,
-    none   : "cfg2 rejected" wl,
+    ok _  : "cfg2 matched" wl,
+    err e : @e wl,
 end
 
 # A written shape type is open: other keys may be there.
 "{\"url\": \"x\", \"other\": 1}" parseJson tryAs Config match
-    just _ : "cfg3 ok" wl,
-    none   : "cfg3 bad" wl,
+    ok _  : "cfg3 ok" wl,
+    err e : @e wl,
 end
 
-# Every value of a dict is validated.
+# Every value of a dict is validated; a key that is not a plain name is
+# written quoted.
 "{\"a\": 1, \"b\": 2}" parseJson tryAs {str: int} match
-    just counts : @counts values sum wl,
-    none        : "counts bad" wl,
+    ok counts : @counts values sum wl,
+    err e     : @e wl,
+end
+"{\"a\": 1, \"b c\": \"2\"}" parseJson tryAs {str: int} match
+    ok _  : "counts ok?" wl,
+    err e : @e wl,
 end
 
 # A string is not a list.
 "\"x\"" parseJson tryAs [float] match
-    just _ : "?!" wl,
-    none   : "str is not list" wl,
+    ok _  : "?!" wl,
+    err e : @e wl,
 end
 
 # Integral JSON numbers are ints, others floats.
-"[1, 2.0]" parseJson tryAs [int] match just _ : "ints" wl, none : "not all ints" wl, end
+"[1, 2.0]" parseJson tryAs [int] match ok _ : "ints" wl, err e : @e wl, end
 
 # Values with no list or dict in them can be validated anywhere.
-`/tmp` tryAs path match just _ : "path ok" wl, none : "path bad" wl, end
-5 tryAs str match just _ : "five is a str?" wl, none : "five is not a str" wl, end
-1 just tryAs Maybe[int] match just _ : "maybe ok" wl, none : "maybe bad" wl, end
-none tryAs Maybe[int] match just _ : "none is a Maybe" wl, none : "hm" wl, end
+`/tmp` tryAs path match ok _ : "path ok" wl, err e : @e wl, end
+5 tryAs str match ok _ : "five is a str?" wl, err e : @e wl, end
+1 just tryAs Maybe[int] match ok _ : "maybe ok" wl, err e : @e wl, end
+none tryAs Maybe[int] match ok _ : "none is a Maybe" wl, err e : @e wl, end
+"x" just tryAs Maybe[int] match ok _ : "hm" wl, err e : @e wl, end

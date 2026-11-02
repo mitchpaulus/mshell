@@ -781,17 +781,30 @@ func tokenPos(t Token) string {
 // constructEnum runs a member's constructor: it takes the payload values
 // from the stack and pushes the enum value.
 func (state *EvalState) constructEnum(t *Token, info EnumMemberInfo, stack *MShellStack) *EvalResult {
-	var payload []MShellObject
-	if info.Arity > 0 {
-		if len(*stack) < info.Arity {
-			return state.mismatchPtr(fmt.Sprintf("%d:%d: '%s' takes %d value(s) from the stack.\n", t.Line, t.Column, t.Lexeme, info.Arity))
-		}
-		payload = make([]MShellObject, info.Arity)
+	if len(*stack) < info.Arity {
+		return state.mismatchPtr(fmt.Sprintf("%d:%d: '%s' takes %d value(s) from the stack.\n", t.Line, t.Column, t.Lexeme, info.Arity))
+	}
+	var e *MShellEnum
+	switch info.Arity {
+	case 0:
+		e = &MShellEnum{}
+	case 1:
+		// One allocation holds the value and its payload.
+		v := &struct {
+			MShellEnum
+			one [1]MShellObject
+		}{}
+		v.one[0], _ = stack.Pop()
+		v.Payload = v.one[:]
+		e = &v.MShellEnum
+	default:
+		e = &MShellEnum{Payload: make([]MShellObject, info.Arity)}
 		for i := info.Arity - 1; i >= 0; i-- {
-			payload[i], _ = stack.Pop()
+			e.Payload[i], _ = stack.Pop()
 		}
 	}
-	stack.Push(&MShellEnum{EnumName: info.EnumName, Member: t.Lexeme, MemberIndex: info.Ordinal, Payload: payload})
+	e.EnumName, e.Member, e.MemberIndex = info.EnumName, t.Lexeme, info.Ordinal
+	stack.Push(e)
 	return nil
 }
 
@@ -1783,22 +1796,38 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 }
 
 // processTryAs runs `tryAs T`: it validates the top of the stack against T
-// in place and replaces it by `just` the same value, or `none`.
+// in place and replaces it by `ok` with the same value, or `err` with why
+// the value does not conform.
 func (state *EvalState) processTryAs(t *MShellTryAs, stack *MShellStack) *EvalResult {
 	value, err := stack.Pop()
 	if err != nil {
 		return state.mismatchPtr(fmt.Sprintf("%d:%d: 'tryAs' needs a value on the stack.\n", t.Tok.Line, t.Tok.Column))
 	}
-	conforms, err := state.validateValue(value, t.Target, &t.resolved)
+	conforms, why, err := state.tryValidate(value, t.Target, &t.resolved)
 	if err != nil {
 		return state.failErrPtr(err, fmt.Sprintf("%d:%d: 'tryAs %s': %s.\n", t.Tok.Line, t.Tok.Column, t.Target.DebugString(), err))
 	}
 	if conforms {
-		stack.Push(&Maybe{obj: value})
+		stack.Push(newResult(true, value))
 	} else {
-		stack.Push(&Maybe{obj: nil})
+		stack.Push(newResult(false, MShellString{Content: why}))
 	}
 	return nil
+}
+
+// newResult makes `v ok`, or `v err` when ok is false, in one allocation.
+func newResult(ok bool, v MShellObject) *MShellEnum {
+	r := &struct {
+		MShellEnum
+		one [1]MShellObject
+	}{}
+	r.one[0] = v
+	r.Payload = r.one[:]
+	r.EnumName, r.Member, r.MemberIndex = "Result", "ok", 0
+	if !ok {
+		r.Member, r.MemberIndex = "err", 1
+	}
+	return &r.MShellEnum
 }
 
 // processMatchBlock handles match...end blocks
@@ -12624,6 +12653,16 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					} else {
 						stack.Push(maybe.obj) // Push the object inside the Maybe
 					}
+					return SimpleSuccess()
+				}
+
+				// '?' on a Result pushes the value of an ok, and fails on
+				// an err with the error's str as the message.
+				if result, ok := top.(*MShellEnum); ok && t.Type == QUESTION && result.EnumName == "Result" {
+					if result.Member == "err" {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: Failed on '?' with err: %s\n", t.Line, t.Column, result.Payload[0].ToString()))
+					}
+					stack.Push(result.Payload[0])
 					return SimpleSuccess()
 				}
 

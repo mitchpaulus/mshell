@@ -1,0 +1,30 @@
+enum DivError = divByZero | overflow int end
+
+def safeDiv (int int -- Result[int DivError])
+    d! n!
+    @d 0 = if divByZero err else @n @d / ok end
+end
+
+def show (Result[int DivError] -- str)
+    match
+        ok v : $"ok {@v str}",
+        err e : @e match
+            divByZero : "error: divide by zero",
+            overflow n : $"error: overflow {@n str}",
+        end,
+    end
+end
+
+10 2 safeDiv ? str wl
+10 2 safeDiv show wl
+10 0 safeDiv show wl
+5 overflow err show wl
+"x" ok ? wl
+5 ok str wl
+"bad" err str wl
+5 ok toJson wl
+"bad" err toJson wl
+5 ok 5 ok = str wl
+5 ok "5" err = str wl
+5 ok match Result r : "a result", end wl
+[echo 'ok' "err"] ;
