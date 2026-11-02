@@ -12627,6 +12627,16 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					return SimpleSuccess()
 				}
 
+				// '?' on a Result pushes the value of an ok, and fails on
+				// an err with the error's str as the message.
+				if result, ok := top.(*MShellEnum); ok && t.Type == QUESTION && result.EnumName == "Result" {
+					if result.Member == "err" {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: Failed on '?' with err: %s\n", t.Line, t.Column, result.Payload[0].ToString()))
+					}
+					stack.Push(result.Payload[0])
+					return SimpleSuccess()
+				}
+
 				// Switch on type
 				var result EvalResult
 				var exitCode int

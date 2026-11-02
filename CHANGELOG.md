@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Result`: a built-in enum for a value or the error that stopped it, `enum Result[a e] = ok a | err e end`.
+  `?` unwraps an `ok`, and fails on an `err` with the error's `str` as the message.
+  Since `ok` and `err` are now words, a bare `ok` or `err` in a command list must be quoted: `[echo 'ok']`.
 - `parseToml`: parse a TOML document from a string, binary, or file path. It gives a `Maybe[{Toml}]`, `none` for text that is not valid TOML. `Toml` is a new built-in type.
 - `ExcelCell`: a built-in type for a cell `parseExcel` gives, `str | float | bool | ExcelError`, so stored rows can be typed `[[ExcelCell]]`.
   An error cell is an `excelError` holding the error's text, such as `"#DIV/0!"`.

@@ -101,6 +101,9 @@ func TestPromptTablesCoverBuiltinEnums(t *testing.T) {
 		// Not a prompt enum; parseExcel makes its one member, which
 		// TestParseExcelBytes checks.
 		"ExcelError": nil,
+		// Not a prompt enum; '?' reads its members, which the tests in
+		// tests/success/result.msh and tests/fail/result_*.msh check.
+		"Result": nil,
 		// The abbreviation enums; parseAbbr reads their members, which
 		// TestAbbrBuiltins and TestAbbrExpansion use.
 		"AbbrMatch":     nil,
@@ -216,6 +219,7 @@ func TestPromptBuiltinsDocumented(t *testing.T) {
 	const (
 		userDocName = "doc/getting-started.inc.html"
 		funcDocName = "doc/functions.inc.html"
+		typeDocName = "doc/data-types.inc.html"
 	)
 	enumDocs := map[string]string{
 		"Base16Color":    userDocName,
@@ -225,6 +229,7 @@ func TestPromptBuiltinsDocumented(t *testing.T) {
 		"CursorShape":    userDocName,
 		"Cipher":         funcDocName,
 		"ExcelError":     funcDocName,
+		"Result":         typeDocName,
 		"AbbrMatch":      userDocName,
 		"AbbrPosition":   userDocName,
 		"AbbrExpansion":  userDocName,
@@ -240,7 +245,7 @@ func TestPromptBuiltinsDocumented(t *testing.T) {
 		"FmAction":       userDocName,
 	}
 	docs := map[string][]byte{}
-	for _, name := range []string{userDocName, funcDocName} {
+	for _, name := range []string{userDocName, funcDocName, typeDocName} {
 		doc, err := os.ReadFile("../" + name)
 		if err != nil {
 			t.Fatal(err)

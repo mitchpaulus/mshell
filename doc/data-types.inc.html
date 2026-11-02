@@ -17,6 +17,7 @@
     <li><a href="#data-type-maybe">Maybe</a></li>
     <li><a href="#data-type-null">Null</a></li>
     <li><a href="#data-type-enum">Enum</a></li>
+    <li><a href="#data-type-result">Result</a></li>
     <li><a href="#data-type-pipe">Pipe</a></li>
     <li><a href="#data-type-binary">Binary</a></li>
     <li><a href="#data-type-grid">Grid</a></li>
@@ -558,6 +559,50 @@ A type that uses a generic enum gives the arguments the same way: <code>Box[int]
 Two enum values are equal when they are the same member of the same enum, with equal payloads.
 Member names are global, and no name is used twice: a member, an enum, a <code>type</code>, a definition and a builtin each need a name of their own.
 </p>
+
+<h1 id="data-type-result">Result <a class="section-link" href="#data-type-result" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
+
+<p>
+<code>Result</code> is a built-in <a href="#data-type-enum">enum</a> for a value or the reason there is none.
+It is declared as:
+</p>
+
+<pre>
+<code><span class="mshellENUM">enum</span> <span class="mshellLITERAL">Result</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">a</span> <span class="mshellLITERAL">e</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">ok</span> <span class="mshellLITERAL">a</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">err</span> <span class="mshellLITERAL">e</span> <span class="mshellEND">end</span></code>
+</pre>
+
+<p>
+Where a <a href="#data-type-maybe"><code>Maybe</code></a> only says that a value is missing, an <code>err</code> carries the error.
+The error can be any type: a string, or an enum of your own that a <code>match</code> can take apart.
+</p>
+
+<p>
+<code>?</code> unwraps a Result as it does a Maybe.
+On an <code>ok</code> it leaves the value; on an <code>err</code> it fails, and the message is the <code>str</code> of the error.
+</p>
+
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">safeDiv</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEINT">int</span> <span class="mshellTYPEINT">int</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">Result</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellVARSTORE">d!</span> <span class="mshellVARSTORE">n!</span>
+    <span class="mshellVARRETRIEVE">@d</span> <span class="mshellINTEGER">0</span> <span class="mshellEQUALS">=</span> <span class="mshellIF">if</span> <span class="mshellSTRING">&#34;divide by zero&#34;</span> <span class="mshellLITERAL">err</span> <span class="mshellELSE">else</span> <span class="mshellVARRETRIEVE">@n</span> <span class="mshellVARRETRIEVE">@d</span> <span class="mshellLITERAL">/</span> <span class="mshellLITERAL">ok</span> <span class="mshellEND">end</span>
+<span class="mshellEND">end</span>
+
+<span class="mshellINTEGER">10</span> <span class="mshellINTEGER">2</span> <span class="mshellLITERAL">safeDiv</span> <span class="mshellQUESTION">?</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span>   <span class="mshellLINECOMMENT"># 5</span>
+<span class="mshellINTEGER">10</span> <span class="mshellINTEGER">0</span> <span class="mshellLITERAL">safeDiv</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">ok</span> <span class="mshellLITERAL">v</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@v</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">err</span> <span class="mshellLITERAL">e</span> <span class="mshellCOLON">:</span> <span class="mshellFORMATSTRINGSTART">$&#34;error: {</span><span class="mshellVARRETRIEVE">@e</span><span class="mshellFORMATSTRINGEND">}&#34;</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span>                     <span class="mshellLINECOMMENT"># error: divide by zero</span>
+<span class="mshellINTEGER">10</span> <span class="mshellINTEGER">0</span> <span class="mshellLITERAL">safeDiv</span> <span class="mshellQUESTION">?</span>          <span class="mshellLINECOMMENT"># fails: Failed on &#39;?&#39; with err: divide by zero</span></code>
+</pre>
+
+<p>
+<code>ok</code> and <code>err</code> are words, so a bare <code>ok</code> or <code>err</code> in a list literal makes a Result.
+Quote them to pass them to a command:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSINGLEQUOTESTRING">&#39;ok&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellEXECUTE">;</span>           <span class="mshellLINECOMMENT"># ok</span></code>
+</pre>
 
 <h1 id="data-type-pipe">Pipe <a class="section-link" href="#data-type-pipe" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 

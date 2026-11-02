@@ -1,0 +1,2 @@
+enum DivError = divByZero | overflow int end
+7 overflow err ?

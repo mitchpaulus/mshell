@@ -349,7 +349,8 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.regTok(POSITIONAL, "( -- str)")
 	// A line of stdin, and whether one was read.
 	b.regTok(READ, "( -- str bool)")
-	b.regTok(QUESTION, "(Maybe[a] -- a)")
+	// On a Result, an err fails at run time.
+	b.regTok(QUESTION, "(Maybe[a] -- a)", "(Result[a e] -- a)")
 	b.keeps(t.token(QUESTION))
 
 	// ----- Lists -----

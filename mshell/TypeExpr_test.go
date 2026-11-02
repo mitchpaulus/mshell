@@ -226,16 +226,16 @@ func TestTypeExprGridFamily(t *testing.T) {
 
 func TestTypeExprUserDeclaredType(t *testing.T) {
 	c := newCheckerForTypeExpr(t)
-	file, err := NewMShellParser(NewLexer("type Result = int | str", nil)).ParseFile()
+	file, err := NewMShellParser(NewLexer("type Outcome = int | str", nil)).ParseFile()
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.declareAll(file.Items, map[string]Token{})
-	declared, ok := c.res.aliases[c.names.Intern("Result")]
+	declared, ok := c.res.aliases[c.names.Intern("Outcome")]
 	if !ok || len(c.errs) > 0 {
-		t.Fatalf("declaring Result failed: %+v", c.errs)
+		t.Fatalf("declaring Outcome failed: %+v", c.errs)
 	}
-	got, errs := parseTypeExprSrc(t, c, "Result")
+	got, errs := parseTypeExprSrc(t, c, "Outcome")
 	if len(errs) != 0 {
 		t.Fatalf("errs %+v", errs)
 	}
