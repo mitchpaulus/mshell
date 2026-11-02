@@ -219,6 +219,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `msh completions fish` completes a script file as the first word, offers `--type-check-only` and `fm`, completes directories after `fm` and bin names after `bin remove` and `bin debug`,
+  and no longer repeats subcommands or offers files where they don't belong.
+  The bash, nushell and elvish completions also offer `--type-check-only` and `fm`.
 - The file manager's rename and search lines take any character, such as `é`, Delete in the rename line deletes instead of typing `~`, and Up or Down no longer closes the search line.
 - Binary data works with `len` and `+`, and takes negative indexes and slices (`-16:`) as strings do.
 - Pressing TAB to complete a command's arguments no longer changes the interactive shell's variables: completion definitions run in a scope of their own.
