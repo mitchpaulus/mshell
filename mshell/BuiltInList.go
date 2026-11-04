@@ -156,6 +156,7 @@ var BuiltInList = map[string]struct{}{
 	"nullDevice": {},
 	"numFmt": {},
 	"or": {},
+	"orElse": {},
 	"outerJoin": {},
 	"over": {},
 	"parseCsv": {},

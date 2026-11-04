@@ -11633,6 +11633,67 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						}
 						stack.Push(mapResultMaybe)
 					}
+				case "orElse":
+					// A just or an ok is given back as is. On a none the
+					// quote runs with nothing given to it; on an err it gets
+					// the error. Either way it runs on the current stack and
+					// its result is the result.
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.TypeMismatch(err.Error())
+					}
+
+					fn, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The first parameter in 'orElse' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					var isMaybe bool
+					switch v := obj2.(type) {
+					case *Maybe:
+						isMaybe = true
+						if v.obj != nil {
+							stack.Push(v)
+							return SimpleSuccess()
+						}
+					case *MShellEnum:
+						if v.EnumName != "Result" {
+							return state.TypeMismatch(fmt.Sprintf("%d:%d: The second parameter in 'orElse' is expected to be a Maybe or a Result, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+						}
+						if v.Member == "ok" {
+							stack.Push(v)
+							return SimpleSuccess()
+						}
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The second parameter in 'orElse' is expected to be a Maybe or a Result, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					// A none or an err. The quote must leave one value
+					// more than the stack has now: for an err, it is
+					// given the error and must replace it.
+					wantLen := len(*stack) + 1
+					if !isMaybe {
+						stack.Push(obj2.(*MShellEnum).Payload[0])
+					}
+					result, err := state.EvaluateQuote(fn, stack, context, definitions)
+					if err != nil {
+						return state.CheckedFailure(err.Error())
+					}
+					if result.ShouldPassResultUpStack() {
+						return result
+					}
+					if len(*stack) != wantLen {
+						return state.TypeMismatch(quoteLeftMessage(t, "orElse", len(*stack)-wantLen+1))
+					}
+					alt, _ := stack.Pop()
+					if isMaybe {
+						if _, ok := alt.(*Maybe); !ok {
+							return state.TypeMismatch(fmt.Sprintf("%d:%d: The function in 'orElse' did not return a Maybe, found a %s (%s).\n", t.Line, t.Column, alt.TypeName(), alt.DebugString()))
+						}
+					} else if r, ok := alt.(*MShellEnum); !ok || r.EnumName != "Result" {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The function in 'orElse' did not return a Result, found a %s (%s).\n", t.Line, t.Column, alt.TypeName(), alt.DebugString()))
+					}
+					stack.Push(alt)
 				case "md5":
 					// Calculate the MD5 hash of a string
 					obj, err := stack.Pop()

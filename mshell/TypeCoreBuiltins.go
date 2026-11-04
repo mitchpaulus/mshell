@@ -443,7 +443,13 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// These run their quote on the current stack.
 	b.reg("bind", "(Maybe[a] (a -- Maybe[b]) -- Maybe[b])")
 	b.reg("map2", "(Maybe[a] Maybe[b] (a b -- c) -- Maybe[c])")
-	for _, name := range []string{"bind", "map2"} {
+	// orElse gives a just or an ok back; on a none or an err it gives what
+	// the quote returns. On an err the quote gets the error.
+	b.reg("orElse",
+		"(Maybe[a] ( -- Maybe[a]) -- Maybe[a])",
+		"(Result[a e] (e -- Result[a f]) -- Result[a f])",
+	)
+	for _, name := range []string{"bind", "map2", "orElse"} {
 		sigs := t.name(res.names.Intern(name))
 		for i := range sigs {
 			sigs[i].current = true

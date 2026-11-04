@@ -371,6 +371,9 @@ $MY_ENV_VAR? if "MY_ENV_VAR exists" else "MY_ENV_VAR does not exist" end wl
 # Reading a variable that may be missing
 "EDITOR" getEnv "vim" maybe wl
 
+# Trying several variables in order
+"VISUAL" getEnv ("EDITOR" getEnv) orElse "vim" maybe wl
+
 # Removing an environment variable
 "MSHELL_VAR" unsetenv
 
@@ -653,6 +656,7 @@ A member, an enum, a `type`, a definition and a builtin each need a name of thei
 
 `Result` is a built-in enum for a value or the error that stopped it: `enum Result[a e] = ok a | err e end`.
 `?` unwraps an `ok` and fails on an `err`, with the error's `str` as the message.
+`orElse` gives an `ok` back as is, and on an `err` runs a quotation on the error that returns a new `Result`.
 `httpGet`, `httpPost`, `parseToml`, `toDt`, `fileSize`, `modTime`, `evalSymLinks` and `linkCount` give `Result[T str]`, with why they failed in the `err`.
 Because `ok` and `err` are words, quote them in a command list: `[echo 'ok']`.
 
@@ -845,7 +849,7 @@ A literal followed by `as` and a quotation type is checked against that type, so
 A union with a quotation member, as a parameter or after `as`, checks a literal against that member: `(:a?)` given to an `int | ({a: int} -- int)` parameter.
 `x` needs the quotation's arity known.
 `break` and `continue` are allowed only in a `loop` body and in quotation literals given to `each`, `map` and similar words inside one.
-`map` on a Maybe, `bind` and `map2` run the quotation on the current stack, so a `break` there leaves the loop with what the quotation pushed so far, which must match the loop's stack.
+`map` on a Maybe, `bind`, `map2` and `orElse` run the quotation on the current stack, so a `break` there leaves the loop with what the quotation pushed so far, which must match the loop's stack.
 
 ### Control flow and variables
 
@@ -1752,6 +1756,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 - `bind`: This is a monadic bind operation. Allows for chaining operations on Maybe values with functions that themselves return Maybe values. `(Maybe[a] (a -- Maybe[b]) -- Maybe[b])`
 - `map`: Map a function over a Maybe value. If the Maybe is None, it returns None. If it is Just, it applies the function to the value. `(Maybe[a] (a -- b) -- Maybe[b])`
 - `map2`: Map a binary function over a pair of Maybe values. Returns None if either input is None, otherwise applies the function to both inner values. `(Maybe[a] Maybe[b] (a b -- c) -- Maybe[c])`
+- `orElse`: Give back a `just` or `ok` as is. On `none`, run the quotation and give what it returns; on an `err`, run the quotation on the error and give what it returns (the error type may change). The quotation only runs when needed. `(Maybe[a] (-- Maybe[a]) -- Maybe[a])` / `(Result[a e] (e -- Result[a f]) -- Result[a f])`
 - `whenJust`: Run a quotation on the inner value for its side effects if the Maybe is Just; does nothing on None. `(Maybe[a] (a -- ) -- )`
 
 ## Null
