@@ -1,0 +1,4 @@
+{'k': 1} as {str: int} match
+    { 'k': [inner] } : ,
+    _ : ,
+end

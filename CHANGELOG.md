@@ -114,9 +114,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bindingAdd`, `bindingErase` and `bindingList` manage them.
   - `fmBindingAdd`, `fmBindingErase` and `fmBindingList` manage the file manager's.
   - `editInEditor` edits the line in `$EDITOR`, for `editRunOps`.
+- List and dict patterns in `match` and `=>` can test literal values and nest.
+  A position, or a dict value, can be a quoted string, number, bool, path, rune, `none`, `null`,
+  an enum member without payload values, or another list or dict pattern:
+  `['cp' from to]`, `[...rest '--help']`, `[["num" a] ["op" "+"] ["num" b]]`, `{ 'cmd': 'move', 'to': [x y] }`.
 
 ### Changed
 
+- In a list or dict pattern, `none`, `null`, and enum members without payload values now test the element instead of binding a name with that spelling.
+  A bare word starting with `-` is an error; quote it to match the string (`'-h'`).
 - `httpGet`, `httpPost`, `toDt`, `fileSize`, `modTime`, `evalSymLinks` and `linkCount` give a `Result[T str]` instead of a `Maybe[T]`.
   An `err` says why there is no value, such as the connection error, the reason a date did not parse, or `stat foo: permission denied`,
   and `?` fails with that message.

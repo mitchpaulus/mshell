@@ -1113,7 +1113,8 @@ Use `_` to discard one list element or a named dictionary value.
 In list patterns, use `..._` to accept and discard zero or more elements.
 Each binding name may appear only once in a structural pattern.
 List patterns are limited to 256 positions, and dictionary patterns are limited to 256 entries.
-Value, type, and OR tests remain part of normal `match` syntax.
+Its list and dictionary patterns may test literal values and nest, as in `match`: `args => ['run' file]`.
+Type and OR tests remain part of normal `match` syntax.
 
 ### Wildcard
 
@@ -1264,12 +1265,42 @@ The spread binding is a new list, so changing it does not change the matched lis
 end wl # Output: 1 | [2 3 4] | 5
 ```
 
+A position can also be a literal value the element must equal:
+a quoted string, a number, `true`, `false`, a path, a rune, `none`, or `null`.
+
+```mshell
+$args match
+    ['cp' from to]     : $"copy {@from} to {@to}",
+    ['rm' ...files]    : $"remove {@files len str} files",
+    [...rest '--help'] : "help",
+    _                  : "unknown command",
+end wl
+```
+
+A bare word in a pattern is a name, though it is a string in a list literal: `[GET path]` matches any two element list, so write `['GET' path]`.
+A bare word starting with `-` (`-h`) is an error; quote it.
+An enum member without payload values tests the element (`[lparen inner rparen]`); a member with payload values cannot be matched in a position, so bind the element and match it on its own.
+
+A position can be a nested list or dict pattern, which matches the element there:
+
+```mshell
+[["num" 1] ["op" "+"] ["num" 2]] match
+    [["num" a] ["op" "+"] ["num" b]] : $"{@a} plus {@b}",
+    _                                : "no parse",
+end wl # Output: 1 plus 2
+```
+
+A name may appear only once in a pattern, nested patterns included.
+The type checker rejects a literal, member, or nested pattern that can never match the elements' type (`'GET'` in an `[int]`).
+An arm that tests what is in a position does not cover its lengths for exhaustiveness, so such a match usually needs a `_` arm.
+
 ### Dict Destructuring
 
 A dict pattern `{ 'key': v }` matches a dict that contains the given keys,
 binding their values to the given names.
 Use `_` in place of a binding name to require a key without binding its value.
 Dictionary patterns permit extra keys, so they have no spread binding.
+The value for a key may also be a literal or a nested pattern: `{ 'cmd': 'move', 'to': [x y] }`.
 
 ```mshell
 person match

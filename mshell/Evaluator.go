@@ -1,7 +1,6 @@
 package main
 
 import (
-	"maps"
 	"archive/zip"
 	"bufio"
 	"bytes"
@@ -475,6 +474,10 @@ func groupIntPart(intPart string, sep string, grouping []int, hasSep bool, hasGr
 type EvalState struct {
 	PositionalArgs []string
 	LoopDepth      int
+
+	// patternBinds holds the names a list or dict pattern binds until the
+	// whole pattern has matched. It is kept to reuse its storage.
+	patternBinds []patternBind
 
 	StopOnError           bool
 	CallStack             CallStack
@@ -1842,7 +1845,7 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 	}
 
 	for _, arm := range matchBlock.Arms {
-		matched, bindings, result := state.matchPattern(arm.Pattern, subject, startToken, frame.Context.Variables)
+		matched, result := state.matchPattern(arm.Pattern, arm.RepeatsWord, subject, startToken, frame.Context.Variables)
 		if !result.Success {
 			return nilIfNothingToDo(result)
 		}
@@ -1850,7 +1853,6 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 			if arm.Consume {
 				stack.Pop()
 			}
-			maps.Copy(frame.Context.Variables, bindings)
 			state.pushBodyFrame(arm.Body, CallStackItem{MShellParseItem: matchBlock, Name: "match", CallStackType: CALLSTACKMATCH})
 			return nil
 		}
@@ -1873,30 +1875,29 @@ func (state *EvalState) emptyMatchSubjectFailure(matchBlock *MShellParseMatchBlo
 }
 
 // matchPattern checks if a subject matches a pattern (list of parse items).
-// Returns (matched bool, bindings map, result EvalResult).
-// Patterns that know they match before binding anything write their names
-// straight into vars; list and dict patterns can fail part way through, so
-// they return their names in the bindings map instead.
-func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token, vars map[string]MShellObject) (bool, map[string]MShellObject, EvalResult) {
+// On a match, the names the pattern binds are set in vars. A list or dict
+// pattern can fail part way through, so it sets them only once all of it
+// has matched.
+func (state *EvalState) matchPattern(pattern []MShellParseItem, repeatsWord bool, subject MShellObject, startToken Token, vars map[string]MShellObject) (bool, EvalResult) {
 	// Only a word that is not a pattern word can name an enum or a member.
 	// Checking first keeps other patterns from paying for the call.
 	if first, ok := pattern[0].(*Token); ok && first.Type == LITERAL && !isPatternWord(first.Lexeme) {
 		if handled, matched, result := state.matchEnumPattern(pattern, subject, vars); handled {
-			return matched, nil, result
+			return matched, result
 		}
 	}
 	if is, ok := pattern[0].(*MShellIsPattern); ok && len(pattern) == 1 {
 		conforms, err := state.validateValue(subject, is.Target, &is.resolved)
 		if err != nil {
-			return false, nil, state.failErr(err, fmt.Sprintf("%d:%d: 'is %s': %s.\n", is.IsTok.Line, is.IsTok.Column, is.Target.DebugString(), err))
+			return false, state.failErr(err, fmt.Sprintf("%d:%d: 'is %s': %s.\n", is.IsTok.Line, is.IsTok.Column, is.Target.DebugString(), err))
 		}
 		if !conforms {
-			return false, nil, SimpleSuccess()
+			return false, SimpleSuccess()
 		}
 		if is.Binding.Lexeme != "_" {
 			vars[is.Binding.Lexeme] = subject
 		}
-		return true, nil, SimpleSuccess()
+		return true, SimpleSuccess()
 	}
 	// Handle multi-token patterns (e.g., "just v" for maybe destructuring,
 	// or "<typekeyword> name" for type-test binding).
@@ -1917,33 +1918,33 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 					ok = true
 				}
 				if !ok || maybeVal.IsNone() {
-					return false, nil, SimpleSuccess()
+					return false, SimpleSuccess()
 				}
 				if second.Lexeme != "_" {
 					vars[second.Lexeme] = maybeVal.obj
 				}
-				return true, nil, SimpleSuccess()
+				return true, SimpleSuccess()
 			}
 			// `<typekeyword> name`: match on the type, then bind the
 			// matched value to name.
 			if isTypeKeywordToken(*first) {
 				matched, result := state.matchTokenPattern(*first, subject)
 				if !result.Success {
-					return false, nil, result
+					return false, result
 				}
 				if !matched {
-					return false, nil, SimpleSuccess()
+					return false, SimpleSuccess()
 				}
 				if second.Lexeme != "_" {
 					vars[second.Lexeme] = subject
 				}
-				return true, nil, SimpleSuccess()
+				return true, SimpleSuccess()
 			}
 		}
 	}
 
 	if len(pattern) != 1 {
-		return false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: Match arm pattern must be a single item, 'just <name>', '<type> <name>', or multiple same-kind literals (OR). %s\n", startToken.Line, startToken.Column, matchPatternFormsHint))
+		return false, state.TypeMismatch(fmt.Sprintf("%d:%d: Match arm pattern must be a single item, 'just <name>', '<type> <name>', or multiple same-kind literals (OR). %s\n", startToken.Line, startToken.Column, matchPatternFormsHint))
 	}
 
 	patternItem := pattern[0]
@@ -1951,25 +1952,34 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 	switch p := patternItem.(type) {
 	case *Token:
 		matched, result := state.matchTokenPattern(*p, subject)
-		return matched, nil, result
+		return matched, result
 	case *MShellParseOrPattern:
 		// OR alternatives: match if the subject equals any literal.
 		for _, tok := range p.Tokens {
 			matched, result := state.matchTokenPattern(tok, subject)
 			if !result.Success {
-				return false, nil, result
+				return false, result
 			}
 			if matched {
-				return true, nil, SimpleSuccess()
+				return true, SimpleSuccess()
 			}
 		}
-		return false, nil, SimpleSuccess()
-	case *MShellParseList:
-		return state.matchListPattern(p, subject)
-	case *MShellParseDict:
-		return state.matchDictPattern(p, subject, startToken)
+		return false, SimpleSuccess()
+	case *MShellParseList, *MShellParseDict:
+		// A nested pattern can match and bind names before a later
+		// position fails, so the names are only set once all of it matches.
+		binds := state.patternBinds[:0]
+		matched, result := state.matchInnerPattern(p, subject, &binds, repeatsWord)
+		if result.Success && matched {
+			for _, b := range binds {
+				vars[b.name] = b.value
+			}
+		}
+		clear(binds)
+		state.patternBinds = binds[:0]
+		return matched && result.Success, result
 	default:
-		return false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: Unsupported pattern type: %T\n", startToken.Line, startToken.Column, patternItem))
+		return false, state.TypeMismatch(fmt.Sprintf("%d:%d: Unsupported pattern type: %T\n", startToken.Line, startToken.Column, patternItem))
 	}
 }
 
@@ -2127,114 +2137,126 @@ func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, 
 	}
 }
 
-// matchListPattern matches a list destructuring pattern against a subject.
-func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShellObject) (bool, map[string]MShellObject, EvalResult) {
-	list, ok := subject.(*MShellList)
-	if !ok {
-		return false, nil, SimpleSuccess()
-	}
-
-	// Check for spread pattern
-	spreadIndex := -1
-	for i, item := range pattern.Items {
-		if tok, ok := item.(*Token); ok && tok.Type == LITERAL && len(tok.Lexeme) > 3 && tok.Lexeme[:3] == "..." {
-			spreadIndex = i
-			break
-		}
-	}
-
-	if spreadIndex >= 0 {
-		// Pattern with spread: [a ...rest] or [a b ...rest]
-		beforeCount := spreadIndex
-		afterCount := len(pattern.Items) - spreadIndex - 1
-		minRequired := beforeCount + afterCount
-
-		if len(list.Items) < minRequired {
-			return false, nil, SimpleSuccess()
-		}
-
-		bindings := make(map[string]MShellObject, len(pattern.Items))
-		// Bind elements before spread
-		for i := range beforeCount {
-			tok, ok := pattern.Items[i].(*Token)
-			if !ok || tok.Type != LITERAL {
-				return false, nil, state.TypeMismatch("List pattern element must be a binding name, '_', or '...rest'.\n")
-			}
-			if tok.Type == LITERAL && tok.Lexeme != "_" {
-				bindings[tok.Lexeme] = list.Items[i]
-			}
-		}
-
-		// Bind spread as a new list with its own storage, like `skip`:
-		// no two lists share a backing array, so setAt, del and append
-		// on the rest never change the source.
-		spreadTok := pattern.Items[spreadIndex].(*Token)
-		spreadName := spreadTok.Lexeme[3:] // Remove "..."
-		if spreadName != "_" {
-			end := len(list.Items) - afterCount
-			bindings[spreadName] = &MShellList{Items: slices.Clone(list.Items[beforeCount:end])}
-		}
-
-		// Bind elements after spread
-		for i := range afterCount {
-			tok, ok := pattern.Items[spreadIndex+1+i].(*Token)
-			if !ok || tok.Type != LITERAL {
-				return false, nil, state.TypeMismatch("List pattern element must be a binding name, '_', or '...rest'.\n")
-			}
-			if tok.Type == LITERAL && tok.Lexeme != "_" {
-				bindings[tok.Lexeme] = list.Items[len(list.Items)-afterCount+i]
-			}
-		}
-
-		return true, bindings, SimpleSuccess()
-	}
-
-	// Exact match: [a b c] must match length exactly
-	if len(list.Items) != len(pattern.Items) {
-		return false, nil, SimpleSuccess()
-	}
-
-	bindings := make(map[string]MShellObject, len(pattern.Items))
-	for i, item := range pattern.Items {
-		tok, ok := item.(*Token)
-		if !ok || tok.Type != LITERAL {
-			return false, nil, state.TypeMismatch("List pattern element must be a binding name, '_', or '...rest'.\n")
-		}
-		if tok.Type == LITERAL && tok.Lexeme != "_" {
-			bindings[tok.Lexeme] = list.Items[i]
-		}
-	}
-
-	return true, bindings, SimpleSuccess()
+// patternBind is a name a list or dict pattern binds, and its value.
+type patternBind struct {
+	name  string
+	value MShellObject
 }
 
-// matchDictPattern matches a dict destructuring pattern against a subject.
-func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
-	dict, ok := subject.(*MShellDict)
+// matchInnerPattern matches a list or dict pattern, or one position of one,
+// against value. The names it binds are added to binds.
+func (state *EvalState) matchInnerPattern(item MShellParseItem, value MShellObject, binds *[]patternBind, repeatsWord bool) (bool, EvalResult) {
+	switch p := item.(type) {
+	case *MShellParseList:
+		return state.matchListPattern(p, value, binds, repeatsWord)
+	case *MShellParseDict:
+		return state.matchDictPattern(p, value, binds, repeatsWord)
+	case *Token:
+		if p.Type == LITERAL && p.Lexeme != "none" && p.Lexeme != "null" {
+			if p.Lexeme == "_" {
+				return true, SimpleSuccess()
+			}
+			// An enum member without payload values is a whole value in
+			// one word, so it tests the element. Any other word is a name.
+			if info, ok := state.EnumMembers[p.Lexeme]; ok && info.Arity == 0 {
+				e, isEnum := value.(*MShellEnum)
+				return isEnum && e.EnumName == info.EnumName && e.Member == p.Lexeme, SimpleSuccess()
+			}
+			return state.addPatternBind(p, p.Lexeme, value, binds, repeatsWord)
+		}
+		return state.matchTokenPattern(*p, value)
+	}
+	start := item.GetStartToken()
+	return false, state.TypeMismatch(fmt.Sprintf("%d:%d: '%s' cannot be part of a pattern. %s\n", start.Line, start.Column, start.Lexeme, listPatternPositionHint))
+}
+
+// addPatternBind adds the name bound to value, unless it is `_`.
+func (state *EvalState) addPatternBind(tok *Token, name string, value MShellObject, binds *[]patternBind, repeatsWord bool) (bool, EvalResult) {
+	if name == "_" {
+		return true, SimpleSuccess()
+	}
+	if repeatsWord {
+		for _, b := range *binds {
+			if b.name == name {
+				return false, state.TypeMismatch(fmt.Sprintf("%d:%d: A destructuring pattern cannot bind '%s' more than once.\n", tok.Line, tok.Column, name))
+			}
+		}
+	}
+	*binds = append(*binds, patternBind{name: name, value: value})
+	return true, SimpleSuccess()
+}
+
+// matchListPattern matches a list pattern: every position against the
+// element there, and a `...rest` against the elements between.
+func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShellObject, binds *[]patternBind, repeatsWord bool) (bool, EvalResult) {
+	list, ok := subject.(*MShellList)
 	if !ok {
-		return false, nil, SimpleSuccess()
+		return false, SimpleSuccess()
+	}
+	spreadIndex := slices.IndexFunc(pattern.Items, isSpreadToken)
+	n := len(list.Items)
+	if spreadIndex < 0 {
+		// Without a spread the lengths must be equal.
+		if n != len(pattern.Items) {
+			return false, SimpleSuccess()
+		}
+		for i, item := range pattern.Items {
+			if matched, result := state.matchInnerPattern(item, list.Items[i], binds, repeatsWord); !matched || !result.Success {
+				return false, result
+			}
+		}
+		return true, SimpleSuccess()
 	}
 
-	bindings := make(map[string]MShellObject, len(pattern.Items))
+	// Positions before the spread match from the front, those after it
+	// from the back.
+	after := len(pattern.Items) - spreadIndex - 1
+	if n < spreadIndex+after {
+		return false, SimpleSuccess()
+	}
+	for i := range spreadIndex {
+		if matched, result := state.matchInnerPattern(pattern.Items[i], list.Items[i], binds, repeatsWord); !matched || !result.Success {
+			return false, result
+		}
+	}
+	for i := range after {
+		if matched, result := state.matchInnerPattern(pattern.Items[spreadIndex+1+i], list.Items[n-after+i], binds, repeatsWord); !matched || !result.Success {
+			return false, result
+		}
+	}
+
+	// The rest is a new list with its own storage, like `skip`: no two
+	// lists share a backing array, so setAt, del and append on the rest
+	// never change the source. It is made last, once everything else
+	// has matched.
+	spreadTok := pattern.Items[spreadIndex].(*Token)
+	if name := spreadTok.Lexeme[3:]; name != "_" {
+		rest := &MShellList{Items: slices.Clone(list.Items[spreadIndex : n-after])}
+		return state.addPatternBind(spreadTok, name, rest, binds, repeatsWord)
+	}
+	return true, SimpleSuccess()
+}
+
+// matchDictPattern matches a dict pattern: each key must be present, and
+// its value must match the pattern given for it. Other keys are allowed.
+func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShellObject, binds *[]patternBind, repeatsWord bool) (bool, EvalResult) {
+	dict, ok := subject.(*MShellDict)
+	if !ok {
+		return false, SimpleSuccess()
+	}
 	for _, kv := range pattern.Items {
 		val, exists := dict.Items[kv.Key]
 		if !exists {
-			return false, nil, SimpleSuccess()
+			return false, SimpleSuccess()
 		}
-		// The value side should be a single literal token for the binding name
 		if len(kv.Value) != 1 {
-			return false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: Dict pattern value must be a single binding name.\n", startToken.Line, startToken.Column))
+			return false, state.TypeMismatch(fmt.Sprintf("%d:%d: Each value in a dict pattern must be one item. %s\n", pattern.StartToken.Line, pattern.StartToken.Column, dictPatternValueHint))
 		}
-		tok, ok := kv.Value[0].(*Token)
-		if !ok || tok.Type != LITERAL {
-			return false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: Dict pattern value must be a literal binding name.\n", startToken.Line, startToken.Column))
-		}
-		if tok.Lexeme != "_" {
-			bindings[tok.Lexeme] = val
+		if matched, result := state.matchInnerPattern(kv.Value[0], val, binds, repeatsWord); !matched || !result.Success {
+			return false, result
 		}
 	}
-
-	return true, bindings, SimpleSuccess()
+	return true, SimpleSuccess()
 }
 
 // processTokenToken handles the Token kinds evalSimpleToken doesn't.
