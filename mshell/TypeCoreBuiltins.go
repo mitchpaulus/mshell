@@ -420,7 +420,11 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	for cmp, i := t.name(res.names.Intern("sortByCmp")), 1; i < len(cmp); i++ {
 		cmp[i].newListOut = 1
 	}
-	for _, name := range []string{"each", "filter", "sortByCmp"} {
+	// findMap gives the first Maybe its quote returns that is not none;
+	// linearSearch the first element its quote accepts.
+	b.reg("findMap", "([a] (a -- Maybe[b]) -- Maybe[b])")
+	b.reg("linearSearch", "([a] (a -- bool) -- Maybe[a])")
+	for _, name := range []string{"each", "filter", "sortByCmp", "findMap", "linearSearch"} {
 		b.child(name)
 	}
 	// map on a list runs its quote on a child stack; on a Maybe, on the
