@@ -2997,13 +2997,17 @@ type StdinReaderState struct {
 // UnreadByte pushes back the byte most recently returned by ReadByte so the
 // next ReadByte returns it again. Every returned byte came from the buffer,
 // so one step back is always valid; calling this twice in a row is not.
-func (state *StdinReaderState) UnreadByte() {
-	if state.i > 0 {
-		state.i--
-		if state.record != nil && len(*state.record) > 0 {
-			*state.record = (*state.record)[:len(*state.record)-1]
-		}
+// It has the io.ByteScanner signature; the error is returned only when
+// nothing has been read from the buffer.
+func (state *StdinReaderState) UnreadByte() error {
+	if state.i == 0 {
+		return errors.New("UnreadByte: no byte to unread")
 	}
+	state.i--
+	if state.record != nil && len(*state.record) > 0 {
+		*state.record = (*state.record)[:len(*state.record)-1]
+	}
+	return nil
 }
 
 func (state *StdinReaderState) ReadByte() (byte, error) {

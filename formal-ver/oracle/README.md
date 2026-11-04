@@ -8,8 +8,10 @@ The Go checker's port of the same procedures (plan stage 2) is tested by compari
 the oracle's on generated types.
 
 ```
-make          # extract from the proof and build ./oracle (needs the proof built: make -C ..)
-make test     # check the oracle against examples.txt
+redo                  # extract from the proof and build ./oracle (builds the proof files it needs)
+redo test             # check the oracle against examples.txt
+redo update-examples  # rewrite examples.txt from the oracle
+redo clean            # remove ./oracle
 ```
 
 `examples.txt` is the examples of `Decide.v`, printed from the Rocq terms themselves (`./oracle --examples`),
