@@ -106,22 +106,6 @@ def dropWhile ([T] (T -- bool) -- [T])
     @list @dropWhile-idx skip
 end
 
-def linearSearch ([T] (T -- bool) -- Maybe[T])
-    list!, quote!
-    none linearSearch-result!
-    0 linearSearch-idx!
-    (
-        @linearSearch-idx @list len >= (break) iff
-        @list @linearSearch-idx nth linearSearch-item!
-        @linearSearch-item @quote x if
-            @linearSearch-item just linearSearch-result!
-            break
-        end
-        @linearSearch-idx 1 + linearSearch-idx!
-    ) loop
-    @linearSearch-result
-end
-
 def linearSearchIndex ([T] (T -- bool) -- Maybe[int])
     list!, quote!
     none linearSearchIndex-result!

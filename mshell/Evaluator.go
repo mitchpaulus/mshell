@@ -10949,6 +10949,67 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'just' operation on an empty stack.\n", t.Line, t.Column))
 					}
 					stack.Push(&Maybe{obj: o})
+				case "findMap", "linearSearch":
+					// Run the quote on each list element in order, each on its own
+					// stack, and stop at the first match. findMap's quote returns a
+					// Maybe and the first one that is not none is the result.
+					// linearSearch's quote returns a bool and the result is the
+					// first element it is true for.
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.TypeMismatch(err.Error())
+					}
+
+					fn, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The first parameter in '%s' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString()))
+					}
+					listObj, ok := obj2.(*MShellList)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The second parameter in '%s' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					isFindMap := t.Lexeme == "findMap"
+					var found MShellObject
+					var searchStack MShellStack
+					for _, item := range listObj.Items {
+						searchStack.resetTo(item)
+						result, err := state.EvaluateQuote(fn, &searchStack, context, definitions)
+						if err != nil {
+							return state.CheckedFailure(err.Error())
+						}
+						if result.ShouldPassResultUpStack() {
+							return result
+						}
+						if len(searchStack) != 1 {
+							return state.TypeMismatch(fmt.Sprintf("%d:%d: The function in '%s' did not return a single value, found %d values.\n", t.Line, t.Column, t.Lexeme, len(searchStack)))
+						}
+
+						if isFindMap {
+							maybe, ok := searchStack[0].(*Maybe)
+							if !ok {
+								return state.TypeMismatch(fmt.Sprintf("%d:%d: The function in 'findMap' did not return a Maybe, found a %s (%s).\n", t.Line, t.Column, searchStack[0].TypeName(), searchStack[0].DebugString()))
+							}
+							if maybe.obj != nil {
+								found = maybe
+								break
+							}
+						} else {
+							matched, ok := searchStack[0].(MShellBool)
+							if !ok {
+								return state.TypeMismatch(fmt.Sprintf("%d:%d: The function in 'linearSearch' did not return a bool, found a %s (%s).\n", t.Line, t.Column, searchStack[0].TypeName(), searchStack[0].DebugString()))
+							}
+							if matched.Value {
+								found = &Maybe{obj: item}
+								break
+							}
+						}
+					}
+
+					if found == nil {
+						found = &Maybe{obj: nil}
+					}
+					stack.Push(found)
 				case "filter":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
