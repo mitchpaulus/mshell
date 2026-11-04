@@ -106,20 +106,24 @@ def dropWhile ([T] (T -- bool) -- [T])
     @list @dropWhile-idx skip
 end
 
-def linearSearch ([T] (T -- bool) -- Maybe[T])
+# Apply the quotation to each element in order, and return the first result that is not none.
+# Stops at the first match, so the quotation does not run on the rest of the list.
+def findMap ([T] (T -- Maybe[U]) -- Maybe[U])
     list!, quote!
-    none linearSearch-result!
-    0 linearSearch-idx!
+    none findMap-result!
+    0 findMap-idx!
     (
-        @linearSearch-idx @list len >= (break) iff
-        @list @linearSearch-idx nth linearSearch-item!
-        @linearSearch-item @quote x if
-            @linearSearch-item just linearSearch-result!
-            break
-        end
-        @linearSearch-idx 1 + linearSearch-idx!
+        @findMap-idx @list len >= (break) iff
+        @list @findMap-idx nth @quote x findMap-result!
+        @findMap-result isNone not (break) iff
+        @findMap-idx 1 + findMap-idx!
     ) loop
-    @linearSearch-result
+    @findMap-result
+end
+
+def linearSearch ([T] (T -- bool) -- Maybe[T])
+    linearSearch-pred!
+    (dup @linearSearch-pred x if just else drop none end) findMap
 end
 
 def linearSearchIndex ([T] (T -- bool) -- Maybe[int])

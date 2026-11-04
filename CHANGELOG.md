@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `findMap`: apply a quotation to each list element and return the first result that is not `none`, without running it on the rest of the list.
+  `["a" "12" "7"] (toInt) findMap` gives `Just(12)`.
 - `orElse`: fall back when a `Maybe` is `none` or a `Result` is an `err`.
   `'USER' getEnv ('USERNAME' getEnv) orElse` tries `USER`, then `USERNAME`.
   On an `err` the quotation gets the error and returns a new `Result`. The quotation runs only when needed.
