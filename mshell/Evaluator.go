@@ -813,54 +813,54 @@ func (state *EvalState) constructEnum(t *Token, info EnumMemberInfo, stack *MShe
 // binds its payloads; an enum's name (`Shape`, `Shape s`) matches any value
 // of that enum and binds the value. handled is false when the pattern's first
 // word is neither.
-func (state *EvalState) matchEnumPattern(pattern []MShellParseItem, subject MShellObject) (handled bool, matched bool, bindings map[string]MShellObject, result EvalResult) {
+// On a match, it sets the bound names in vars.
+func (state *EvalState) matchEnumPattern(pattern []MShellParseItem, subject MShellObject, vars map[string]MShellObject) (handled bool, matched bool, result EvalResult) {
 	first, ok := pattern[0].(*Token)
 	if !ok || first.Type != LITERAL {
-		return false, false, nil, SimpleSuccess()
+		return false, false, SimpleSuccess()
 	}
 	info, isMember := state.EnumMembers[first.Lexeme]
 	if !isMember && !state.EnumNames[first.Lexeme] {
-		return false, false, nil, SimpleSuccess()
+		return false, false, SimpleSuccess()
 	}
 	binds := pattern[1:]
 	for _, b := range binds {
 		bt, ok := b.(*Token)
 		if !ok || bt.Type != LITERAL {
 			start := b.GetStartToken()
-			return true, false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: '%s' in a pattern is followed by names to bind, not '%s'.\n", start.Line, start.Column, first.Lexeme, start.Lexeme))
+			return true, false, state.TypeMismatch(fmt.Sprintf("%d:%d: '%s' in a pattern is followed by names to bind, not '%s'.\n", start.Line, start.Column, first.Lexeme, start.Lexeme))
 		}
 	}
 	value, isEnum := subject.(*MShellEnum)
 	if isMember {
 		if len(binds) != info.Arity {
-			return true, false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: '%s' has %d payload value(s), and the pattern binds %d.\n", first.Line, first.Column, first.Lexeme, info.Arity, len(binds)))
+			return true, false, state.TypeMismatch(fmt.Sprintf("%d:%d: '%s' has %d payload value(s), and the pattern binds %d.\n", first.Line, first.Column, first.Lexeme, info.Arity, len(binds)))
 		}
 		if !isEnum || value.Member != first.Lexeme {
-			return true, false, nil, SimpleSuccess()
+			return true, false, SimpleSuccess()
 		}
-		bindings = make(map[string]MShellObject, len(binds))
 		for i, b := range binds {
 			if name := b.(*Token).Lexeme; name != "_" {
-				bindings[name] = value.Payload[i]
+				vars[name] = value.Payload[i]
 			}
 		}
-		return true, true, bindings, SimpleSuccess()
+		return true, true, SimpleSuccess()
 	}
 	if state.EnumNames[first.Lexeme] {
 		if len(binds) > 1 {
-			return true, false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: The pattern '%s' binds one name, the value.\n", first.Line, first.Column, first.Lexeme))
+			return true, false, state.TypeMismatch(fmt.Sprintf("%d:%d: The pattern '%s' binds one name, the value.\n", first.Line, first.Column, first.Lexeme))
 		}
 		if !isEnum || value.EnumName != first.Lexeme {
-			return true, false, nil, SimpleSuccess()
+			return true, false, SimpleSuccess()
 		}
 		if len(binds) == 1 {
 			if name := binds[0].(*Token).Lexeme; name != "_" {
-				bindings = map[string]MShellObject{name: subject}
+				vars[name] = subject
 			}
 		}
-		return true, true, bindings, SimpleSuccess()
+		return true, true, SimpleSuccess()
 	}
-	return false, false, nil, SimpleSuccess()
+	return false, false, SimpleSuccess()
 }
 
 func (state *EvalState) EnvironmentHistory() *EnvironmentHistory {
@@ -1842,7 +1842,7 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 	}
 
 	for _, arm := range matchBlock.Arms {
-		matched, bindings, result := state.matchPattern(arm.Pattern, subject, startToken)
+		matched, bindings, result := state.matchPattern(arm.Pattern, subject, startToken, frame.Context.Variables)
 		if !result.Success {
 			return nilIfNothingToDo(result)
 		}
@@ -1874,12 +1874,15 @@ func (state *EvalState) emptyMatchSubjectFailure(matchBlock *MShellParseMatchBlo
 
 // matchPattern checks if a subject matches a pattern (list of parse items).
 // Returns (matched bool, bindings map, result EvalResult).
-func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
+// Patterns that know they match before binding anything write their names
+// straight into vars; list and dict patterns can fail part way through, so
+// they return their names in the bindings map instead.
+func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token, vars map[string]MShellObject) (bool, map[string]MShellObject, EvalResult) {
 	// Only a word that is not a pattern word can name an enum or a member.
 	// Checking first keeps other patterns from paying for the call.
 	if first, ok := pattern[0].(*Token); ok && first.Type == LITERAL && !isPatternWord(first.Lexeme) {
-		if handled, matched, bindings, result := state.matchEnumPattern(pattern, subject); handled {
-			return matched, bindings, result
+		if handled, matched, result := state.matchEnumPattern(pattern, subject, vars); handled {
+			return matched, nil, result
 		}
 	}
 	if is, ok := pattern[0].(*MShellIsPattern); ok && len(pattern) == 1 {
@@ -1890,11 +1893,10 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 		if !conforms {
 			return false, nil, SimpleSuccess()
 		}
-		var bindings map[string]MShellObject
 		if is.Binding.Lexeme != "_" {
-			bindings = map[string]MShellObject{is.Binding.Lexeme: subject}
+			vars[is.Binding.Lexeme] = subject
 		}
-		return true, bindings, SimpleSuccess()
+		return true, nil, SimpleSuccess()
 	}
 	// Handle multi-token patterns (e.g., "just v" for maybe destructuring,
 	// or "<typekeyword> name" for type-test binding).
@@ -1917,11 +1919,10 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 				if !ok || maybeVal.IsNone() {
 					return false, nil, SimpleSuccess()
 				}
-				bindings := make(map[string]MShellObject)
 				if second.Lexeme != "_" {
-					bindings[second.Lexeme] = maybeVal.obj
+					vars[second.Lexeme] = maybeVal.obj
 				}
-				return true, bindings, SimpleSuccess()
+				return true, nil, SimpleSuccess()
 			}
 			// `<typekeyword> name`: match on the type, then bind the
 			// matched value to name.
@@ -1933,11 +1934,10 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 				if !matched {
 					return false, nil, SimpleSuccess()
 				}
-				bindings := make(map[string]MShellObject)
 				if second.Lexeme != "_" {
-					bindings[second.Lexeme] = subject
+					vars[second.Lexeme] = subject
 				}
-				return true, bindings, SimpleSuccess()
+				return true, nil, SimpleSuccess()
 			}
 		}
 	}
@@ -7463,7 +7463,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// TODO: Don't make a new lexer object each time.
 					parsedTime, err := ParseDateTime(dateStr, &state.DateOrder)
 					if err != nil {
-						stack.Push(newResult(false, MShellString{Content: fmt.Sprintf("Cannot parse '%s' as a date/time: %s", dateStr, err.Error())}))
+						stack.Push(newResult(false, MShellString{Content: "Cannot parse '" + dateStr + "' as a date/time: " + err.Error()}))
 					} else {
 						dt := MShellDateTime{Time: parsedTime, OriginalString: dateStr}
 						stack.Push(newResult(true, &dt))
