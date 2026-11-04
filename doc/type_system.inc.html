@@ -641,7 +641,7 @@ Quotation parameters of definitions have written types, so this is only a questi
 <code><span class="mshellBREAK">break</span></code> and <code><span class="mshellCONTINUE">continue</span></code> are allowed only where they are checked: in a <code><span class="mshellLOOP">loop</span></code> body, and in a quotation literal given to <code><span class="mshellLITERAL">each</span></code>, <code><span class="mshellLITERAL">map</span></code> or a similar word inside one.
 A stored quotation cannot break: it could be run where no loop is running.
 <code><span class="mshellLITERAL">each</span></code>, <code><span class="mshellLITERAL">map</span></code> on a list, and the other words that run a quotation once per element give it a stack of its own, which a <code><span class="mshellBREAK">break</span></code> throws away.
-<code><span class="mshellLITERAL">map</span></code> on a Maybe, <code><span class="mshellLITERAL">bind</span></code> and <code><span class="mshellLITERAL">map2</span></code> run it on the current stack, so the loop is left with what the quotation pushed so far, and that must match the loop's stack.
+<code><span class="mshellLITERAL">map</span></code> on a Maybe, <code><span class="mshellLITERAL">bind</span></code>, <code><span class="mshellLITERAL">map2</span></code> and <code><span class="mshellLITERAL">orElse</span></code> run it on the current stack, so the loop is left with what the quotation pushed so far, and that must match the loop's stack.
 </p>
 
 <h1 id="type-system-control-flow">Control Flow <a class="section-link" href="#type-system-control-flow" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>

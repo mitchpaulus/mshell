@@ -582,6 +582,10 @@ On an <code>ok</code> it leaves the value; on an <code>err</code> it fails, and 
 </p>
 
 <p>
+<a href="functions.html#functions-maybe"><code>orElse</code></a> recovers from an <code>err</code>: it gives an <code>ok</code> back as is, and on an <code>err</code> runs a quotation on the error, which returns a new Result.
+</p>
+
+<p>
 <a href="type_system.html#type-system-validation"><code>tryAs T</code></a> gives a <code>Result[T str]</code>, whose error says where and why a value does not conform to <code>T</code>.
 Built-in functions that can fail for more than one reason also give a <code>Result[T str]</code>:
 <code>httpGet</code>, <code>httpPost</code>, <code>parseToml</code>, <code>toDt</code>, <code>fileSize</code>, <code>modTime</code>, <code>evalSymLinks</code> and <code>linkCount</code>.

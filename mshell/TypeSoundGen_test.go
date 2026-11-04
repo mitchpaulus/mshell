@@ -901,6 +901,8 @@ func (p *progGen) stmtOnce(ctx *gctx, blk *gblock) bool {
 			"1 just (drop " + body + " 2) map drop",
 			"1 just (drop " + body + " none) bind drop",
 			"1 just 2 just (drop drop " + body + " 3) map2 drop",
+			"none (" + body + " 2 just) orElse drop",
+			"1 err (drop " + body + " 2 ok) orElse drop",
 		})
 		return p.try(blk, code, risky, nil)
 	case r < 78:
