@@ -3,12 +3,19 @@
 A Rocq development of the core calculus in `ai/type-core-calculus.typ`, with a machine-checked
 type soundness theorem.
 
+Built with [redo-msh](https://github.com/mitchpaulus/redo-msh); the do-files are mshell scripts.
+
 ```
-make          # build (needs Rocq 9.1; defaults to ~/.opam/rocq-mshell/bin, override with ROCQBIN=...)
-make check    # build, then print the assumptions of the main theorem
+redo          # build (needs Rocq 9.1; defaults to ~/.opam/rocq-mshell/bin, override with ROCQBIN=...)
+redo -j 8     # the same, compiling up to 8 files at once
+redo check    # build, then print the assumptions of the main theorem
+redo clean    # remove the compiled files
 ```
 
-To install Rocq into the switch the Makefile expects (opam 2.x, no `sudo`):
+Each `.vo` is rebuilt when its `.v` or a file it requires changes (the dependencies come from `rocq dep`).
+`_CoqProject` lists the files `redo` builds; it also tells editors how to load the proof.
+
+To install Rocq into the switch the build expects (opam 2.x, no `sudo`):
 
 ```
 opam init --bare -y --disable-shell-hook
@@ -16,9 +23,9 @@ opam switch create rocq-mshell ocaml-base-compiler.4.14.2
 opam install --switch rocq-mshell -y rocq-prover rocq-core.9.1.1
 ```
 
-`make check` ends with `Closed under the global context`.
+`redo check` ends with `Closed under the global context`.
 The theorem uses no axioms and no admitted lemmas.
-A clean build takes about 40 seconds.
+A clean build takes about a minute, or about 30 seconds with `redo -j 8`.
 
 ## The theorem
 
@@ -406,7 +413,7 @@ write through it; `hole_literal_no_typing` shows H3, the same literal widened to
 ## Comparing the Go checker with the proof
 
 `oracle/` extracts `subq`, `rsubq` and `join_slot` to OCaml as a program that answers queries on stdin
-(`make -C oracle test`). The Go port of the decision procedures and the join is compared with it on
+(`redo test` in `oracle/`). The Go port of the decision procedures and the join is compared with it on
 generated types; see `oracle/README.md` for the query syntax and what a disagreement means.
 
 ## Not modeled
