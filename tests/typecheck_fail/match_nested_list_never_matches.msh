@@ -1,0 +1,4 @@
+['a'] match
+    [[inner] ...rest] : ,
+    _ : ,
+end

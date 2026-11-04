@@ -2232,59 +2232,130 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 		return nil
 	}
 
-	switch structural := pattern[0].(type) {
-	case *MShellParseList:
-		if len(structural.Items) > maxStructuralPatternItems {
-			return fmt.Errorf("%d:%d: A list destructuring pattern may contain at most %d positions.", structural.StartToken.Line, structural.StartToken.Column, maxStructuralPatternItems)
-		}
-		spreadSeen := false
-		for _, item := range structural.Items {
-			tok, ok := item.(*Token)
-			if !ok || tok.Type != LITERAL {
-				start := item.GetStartToken()
-				return fmt.Errorf("%d:%d: List destructuring patterns may contain only binding names, '_', and one '...rest' binding.", start.Line, start.Column)
-			}
-			if strings.HasPrefix(tok.Lexeme, "...") {
-				if spreadSeen || len(tok.Lexeme) == 3 {
-					return fmt.Errorf("%d:%d: A list destructuring pattern may contain one named spread binding such as '...rest'.", tok.Line, tok.Column)
-				}
-				spreadSeen = true
-				if err := addBinding(*tok, tok.Lexeme[3:]); err != nil {
-					return err
-				}
-			} else if err := addBinding(*tok, tok.Lexeme); err != nil {
-				return err
-			}
-		}
-	case *MShellParseDict:
-		if len(structural.Items) > maxStructuralPatternItems {
-			return fmt.Errorf("%d:%d: A dictionary destructuring pattern may contain at most %d entries.", structural.StartToken.Line, structural.StartToken.Column, maxStructuralPatternItems)
-		}
-		for _, kv := range structural.Items {
-			if len(kv.Value) != 1 {
-				return fmt.Errorf("%d:%d: Each dictionary destructuring value must be one binding name or '_'.", structural.StartToken.Line, structural.StartToken.Column)
-			}
-			tok, ok := kv.Value[0].(*Token)
-			if !ok || tok.Type != LITERAL {
-				start := kv.Value[0].GetStartToken()
-				return fmt.Errorf("%d:%d: Each dictionary destructuring value must be one binding name or '_'.", start.Line, start.Column)
-			}
-			if strings.HasPrefix(tok.Lexeme, "...") {
-				return fmt.Errorf("%d:%d: Dictionary destructuring does not support spread patterns; use '_' to discard a named value.", tok.Line, tok.Column)
-			}
-			if err := addBinding(*tok, tok.Lexeme); err != nil {
-				return err
-			}
-		}
+	switch pattern[0].(type) {
+	case *MShellParseList, *MShellParseDict:
 	default:
 		return nil
 	}
 
-	if requireBinding && len(bindings) == 0 {
+	// A name here may turn out to be an enum member without payload values,
+	// which tests the element instead of binding it. The parser cannot
+	// tell the two apart, so the type checker and the runtime report a
+	// name bound twice.
+	names := 0
+	if err := validateInnerPattern(pattern[0], &names); err != nil {
+		return err
+	}
+	if requireBinding && names == 0 {
 		start := pattern[0].GetStartToken()
 		return fmt.Errorf("%d:%d: Assertive destructuring must bind at least one variable.", start.Line, start.Column)
 	}
 	return nil
+}
+
+// isPatternValueToken reports whether tok is a value that a position in a
+// list pattern, or a value in a dict pattern, compares by equality: a
+// string, number, bool, path or rune literal, `none` or `null`.
+func isPatternValueToken(tok *Token) bool {
+	switch tok.Type {
+	case STRING, SINGLEQUOTESTRING, INTEGER, FLOAT, TRUE, FALSE, PATH, RUNE:
+		return true
+	case LITERAL:
+		return tok.Lexeme == "none" || tok.Lexeme == "null"
+	}
+	return false
+}
+
+// isSpreadToken reports whether item is a `...rest` (or `..._`) position
+// of a list pattern.
+func isSpreadToken(item MShellParseItem) bool {
+	tok, ok := item.(*Token)
+	return ok && tok.Type == LITERAL && len(tok.Lexeme) > 3 && strings.HasPrefix(tok.Lexeme, "...")
+}
+
+const listPatternPositionHint = "A position in a list pattern is a name, '_', one '...rest', " +
+	"a literal value (a quoted string, a number, true, false, a path, a rune, none or null), " +
+	"an enum member without payload values, or a nested list or dict pattern."
+
+const dictPatternValueHint = "Each value in a dict pattern is a name, '_', " +
+	"a literal value (a quoted string, a number, true, false, a path, a rune, none or null), " +
+	"an enum member without payload values, or a nested list or dict pattern."
+
+// validateInnerPattern checks a list or dict pattern, or one position of
+// one, and the patterns nested inside it. names counts the words that may
+// bind a value.
+func validateInnerPattern(item MShellParseItem, names *int) error {
+	switch p := item.(type) {
+	case *MShellParseList:
+		if len(p.Items) > maxStructuralPatternItems {
+			return fmt.Errorf("%d:%d: A list destructuring pattern may contain at most %d positions.", p.StartToken.Line, p.StartToken.Column, maxStructuralPatternItems)
+		}
+		spreadSeen := false
+		for _, inner := range p.Items {
+			if tok, ok := inner.(*Token); ok && tok.Type == LITERAL && strings.HasPrefix(tok.Lexeme, "...") {
+				if spreadSeen || len(tok.Lexeme) == 3 {
+					return fmt.Errorf("%d:%d: A list destructuring pattern may contain one named spread binding such as '...rest'.", tok.Line, tok.Column)
+				}
+				spreadSeen = true
+				if tok.Lexeme != "..._" {
+					*names++
+				}
+				continue
+			}
+			if err := validatePatternPosition(inner, names, listPatternPositionHint); err != nil {
+				return err
+			}
+		}
+	case *MShellParseDict:
+		if len(p.Items) > maxStructuralPatternItems {
+			return fmt.Errorf("%d:%d: A dictionary destructuring pattern may contain at most %d entries.", p.StartToken.Line, p.StartToken.Column, maxStructuralPatternItems)
+		}
+		for _, kv := range p.Items {
+			if len(kv.Value) != 1 {
+				return fmt.Errorf("%d:%d: Each value in a dict pattern must be one item. %s", p.StartToken.Line, p.StartToken.Column, dictPatternValueHint)
+			}
+			if tok, ok := kv.Value[0].(*Token); ok && tok.Type == LITERAL && strings.HasPrefix(tok.Lexeme, "...") {
+				return fmt.Errorf("%d:%d: Dictionary destructuring does not support spread patterns; use '_' to discard a named value.", tok.Line, tok.Column)
+			}
+			if err := validatePatternPosition(kv.Value[0], names, dictPatternValueHint); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validatePatternPosition checks one position of a list pattern or one
+// value of a dict pattern. hint says what may go there.
+func validatePatternPosition(item MShellParseItem, names *int, hint string) error {
+	switch p := item.(type) {
+	case *MShellParseList, *MShellParseDict:
+		return validateInnerPattern(p, names)
+	case *Token:
+		if isPatternValueToken(p) {
+			return nil
+		}
+		switch p.Type {
+		case LITERAL:
+			if p.Lexeme == "_" {
+				return nil
+			}
+			if strings.HasPrefix(p.Lexeme, "-") {
+				// In a list literal, `-h` is the string "-h"; in a
+				// pattern, a bare word is a name.
+				return fmt.Errorf("%d:%d: '%s' in a pattern would be a name. To match the string, quote it: '%s'.", p.Line, p.Column, p.Lexeme, p.Lexeme)
+			}
+			*names++
+			return nil
+		case FORMATSTRING:
+			return fmt.Errorf("%d:%d: A format string cannot be a match pattern. Use a double or single quoted string.", p.Line, p.Column)
+		}
+	case *MShellParseFormatString:
+		start := p.GetStartToken()
+		return fmt.Errorf("%d:%d: A format string cannot be a match pattern. Use a double or single quoted string.", start.Line, start.Column)
+	}
+	start := item.GetStartToken()
+	return fmt.Errorf("%d:%d: '%s' cannot be part of a pattern. %s", start.Line, start.Column, start.Lexeme, hint)
 }
 
 // formatPatternSnippet renders a match-arm pattern as a short string,
@@ -2310,6 +2381,17 @@ func formatPatternItem(it MShellParseItem) string {
 		return v.DebugString()
 	case *MShellParseList:
 		return "[" + formatPatternSnippet(v.Items) + "]"
+	case *MShellParseDict:
+		var sb strings.Builder
+		sb.WriteString("{ ")
+		for i, kv := range v.Items {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString("'" + kv.Key + "': " + formatPatternSnippet(kv.Value))
+		}
+		sb.WriteString(" }")
+		return sb.String()
 	default:
 		start := it.GetStartToken().Lexeme
 		end := it.GetEndToken().Lexeme
