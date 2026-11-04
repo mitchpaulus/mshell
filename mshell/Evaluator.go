@@ -1845,7 +1845,7 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 	}
 
 	for _, arm := range matchBlock.Arms {
-		matched, result := state.matchPattern(arm.Pattern, subject, startToken, frame.Context.Variables)
+		matched, result := state.matchPattern(arm.Pattern, arm.RepeatsWord, subject, startToken, frame.Context.Variables)
 		if !result.Success {
 			return nilIfNothingToDo(result)
 		}
@@ -1878,7 +1878,7 @@ func (state *EvalState) emptyMatchSubjectFailure(matchBlock *MShellParseMatchBlo
 // On a match, the names the pattern binds are set in vars. A list or dict
 // pattern can fail part way through, so it sets them only once all of it
 // has matched.
-func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token, vars map[string]MShellObject) (bool, EvalResult) {
+func (state *EvalState) matchPattern(pattern []MShellParseItem, repeatsWord bool, subject MShellObject, startToken Token, vars map[string]MShellObject) (bool, EvalResult) {
 	// Only a word that is not a pattern word can name an enum or a member.
 	// Checking first keeps other patterns from paying for the call.
 	if first, ok := pattern[0].(*Token); ok && first.Type == LITERAL && !isPatternWord(first.Lexeme) {
@@ -1969,7 +1969,7 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 		// A nested pattern can match and bind names before a later
 		// position fails, so the names are only set once all of it matches.
 		binds := state.patternBinds[:0]
-		matched, result := state.matchInnerPattern(p, subject, &binds)
+		matched, result := state.matchInnerPattern(p, subject, &binds, repeatsWord)
 		if result.Success && matched {
 			for _, b := range binds {
 				vars[b.name] = b.value
@@ -2145,12 +2145,12 @@ type patternBind struct {
 
 // matchInnerPattern matches a list or dict pattern, or one position of one,
 // against value. The names it binds are added to binds.
-func (state *EvalState) matchInnerPattern(item MShellParseItem, value MShellObject, binds *[]patternBind) (bool, EvalResult) {
+func (state *EvalState) matchInnerPattern(item MShellParseItem, value MShellObject, binds *[]patternBind, repeatsWord bool) (bool, EvalResult) {
 	switch p := item.(type) {
 	case *MShellParseList:
-		return state.matchListPattern(p, value, binds)
+		return state.matchListPattern(p, value, binds, repeatsWord)
 	case *MShellParseDict:
-		return state.matchDictPattern(p, value, binds)
+		return state.matchDictPattern(p, value, binds, repeatsWord)
 	case *Token:
 		if p.Type == LITERAL && p.Lexeme != "none" && p.Lexeme != "null" {
 			if p.Lexeme == "_" {
@@ -2162,7 +2162,7 @@ func (state *EvalState) matchInnerPattern(item MShellParseItem, value MShellObje
 				e, isEnum := value.(*MShellEnum)
 				return isEnum && e.EnumName == info.EnumName && e.Member == p.Lexeme, SimpleSuccess()
 			}
-			return state.addPatternBind(*p, p.Lexeme, value, binds)
+			return state.addPatternBind(p, p.Lexeme, value, binds, repeatsWord)
 		}
 		return state.matchTokenPattern(*p, value)
 	}
@@ -2171,13 +2171,15 @@ func (state *EvalState) matchInnerPattern(item MShellParseItem, value MShellObje
 }
 
 // addPatternBind adds the name bound to value, unless it is `_`.
-func (state *EvalState) addPatternBind(tok Token, name string, value MShellObject, binds *[]patternBind) (bool, EvalResult) {
+func (state *EvalState) addPatternBind(tok *Token, name string, value MShellObject, binds *[]patternBind, repeatsWord bool) (bool, EvalResult) {
 	if name == "_" {
 		return true, SimpleSuccess()
 	}
-	for _, b := range *binds {
-		if b.name == name {
-			return false, state.TypeMismatch(fmt.Sprintf("%d:%d: A destructuring pattern cannot bind '%s' more than once.\n", tok.Line, tok.Column, name))
+	if repeatsWord {
+		for _, b := range *binds {
+			if b.name == name {
+				return false, state.TypeMismatch(fmt.Sprintf("%d:%d: A destructuring pattern cannot bind '%s' more than once.\n", tok.Line, tok.Column, name))
+			}
 		}
 	}
 	*binds = append(*binds, patternBind{name: name, value: value})
@@ -2186,7 +2188,7 @@ func (state *EvalState) addPatternBind(tok Token, name string, value MShellObjec
 
 // matchListPattern matches a list pattern: every position against the
 // element there, and a `...rest` against the elements between.
-func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShellObject, binds *[]patternBind) (bool, EvalResult) {
+func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShellObject, binds *[]patternBind, repeatsWord bool) (bool, EvalResult) {
 	list, ok := subject.(*MShellList)
 	if !ok {
 		return false, SimpleSuccess()
@@ -2199,7 +2201,7 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 			return false, SimpleSuccess()
 		}
 		for i, item := range pattern.Items {
-			if matched, result := state.matchInnerPattern(item, list.Items[i], binds); !matched || !result.Success {
+			if matched, result := state.matchInnerPattern(item, list.Items[i], binds, repeatsWord); !matched || !result.Success {
 				return false, result
 			}
 		}
@@ -2213,12 +2215,12 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 		return false, SimpleSuccess()
 	}
 	for i := range spreadIndex {
-		if matched, result := state.matchInnerPattern(pattern.Items[i], list.Items[i], binds); !matched || !result.Success {
+		if matched, result := state.matchInnerPattern(pattern.Items[i], list.Items[i], binds, repeatsWord); !matched || !result.Success {
 			return false, result
 		}
 	}
 	for i := range after {
-		if matched, result := state.matchInnerPattern(pattern.Items[spreadIndex+1+i], list.Items[n-after+i], binds); !matched || !result.Success {
+		if matched, result := state.matchInnerPattern(pattern.Items[spreadIndex+1+i], list.Items[n-after+i], binds, repeatsWord); !matched || !result.Success {
 			return false, result
 		}
 	}
@@ -2230,14 +2232,14 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 	spreadTok := pattern.Items[spreadIndex].(*Token)
 	if name := spreadTok.Lexeme[3:]; name != "_" {
 		rest := &MShellList{Items: slices.Clone(list.Items[spreadIndex : n-after])}
-		return state.addPatternBind(*spreadTok, name, rest, binds)
+		return state.addPatternBind(spreadTok, name, rest, binds, repeatsWord)
 	}
 	return true, SimpleSuccess()
 }
 
 // matchDictPattern matches a dict pattern: each key must be present, and
 // its value must match the pattern given for it. Other keys are allowed.
-func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShellObject, binds *[]patternBind) (bool, EvalResult) {
+func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShellObject, binds *[]patternBind, repeatsWord bool) (bool, EvalResult) {
 	dict, ok := subject.(*MShellDict)
 	if !ok {
 		return false, SimpleSuccess()
@@ -2250,7 +2252,7 @@ func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShel
 		if len(kv.Value) != 1 {
 			return false, state.TypeMismatch(fmt.Sprintf("%d:%d: Each value in a dict pattern must be one item. %s\n", pattern.StartToken.Line, pattern.StartToken.Column, dictPatternValueHint))
 		}
-		if matched, result := state.matchInnerPattern(kv.Value[0], val, binds); !matched || !result.Success {
+		if matched, result := state.matchInnerPattern(kv.Value[0], val, binds, repeatsWord); !matched || !result.Success {
 			return false, result
 		}
 	}

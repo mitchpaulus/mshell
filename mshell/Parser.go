@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	// "os"
 	"sort"
@@ -497,6 +498,10 @@ type MShellParseMatchArm struct {
 	Pattern []MShellParseItem
 	Body    []MShellParseItem
 	Consume bool
+	// RepeatsWord is set when a list or dict pattern uses a word more than
+	// once. Only then can it bind a name twice, so only then does the
+	// runtime look for a name bound twice.
+	RepeatsWord bool
 }
 
 // MShellParseMatchBlock represents a match...end block
@@ -862,6 +867,9 @@ type MShellParser struct {
 	initialized bool
 	// tokens is the block tokenItem takes its next token from.
 	tokens []Token
+	// patternWords holds the words of the pattern being checked. It is
+	// kept to reuse its storage.
+	patternWords []string
 }
 
 // tokenItem returns a copy of t to put in the parse tree. The copies are
@@ -2100,7 +2108,7 @@ func (parser *MShellParser) ParseMatchBlock() (*MShellParseMatchBlock, error) {
 		if len(arm.Pattern) == 0 {
 			return matchBlock, fmt.Errorf("Empty pattern in match arm at line %d, column %d.", parser.curr.Line, parser.curr.Column)
 		}
-		if err := validateStructuralBindingPattern(arm.Pattern, false); err != nil {
+		if err := parser.validateStructuralBindingPattern(arm.Pattern, false, &arm.RepeatsWord); err != nil {
 			return matchBlock, err
 		}
 
@@ -2178,7 +2186,7 @@ func (parser *MShellParser) ParseAssertiveMatch() (*MShellParseMatchBlock, error
 		return matchBlock, fmt.Errorf("%d:%d: Expected a list, dictionary, or 'just <name>' pattern after '%s'.", parser.curr.Line, parser.curr.Column, operator.Lexeme)
 	}
 
-	if err := validateStructuralBindingPattern(arm.Pattern, true); err != nil {
+	if err := parser.validateStructuralBindingPattern(arm.Pattern, true, &arm.RepeatsWord); err != nil {
 		return matchBlock, err
 	}
 	matchBlock.Arms = append(matchBlock.Arms, arm)
@@ -2189,7 +2197,7 @@ func (parser *MShellParser) ParseAssertiveMatch() (*MShellParseMatchBlock, error
 
 const maxStructuralPatternItems = 256
 
-func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding bool) error {
+func (parser *MShellParser) validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding bool, repeatsWord *bool) error {
 	bindings := make(map[string]struct{})
 	addBinding := func(tok Token, name string) error {
 		if name == "_" {
@@ -2238,15 +2246,21 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 		return nil
 	}
 
-	// A name here may turn out to be an enum member without payload values,
-	// which tests the element instead of binding it. The parser cannot
-	// tell the two apart, so the type checker and the runtime report a
-	// name bound twice.
-	names := 0
-	if err := validateInnerPattern(pattern[0], &names); err != nil {
+	// The parser cannot tell a name from an enum member without payload
+	// values, which tests the element instead of binding it. So a word used
+	// twice is not an error here: the type checker and the runtime report
+	// a name bound twice. The runtime looks only when a word repeats.
+	names := parser.patternWords[:0]
+	err := validateInnerPattern(pattern[0], &names)
+	count := len(names)
+	slices.Sort(names)
+	*repeatsWord = len(slices.Compact(names)) < count
+	clear(names[:count])
+	parser.patternWords = names[:0]
+	if err != nil {
 		return err
 	}
-	if requireBinding && names == 0 {
+	if requireBinding && count == 0 {
 		start := pattern[0].GetStartToken()
 		return fmt.Errorf("%d:%d: Assertive destructuring must bind at least one variable.", start.Line, start.Column)
 	}
@@ -2282,9 +2296,9 @@ const dictPatternValueHint = "Each value in a dict pattern is a name, '_', " +
 	"an enum member without payload values, or a nested list or dict pattern."
 
 // validateInnerPattern checks a list or dict pattern, or one position of
-// one, and the patterns nested inside it. names counts the words that may
-// bind a value.
-func validateInnerPattern(item MShellParseItem, names *int) error {
+// one, and the patterns nested inside it. The words that may bind a value
+// are added to names.
+func validateInnerPattern(item MShellParseItem, names *[]string) error {
 	switch p := item.(type) {
 	case *MShellParseList:
 		if len(p.Items) > maxStructuralPatternItems {
@@ -2298,7 +2312,7 @@ func validateInnerPattern(item MShellParseItem, names *int) error {
 				}
 				spreadSeen = true
 				if tok.Lexeme != "..._" {
-					*names++
+					*names = append(*names, tok.Lexeme[3:])
 				}
 				continue
 			}
@@ -2327,7 +2341,7 @@ func validateInnerPattern(item MShellParseItem, names *int) error {
 
 // validatePatternPosition checks one position of a list pattern or one
 // value of a dict pattern. hint says what may go there.
-func validatePatternPosition(item MShellParseItem, names *int, hint string) error {
+func validatePatternPosition(item MShellParseItem, names *[]string, hint string) error {
 	switch p := item.(type) {
 	case *MShellParseList, *MShellParseDict:
 		return validateInnerPattern(p, names)
@@ -2345,7 +2359,7 @@ func validatePatternPosition(item MShellParseItem, names *int, hint string) erro
 				// pattern, a bare word is a name.
 				return fmt.Errorf("%d:%d: '%s' in a pattern would be a name. To match the string, quote it: '%s'.", p.Line, p.Column, p.Lexeme, p.Lexeme)
 			}
-			*names++
+			*names = append(*names, p.Lexeme)
 			return nil
 		case FORMATSTRING:
 			return fmt.Errorf("%d:%d: A format string cannot be a match pattern. Use a double or single quoted string.", p.Line, p.Column)
