@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Result`: a built-in enum for a value or the error that stopped it, `enum Result[a e] = ok a | err e end`.
   `?` unwraps an `ok`, and fails on an `err` with the error's `str` as the message.
   Since `ok` and `err` are now words, a bare `ok` or `err` in a command list must be quoted: `[echo 'ok']`.
-- `parseToml`: parse a TOML document from a string, binary, or file path. It gives a `Maybe[{Toml}]`, `none` for text that is not valid TOML. `Toml` is a new built-in type.
+- `parseToml`: parse a TOML document from a string, binary, or file path. It gives a `Result[{Toml} str]`, an `err` saying why for text that is not valid TOML. `Toml` is a new built-in type.
 - `ExcelCell`: a built-in type for a cell `parseExcel` gives, `str | float | bool | ExcelError`, so stored rows can be typed `[[ExcelCell]]`.
   An error cell is an `excelError` holding the error's text, such as `"#DIV/0!"`.
 - The interactive prompt is set in `init.msh` with `setPrompt`, from a quotation that returns a list of `PromptItem` values:
@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `splitOnce` splits a string at the first occurrence of a delimiter, giving `just [before after]`, or `none` when the delimiter is not found.
 - `getEnv` gets an environment variable by name, giving `none` when it is not set: `"EDITOR" getEnv "vim" maybe`.
 - Functions for symlinks and hard links
-  - `evalSymLinks` follows every symlink in a path, giving `none` for a missing path or broken symlink.
+  - `evalSymLinks` follows every symlink in a path, giving an `err` for a missing path or broken symlink.
   - `linkCount` gives the number of hard links to a file.
   - `sameFile` tests whether two paths are the same file.
   - `hardLinks` lists every name of a file. Windows only.
@@ -117,6 +117,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `httpGet`, `httpPost`, `toDt`, `fileSize`, `modTime`, `evalSymLinks` and `linkCount` give a `Result[T str]` instead of a `Maybe[T]`.
+  An `err` says why there is no value, such as the connection error, the reason a date did not parse, or `stat foo: permission denied`,
+  and `?` fails with that message.
+  An `httpGet` or `httpPost` response body that cannot be read is now an `err` instead of stopping the script.
 - The interactive shell has no built-in aliases; add abbreviations to `init.msh` instead.
 - The interactive shell's personal key sequences are gone: `jf`, `vl`, `qq`, `;r`, `;j`, F1 and Alt-D.
   Letters typed in those pairs now appear at once, and `vlc` and `qq` can be typed. Add any you want back to `init.msh` with `bindingAdd`.
@@ -270,9 +274,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A single valid reading is accepted, so `12/16/25` and `16/06/2025` now parse
   (`12/16/25` previously became `2013-04-25`). When several readings are valid, like
   `01/02/2026`, the order learned from the most recent unambiguous non-ISO date in the same
-  evaluation is used. With no such evidence the result is `none`, where it previously
+  evaluation is used. With no such evidence the result is an `err`, where it previously
   assumed US month/day/year. Dates with a leading four digit year are unaffected.
-- `toDt` now returns `none` for out of range components such as month 13, Feb 30, or hour 25,
+- `toDt` now returns an `err` for out of range components such as month 13, Feb 30, or hour 25,
   instead of silently rolling them over into the next month or day.
 - `return` inside an `if` or `match` now leaves the whole definition when the definition was called from a quotation run by a function like `map` or `each`.
   It used to leave only the `if` or `match`, and the rest of the definition kept running.

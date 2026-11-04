@@ -1,10 +1,10 @@
 `toml.toml` parseToml ? toJson wl
 
-# Text that is not valid TOML gives none.
+# Text that is not valid TOML gives err with why.
 'a = 1
-a = 2' parseToml isNone str wl
-'a = ' parseToml isNone str wl
-[255] toBinary parseToml isNone str wl
+a = 2' parseToml match ok _: "ok", err e: @e, end wl
+'a = ' parseToml match ok _: "ok", err e: @e, end wl
+[255] toBinary parseToml match ok _: "ok", err e: @e, end wl
 
 # A document is a table, so its keys can be read directly.
 'a = 1' parseToml ? :a? match
@@ -26,5 +26,5 @@ qty = 1
 [[p]]
 qty = 2' parseToml ? tryAs {p: [{qty: int}]} ? :p? (:qty?) map sum str wl
 
-def load ( -- new Maybe[{Toml}]) 'k = "v"' parseToml end
+def load ( -- new Result[{Toml} str]) 'k = "v"' parseToml end
 load ? toJson wl

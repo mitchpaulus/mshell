@@ -653,6 +653,7 @@ A member, an enum, a `type`, a definition and a builtin each need a name of thei
 
 `Result` is a built-in enum for a value or the error that stopped it: `enum Result[a e] = ok a | err e end`.
 `?` unwraps an `ok` and fails on an `err`, with the error's `str` as the message.
+`httpGet`, `httpPost`, `parseToml`, `toDt`, `fileSize`, `modTime`, `evalSymLinks` and `linkCount` give `Result[T str]`, with why they failed in the `err`.
 Because `ok` and `err` are words, quote them in a command list: `[echo 'ok']`.
 
 ```mshell
@@ -1355,7 +1356,7 @@ end wl # Output: 11
 - `toCsvCell`: Escape a single CSV cell. If the value contains `,`, `"`, or a newline, wraps the value in double quotes and doubles any embedded quotes; otherwise returns the input unchanged. (`str -- str`)
 - `toCsv`: Serialize a list of rows, or a `Grid` or `GridView`, to a CSV string. Cells are escaped as `toCsvCell` does, joined with `,`, and each row ends with `\n`. A grid is written with a header row of its column names first; `none` is an empty cell, `just v` is written as `v`, and any other value is written in its `str` form. (`[[str]] -- str`) / (`Grid|GridView -- str`)
 - `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. JSON `null` becomes the `null` type (distinct from `none`). A number with no fraction or exponent becomes an `int` (a `float` if it is too large for one), and any other number a `float`. (`path|str|binary -- list|dict|numeric|str|bool|null`)
-- `parseToml`: Parse TOML from a string, binary, or file path. Gives `none` if the text is not valid TOML; a file that cannot be read is still an error. A document is a table, so a valid one gives a dict. Tables become dicts; arrays and arrays of tables become lists. An offset date-time becomes a `datetime` in UTC; a local date-time or local date keeps its clock time; a local time becomes a `str` such as `"07:32:00"`. (`path|str|binary -- Maybe[{Toml}]`)
+- `parseToml`: Parse TOML from a string, binary, or file path. Gives an `err` with the reason if the text is not valid TOML; a file that cannot be read is still an error. A document is a table, so a valid one gives a dict. Tables become dicts; arrays and arrays of tables become lists. An offset date-time becomes a `datetime` in UTC; a local date-time or local date keeps its clock time; a local time becomes a `str` such as `"07:32:00"`. (`path|str|binary -- Result[{Toml} str]`)
 - `parseExcel`: Parse an `.xlsx` (OOXML) spreadsheet into a list of sheets in workbook (tab) order. Each sheet is a dict with a `name` key (the worksheet name), a `data` key holding a rectangular list of rows (list of lists), a `hidden` key (bool; `true` for hidden or veryHidden sheets), and a `visibility` key (`"visible"`, `"hidden"`, or `"veryHidden"`). Cell values are typed: numbers become floats (dates appear as Excel serial floats), strings become strings (shared, inline, and formula-string results all resolved), booleans become booleans, error cells become `excelError` values holding the error's text (`"#DIV/0!" excelError`; match with `excelError code : ...`), and empty/padding cells are the empty string. Chartsheets are skipped; hidden worksheets are included. Dates are returned as raw Excel serial floats; apply `fromOleDate` at the call site to convert. `parseExcel` assumes the default 1900-based date system, which matches `fromOleDate`'s OLE epoch (1899-12-30). Workbooks saved with the 1904 date system (`<workbookPr date1904="true"/>`, seen on some files originally authored on older Mac Excel or with the "Use 1904 date system" option enabled) have serials offset by 1462 days; on those files, add 1462 to each serial before calling `fromOleDate`, e.g. `@wb :0: :data? :3: :0: 1462 + fromOleDate`. A cell has the built-in type `ExcelCell`, so rows stored before use are typed `[[ExcelCell]]`. (`path|binary -- [{name: str, data: [[ExcelCell]], hidden: bool, visibility: str}]`)
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. A count of 0 or less produces an empty list. `(int -- [int])`
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
@@ -1376,8 +1377,8 @@ end wl # Output: 11
 - `isFile`: Check if path is a file. `(path -- bool)`
 - `fileExists`: Check whether a file or directory exists. `(str|path -- bool)`
 - `hardLink`: Create a hard link. `(existingSourcePath newTargetPath -- )`
-- `evalSymLinks`: Follow every symlink in a path and return the path it ends at (Go `filepath.EvalSymlinks`; a relative path gives a relative result). `none` if the path does not exist, a symlink in it is broken, or the symlinks loop. `(str|path -- Maybe[path])`
-- `linkCount`: Number of hard links (names) the file has, following symlinks. `none` if the file is missing or cannot be read. `(str|path -- Maybe[int])`
+- `evalSymLinks`: Follow every symlink in a path and return the path it ends at (Go `filepath.EvalSymlinks`; a relative path gives a relative result). An `err` with the reason if the path does not exist, a symlink in it is broken, or the symlinks loop. `(str|path -- Result[path str])`
+- `linkCount`: Number of hard links (names) the file has, following symlinks. An `err` with the reason if the file is missing or cannot be read. `(str|path -- Result[int str])`
 - `sameFile`: Whether two paths are the same file, following symlinks (hard links and symlink targets give `true`). `false` if either path does not exist; any other error reading a path fails. `(str|path str|path -- bool)`
 - `hardLinks`: Every name of a file as sorted absolute paths, following symlinks; includes the given path. Windows only: fails on other systems. On Unix, compare `linkCount` with a search using `lsDir` and `sameFile`. `(str|path -- [path])`
 - `tempFile`: Create a temporary file with go [`os.CreateTemp`](https://pkg.go.dev/os#CreateTemp) using `dir=""` (defaults to [`os.TempDir`](https://pkg.go.dev/os#TempDir)) and pattern `msh-`, so the filename starts with `msh-` plus a random suffix. Pushes the full path. The file is not removed automatically; use `rm`/`rmf` when you are done. `( -- path)`
@@ -1404,8 +1405,8 @@ end wl # Output: 11
 - `clip`: Copy a string to the system clipboard. Cross-platform: uses `pbcopy` on macOS, `clip` on Windows, and the first available of `wl-copy`, `xclip`, or `xsel` on Linux. `(str | path -- )`
 - `writeFile`: Write a string (UTF-8) or raw binary data to file. Overwrites file if it exists. `(str|binary content str|path file -- )`
 - `appendFile`: Append a string (UTF-8) or raw binary data to file. `(str|binary content str|path file -- )`
-- `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`
-- `modTime`: Get a file's last modification time. Returns a Maybe (None on missing file or IO error). This is the only file timestamp that is portable across operating systems and filesystems; reported in local time. `(str|path -- Maybe datetime)`
+- `fileSize`: Get size of file in bytes. An `err` with the reason if the file is missing or cannot be read. `(str|path -- Result[int str])`
+- `modTime`: Get a file's last modification time. An `err` with the reason if the file is missing or cannot be read. This is the only file timestamp that is portable across operating systems and filesystems; reported in local time. `(str|path -- Result[datetime str])`
 - `lsDir`: Get list of all items (files and directories) in directory. Full paths to the items. `(str|path -- [path])`
 - `sha256sum`: Get SHA256 checksum of file. `(path -- str)`
 - `md5`: Get md5 checksum. A `path` hashes the file's contents; a `str` or `binary` hashes its own bytes. `(path|str|binary -- str)`
@@ -1644,7 +1645,7 @@ Access the parts with `:k?` and `:v?`.
 
 ## Date Functions
 
-- `toDt`: Convert string to date/time `(str -- Maybe[datetime])`.
+- `toDt`: Convert string to date/time. An `err` says why a string does not parse, such as an ambiguous order or an out of range component. `(str -- Result[datetime str])`
   Separators are ignored, month names are accepted, and a time with optional AM/PM may follow.
   A leading four digit year is always year-month-day, so ISO dates like `2026-01-02` are never ambiguous.
   Other dates are tried as year-month-day, month-day-year, and day-month-year.
@@ -1734,7 +1735,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTTP Requests
 
-- `httpGet`: Make a HTTP GET request. Signature is `(dict -- Maybe[{status: int, reason: str, headers: {[str]}, body: binary, cookieJar?: [dict]}])`. Takes the request information in a dictionary that should have the following keys:
+- `httpGet`: Make a HTTP GET request. Signature is `(HttpRequest -- Result[HttpResponse str])`, where `HttpResponse` is `{status: int, reason: str, headers: {str: [str]}, body: binary, cookieJar?: [Cookie]}`. Takes the request information in a dictionary that should have the following keys:
 
   - `url`: Full URL, including all the query parameters (required, string)
   - `timeout`: Request timeout in seconds (optional, positive integer; default 30)
@@ -1746,9 +1747,9 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
     The list is updated in place and reused across GET and POST requests.
     See [Cookie jars](#cookie-jars) for the record format and behavior.
 
-  Returns a Maybe wrapping a response dictionary.
-  The response is `none` if the web request totally fails, like hitting a timeout.
-  Otherwise a Just Dictionary is returned, with fields
+  Returns a `Result` with a response dictionary.
+  It is an `err` with the reason if there is no response, like a timeout, a refused connection, or a bad certificate, or if the body cannot be read.
+  Any status code, including `404` or `500`, is a response, so it is an `ok` with fields
 
   - `status`: Integer status code
   - `reason`: Full reason line, ex: `"200 OK"`

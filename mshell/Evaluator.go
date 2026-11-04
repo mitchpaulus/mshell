@@ -7463,11 +7463,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// TODO: Don't make a new lexer object each time.
 					parsedTime, err := ParseDateTime(dateStr, &state.DateOrder)
 					if err != nil {
-						stack.Push(&Maybe{obj: nil})
-						// return state.CheckedFailure(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
+						stack.Push(newResult(false, MShellString{Content: fmt.Sprintf("Cannot parse '%s' as a date/time: %s", dateStr, err.Error())}))
 					} else {
 						dt := MShellDateTime{Time: parsedTime, OriginalString: dateStr}
-						stack.Push(&Maybe{obj: &dt})
+						stack.Push(newResult(true, &dt))
 					}
 				case "files", "dirs":
 					// Dump all the files in the current directory to the stack. No sub-directories.
@@ -8798,9 +8797,9 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					var fileInfo os.FileInfo
 					fileInfo, err = os.Stat(path)
 					if err != nil {
-						stack.Push(&Maybe{obj: nil})
+						stack.Push(newResult(false, MShellString{Content: err.Error()}))
 					} else {
-						stack.Push(&Maybe{obj: MShellInt{int(fileInfo.Size())}})
+						stack.Push(newResult(true, MShellInt{int(fileInfo.Size())}))
 					}
 				case "modTime":
 					obj1, err := stack.Pop()
@@ -8816,10 +8815,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					var fileInfo os.FileInfo
 					fileInfo, err = os.Stat(path)
 					if err != nil {
-						stack.Push(&Maybe{obj: nil})
+						stack.Push(newResult(false, MShellString{Content: err.Error()}))
 					} else {
 						modTime := fileInfo.ModTime()
-						stack.Push(&Maybe{obj: &MShellDateTime{Time: modTime, OriginalString: modTime.Format(time.RFC3339)}})
+						stack.Push(newResult(true, &MShellDateTime{Time: modTime, OriginalString: modTime.Format(time.RFC3339)}))
 					}
 				case "evalSymLinks":
 					obj1, err := stack.Pop()
@@ -8834,9 +8833,9 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 					resolved, err := filepath.EvalSymlinks(path)
 					if err != nil {
-						stack.Push(&Maybe{obj: nil})
+						stack.Push(newResult(false, MShellString{Content: err.Error()}))
 					} else {
-						stack.Push(&Maybe{obj: MShellPath{Path: resolved}})
+						stack.Push(newResult(true, MShellPath{Path: resolved}))
 					}
 				case "linkCount":
 					obj1, err := stack.Pop()
@@ -8851,9 +8850,9 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 					count, err := fileLinkCount(path)
 					if err != nil {
-						stack.Push(&Maybe{obj: nil})
+						stack.Push(newResult(false, MShellString{Content: err.Error()}))
 					} else {
-						stack.Push(&Maybe{obj: MShellInt{count}})
+						stack.Push(newResult(true, MShellInt{count}))
 					}
 				case "sameFile":
 					obj1, obj2, err := stack.Pop2(t)
@@ -10440,8 +10439,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 
 					// A path names a file, read as UTF-8; a string is the contents.
-					// Text that is not valid TOML gives none; a file that cannot be
-					// read is still a failure.
+					// Text that is not valid TOML gives err with why; a file that
+					// cannot be read is still a failure.
 					var tomlData string
 					switch obj1Typed := obj1.(type) {
 					case MShellPath:
@@ -10461,9 +10460,9 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 					dict, err := decodeToml(tomlData)
 					if err != nil {
-						stack.Push(&Maybe{obj: nil})
+						stack.Push(newResult(false, MShellString{Content: err.Error()}))
 					} else {
-						stack.Push(&Maybe{obj: dict})
+						stack.Push(newResult(true, dict))
 					}
 				case "parseExcel":
 					obj1, err := stack.Pop()
@@ -12011,8 +12010,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// Make request
 					resp, err := client.Do(req)
 
+					// A request that gets no response, or whose body cannot be
+					// read, gives err with why. Any status is a response.
 					if err != nil {
-						stack.Push(&Maybe{obj: nil}) // No response
+						stack.Push(newResult(false, MShellString{Content: err.Error()}))
 					} else {
 						responseDict := NewDict()
 						if cookieJar != nil {
@@ -12035,12 +12036,11 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						bodyBytes, err := io.ReadAll(resp.Body)
 						resp.Body.Close()
 						if err != nil {
-							return state.CheckedFailure(fmt.Sprintf("%d:%d: Error reading response body in '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
+							stack.Push(newResult(false, MShellString{Content: fmt.Sprintf("Error reading response body: %s", err.Error())}))
+						} else {
+							responseDict.Items["body"] = newBinary(bodyBytes)
+							stack.Push(newResult(true, responseDict))
 						}
-						responseDict.Items["body"] = newBinary(bodyBytes)
-
-						// Push the response dictionary onto the stack
-						stack.Push(&Maybe{obj: responseDict})
 					}
 				case "urlEncode":
 					// Top of stack should be dictionary or string.

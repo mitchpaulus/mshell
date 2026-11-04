@@ -341,7 +341,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// A path names a file; a str (a bare word in a list literal too) is the text.
 	b.reg("parseJson", "(str | path | binary -- new Json)")
-	b.reg("parseToml", "(str | path | binary -- new Maybe[{Toml}])")
+	b.reg("parseToml", "(str | path | binary -- new Result[{Toml} str])")
 	// The document node: tag "" with the <html> element as its child.
 	b.reg("parseHtml", "(str | path -- new HtmlNode)")
 	b.reg("parseLinkHeader", "(str -- new [Link])")
@@ -514,10 +514,10 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	for _, name := range []string{"isDir", "isFile", "fileExists", "isCmd"} {
 		b.reg(name, "(str | path -- bool)")
 	}
-	b.reg("fileSize", "(str | path -- Maybe[int])")
-	b.reg("modTime", "(str | path -- Maybe[datetime])")
-	b.reg("evalSymLinks", "(str | path -- Maybe[path])")
-	b.reg("linkCount", "(str | path -- Maybe[int])")
+	b.reg("fileSize", "(str | path -- Result[int str])")
+	b.reg("modTime", "(str | path -- Result[datetime str])")
+	b.reg("evalSymLinks", "(str | path -- Result[path str])")
+	b.reg("linkCount", "(str | path -- Result[int str])")
 	b.reg("sameFile", "(str | path str | path -- bool)")
 	b.reg("hardLinks", "(str | path -- new [path])")
 	b.reg("glob", "(str | path -- new [path])")
@@ -565,7 +565,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// Dates and times.
 	b.reg("now", "( -- datetime)")
-	b.reg("toDt", "(str -- Maybe[datetime])", "(datetime -- datetime)")
+	b.reg("toDt", "(str -- Result[datetime str])", "(datetime -- datetime)")
 	for _, name := range []string{"date", "utcToCst", "cstToUtc"} {
 		b.reg(name, "(datetime -- datetime)")
 	}
@@ -653,7 +653,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// replaced or appended; the response's cookieJar is that same list.
 	// The response is left shared: its cookie jar is the request's list.
 	for _, name := range []string{"httpGet", "httpPost"} {
-		b.reg(name, "(HttpRequest -- Maybe[HttpResponse])")
+		b.reg(name, "(HttpRequest -- Result[HttpResponse str])")
 	}
 
 	// ----- Dicts -----

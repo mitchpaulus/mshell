@@ -1,2 +1,2 @@
-None
-Just(6)
+err(stat unknownFile: no such file or directory)
+ok(6)
