@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tab completion for `typst`: subcommands, options and their values, `.typ` files for the input, and output files.
+  `typst init` offers the templates in the local and downloaded package directories,
+  and the `typst query` selector offers the labels in the input file.
 - `findMap`: apply a quotation to each list element and return the first result that is not `none`, without running it on the rest of the list.
   `["a" "12" "7"] (toInt) findMap` gives `Just(12)`.
 - `orElse`: fall back when a `Maybe` is `none` or a `Result` is an `err`.

@@ -477,7 +477,7 @@ end
 ```
 
 The standard library includes completion definitions for
-`git`, `fd`, `ssh`, `rg`, `sudo`, `systemctl`, `journalctl`, `cargo`,
+`git`, `fd`, `ssh`, `rg`, `sudo`, `systemctl`, `journalctl`, `cargo`, `typst`,
 and `msh` itself (e.g. `__gitCompletion`, `__cargoCompletion`).
 
 ### Shell completions
