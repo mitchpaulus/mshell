@@ -1123,6 +1123,9 @@ type TermState struct {
 	tabCycleMatches    []string
 	// tabCycleQuoteWords[i] is quotesWords for tabCycleMatches[i].
 	tabCycleQuoteWords []bool
+	// insertTokens is reused by buildCompletionInsert and
+	// buildSharedCompletionInsert to lex a match without allocating.
+	insertTokens []Token
 	lastArgCycleActive bool
 	lastArgCycleIndex  int
 	lastArgCycleStart  ByteOffset
@@ -2168,7 +2171,8 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType,
 		return insertString
 	default:
 		state.l.resetInput(match)
-		tokens, err := state.l.Tokenize()
+		tokens, err := state.l.TokenizeInto(state.insertTokens)
+		state.insertTokens = tokens
 		// Quote when the completion needs multiple tokens to parse, or when
 		// its one token would not be read as its own text.
 		needsQuote := err == nil && (len(tokens) > 2 ||
@@ -2201,7 +2205,8 @@ func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, 
 	default:
 		needsQuoteForWhitespace := strings.ContainsAny(longestCommonPrefix, " \t\r\n")
 		state.l.resetInput(longestCommonPrefix)
-		tokens, err := state.l.Tokenize()
+		tokens, err := state.l.TokenizeInto(state.insertTokens)
+		state.insertTokens = tokens
 		needsQuote := (len(tokens) > 2 && err == nil) || needsQuoteForWhitespace
 		if !needsQuote && quoteWords && err == nil && len(tokens) == 2 {
 			switch tokens[0].Type {
