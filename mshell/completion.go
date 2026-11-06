@@ -247,26 +247,34 @@ type CompletionDeps struct {
 // GenerateCompletions produces completion matches for the given input.
 // This is the core pure function that can be unit tested.
 func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch {
-	var matches []TabMatch
+	matches, _ := generateRankedCompletions(input, deps)
+	return matches
+}
+
+// generateRankedCompletions also returns the rank every match shares. A
+// candidate fits when it starts with the typed text, or failing that, when
+// the typed text appears anywhere in it. Case is ignored, but when the typed
+// text has an uppercase letter, candidates with the same case win. Only the
+// best rank across every source is kept.
+func generateRankedCompletions(input CompletionInput, deps CompletionDeps) ([]TabMatch, matchRank) {
+	c := newCompletionCollector()
 	prefix := input.Prefix
+	typed := newTypedText(prefix)
 
 	// 0. What the binary's completion definitions asked for comes first.
 	if spec := input.Spec; spec != nil {
 		// Options (starting with '-') are only offered once the prefix starts with '-'.
 		showOptions := strings.HasPrefix(prefix, "-")
 		for _, value := range spec.Values {
-			if !strings.HasPrefix(value, prefix) {
-				continue
-			}
 			if !showOptions && strings.HasPrefix(value, "-") {
 				continue
 			}
-			matches = append(matches, TabMatch{TABMATCHCMD, value})
+			c.add(TABMATCHCMD, value, typed.rank(value, c.best))
 		}
 		if spec.Binaries {
-			for _, match := range deps.Binaries.Matches(prefix) {
-				matches = append(matches, TabMatch{TABMATCHCMD, match})
-			}
+			deps.Binaries.EachName(func(name string) {
+				c.add(TABMATCHCMD, name, typed.rank(name, c.best))
+			})
 		}
 	}
 
@@ -275,18 +283,23 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 		input.LastTokenType == UNFINISHEDSTRING ||
 		input.LastTokenType == UNFINISHEDFORMATSTRING ||
 		input.LastTokenType == UNFINISHEDSINGLEQUOTESTRING {
-		return appendFileCompletions(matches, input, deps.FS)
+		appendFileCompletions(&c, input, deps.FS)
+		return c.matches, c.best
 	}
 
 	// 1. Environment variable completion ($VAR)
 	if len(prefix) > 0 && prefix[0] == '$' {
-		searchPrefix := prefix[1:]
+		typedName := newTypedText(prefix[1:])
 		for _, envVar := range deps.Env.Environ() {
-			if strings.HasPrefix(envVar, searchPrefix) {
-				parts := strings.SplitN(envVar, "=", 2)
-				if len(parts) > 0 {
-					matches = append(matches, TabMatch{TABMATCHENVVAR, "$" + parts[0]})
-				}
+			name := envVar
+			if i := strings.IndexByte(envVar, '='); i >= 0 {
+				name = envVar[:i]
+			}
+			if name == "" {
+				continue
+			}
+			if r := typedName.rank(name, c.best); r != rankNone {
+				c.add(TABMATCHENVVAR, "$"+name, r)
 			}
 		}
 	}
@@ -297,35 +310,32 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 		input.PrevTokenType == PIPE ||
 		input.PrevTokenType == LEFT_SQUARE_BRACKET
 	if binaryPosition && len(prefix) > 0 && input.LastTokenType == LITERAL && (input.Spec == nil || !input.Spec.Binaries) {
-		binMatches := deps.Binaries.Matches(prefix)
-		for _, match := range binMatches {
-			matches = append(matches, TabMatch{TABMATCHCMD, match})
-		}
+		deps.Binaries.EachName(func(name string) {
+			c.add(TABMATCHCMD, name, typed.rank(name, c.best))
+		})
 	}
 	if binaryPosition && len(prefix) > 0 && input.LastTokenType == LITERAL {
 		for _, word := range deps.Abbreviations {
-			if strings.HasPrefix(word, prefix) {
-				matches = append(matches, TabMatch{TABMATCHCMD, word})
-			}
+			c.add(TABMATCHCMD, word, typed.rank(word, c.best))
 		}
 	}
 
 	// 3. File path completion
-	matches = appendFileCompletions(matches, input, deps.FS)
+	appendFileCompletions(&c, input, deps.FS)
 
 	// 4. MShell variable completion (@var)
 	if len(prefix) > 0 && prefix[0] == '@' {
-		searchPrefix := prefix[1:]
+		typedName := newTypedText(prefix[1:])
 		for v := range deps.Variables {
-			if strings.HasPrefix(v, searchPrefix) {
-				matches = append(matches, TabMatch{TABMATCHVAR, "@" + v})
+			if r := typedName.rank(v, c.best); r != rankNone {
+				c.add(TABMATCHVAR, "@"+v, r)
 			}
 		}
 	} else if input.LastTokenType == LITERAL && !input.InBinaryMode {
 		// Completion on variables with ! suffix
 		for v := range deps.Variables {
-			if strings.HasPrefix(v, prefix) {
-				matches = append(matches, TabMatch{TABMATCHVAR, v + "!"})
+			if r := typed.rank(v, c.best); r != rankNone {
+				c.add(TABMATCHVAR, v+"!", r)
 			}
 		}
 	}
@@ -333,31 +343,27 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 	// 5. Built-in command completion
 	if !input.InBinaryMode {
 		for name := range deps.BuiltIns {
-			if strings.HasPrefix(name, prefix) {
-				matches = append(matches, TabMatch{TABMATCHBUILTIN, name})
-			}
+			c.add(TABMATCHBUILTIN, name, typed.rank(name, c.best))
 		}
 	}
 
 	// 6. Definition completion
 	if !input.InBinaryMode {
 		for _, defName := range deps.Definitions {
-			if strings.HasPrefix(defName, prefix) {
-				matches = append(matches, TabMatch{TABMATCHDEF, defName})
-			}
+			c.add(TABMATCHDEF, defName, typed.rank(defName, c.best))
 		}
 	}
 
-	return matches
+	return c.matches, c.best
 }
 
-// appendFileCompletions appends the files and directories the input's spec
+// appendFileCompletions adds the files and directories the input's spec
 // allows. The directory is read once; the fallback tier rescans the same
 // entries only when the first tier offered nothing.
-func appendFileCompletions(matches []TabMatch, input CompletionInput, cfs CompletionFS) []TabMatch {
+func appendFileCompletions(c *completionCollector, input CompletionInput, cfs CompletionFS) {
 	first, fallback, hasFallback, ok := input.Spec.fileTiers()
 	if !ok {
-		return matches
+		return
 	}
 	prefix := input.Prefix
 
@@ -370,13 +376,13 @@ func appendFileCompletions(matches []TabMatch, input CompletionInput, cfs Comple
 		}
 	}
 	dir := prefix[0 : indexOfLastSeparator+1]
-	filename := prefix[indexOfLastSeparator+1:]
+	typed := newTypedText(prefix[indexOfLastSeparator+1:])
 
 	var searchDir string
 	if prefix == "" {
 		cwd, err := cfs.Getwd()
 		if err != nil {
-			return matches
+			return
 		}
 		searchDir = cwd
 	} else if len(dir) == 0 {
@@ -387,26 +393,27 @@ func appendFileCompletions(matches []TabMatch, input CompletionInput, cfs Comple
 
 	listing, err := cfs.ReadDir(searchDir)
 	if err != nil {
-		return matches
+		return
 	}
 
-	before := len(matches)
-	matches = appendFilteredEntries(matches, listing, &first, dir, filename, searchDir, cfs)
-	if hasFallback && len(matches) == before {
-		matches = appendFilteredEntries(matches, listing, &fallback, dir, filename, searchDir, cfs)
+	offered := appendFilteredEntries(c, listing, &first, dir, &typed, searchDir, cfs)
+	if hasFallback && offered == 0 {
+		appendFilteredEntries(c, listing, &fallback, dir, &typed, searchDir, cfs)
 	}
-	return matches
 }
 
-// appendFilteredEntries appends the entries that fit the filter, sorted by
-// name. The first pass picks entries and sizes the output, so every match
-// string is cut from a single buffer instead of one allocation per match.
-func appendFilteredEntries(matches []TabMatch, listing *DirListing, filter *fileFilter, dir string, filename string, searchDir string, cfs CompletionFS) []TabMatch {
+// appendFilteredEntries adds the entries that fit the filter and the typed
+// name, sorted by name, and returns how many it added. The first pass picks
+// entries and sizes the output, so every match string is cut from a single
+// buffer instead of one allocation per match.
+func appendFilteredEntries(c *completionCollector, listing *DirListing, filter *fileFilter, dir string, typed *typedText, searchDir string, cfs CompletionFS) int {
 	listing.picked = listing.picked[:0]
 	size := 0
+	best := c.best
 	for i := range listing.entries {
 		name := listing.name(i)
-		if !strings.HasPrefix(name, filename) {
+		r := typed.rank(name, best)
+		if r == rankNone {
 			continue
 		}
 		kind := listing.entries[i].kind
@@ -419,19 +426,26 @@ func appendFilteredEntries(matches []TabMatch, listing *DirListing, filter *file
 			}
 			listing.entries[i].kind = kind
 		}
+		n := len(name)
 		if kind == dirKindDir {
-			size += len(name) + 1
-		} else if filter.matchesFile(name) {
-			size += len(name)
-		} else {
+			n++
+		} else if !filter.matchesFile(name) {
 			continue
 		}
+		if r < best {
+			// A better rank drops the entries picked so far.
+			best = r
+			listing.picked = listing.picked[:0]
+			size = 0
+		}
+		size += n
 		listing.picked = append(listing.picked, int32(i))
 	}
 	count := len(listing.picked)
 	if count == 0 {
-		return matches
+		return 0
 	}
+	c.useRank(best)
 	listing.sortPicked()
 
 	var b strings.Builder
@@ -445,17 +459,17 @@ func appendFilteredEntries(matches []TabMatch, listing *DirListing, filter *file
 	}
 
 	all := b.String()
-	matches = slices.Grow(matches, count)
+	c.matches = slices.Grow(c.matches, count)
 	offset := 0
 	for _, i := range listing.picked {
 		n := len(dir) + int(listing.entries[i].n)
 		if listing.entries[i].kind == dirKindDir {
 			n++
 		}
-		matches = append(matches, TabMatch{TABMATCHFILE, all[offset : offset+n]})
+		c.matches = append(c.matches, TabMatch{TABMATCHFILE, all[offset : offset+n]})
 		offset += n
 	}
-	return matches
+	return count
 }
 
 // OSCompletionFS implements CompletionFS using the real filesystem. Listing is

@@ -4554,7 +4554,7 @@ func (state *TermState) completeAtCursor() {
 	}
 
 	// Generate completions using the extracted function
-	matches := GenerateCompletions(input, deps)
+	matches, rank := generateRankedCompletions(input, deps)
 	allFileMatches := allMatchesAreFiles(matches)
 
 	var insertString string
@@ -4574,8 +4574,13 @@ func (state *TermState) completeAtCursor() {
 		// Replace the prefex
 		state.replaceText(insertString, replaceStart, replaceEnd)
 	} else {
-		// Print out the longest common prefix
-		longestCommonPrefix := completionGraphemePrefix(GetMatchTexts(matches))
+		// Print out the longest common prefix. When the typed text is in the
+		// middle of the matches, a shared start would replace it with
+		// something it is not the start of, so nothing is inserted.
+		longestCommonPrefix := ""
+		if rank <= rankPrefixIgnoreCase {
+			longestCommonPrefix = completionGraphemePrefix(GetMatchTexts(matches))
+		}
 		state.Logf("Longest common prefix: '%s'\n", longestCommonPrefix)
 
 		if len(longestCommonPrefix) <= len(prefix) {

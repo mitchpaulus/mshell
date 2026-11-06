@@ -43,6 +43,8 @@ const nullDevice = "NUL"
 type PathBinManager struct {
 	currPath []string
 	binaryPaths map[string]WinBinaryPath // Key here is uppercase binary name
+	// names holds every OriginalFileName in binaryPaths, sorted.
+	names []string
 	pathExts []string
 }
 
@@ -60,6 +62,12 @@ func (pbm *PathBinManager) Matches(search string) ([]string) {
 	}
 	sort.Strings(matches)
 	return matches
+}
+
+func (pbm *PathBinManager) EachName(fn func(name string)) {
+	for _, name := range pbm.names {
+		fn(name)
+	}
 }
 
 func (pbm *PathBinManager) Lookup(binName string) (string, bool) {
@@ -208,8 +216,15 @@ func (pbm *PathBinManager) Update() {
 		}
 	}
 
+	names := make([]string, 0, len(binaryPaths))
+	for _, binaryPath := range binaryPaths {
+		names = append(names, binaryPath.OriginalFileName)
+	}
+	sort.Strings(names)
+
 	pbm.currPath = currPathSlice
 	pbm.binaryPaths = binaryPaths
+	pbm.names = names
 	pbm.pathExts = pathExtsSlice
 }
 

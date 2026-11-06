@@ -126,6 +126,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Tab completion matches a word anywhere in a candidate when nothing starts with it, so `ctl` finds `systemctl`.
+  Lowercase words ignore case everywhere, and a word with an uppercase letter prefers candidates with the same case.
+  Only the best kind of match is offered, and a word starting with `-` still only matches from the start.
 - In a list or dict pattern, `none`, `null`, and enum members without payload values now test the element instead of binding a name with that spelling.
   A bare word starting with `-` is an error; quote it to match the string (`'-h'`).
 - `httpGet`, `httpPost`, `toDt`, `fileSize`, `modTime`, `evalSymLinks` and `linkCount` give a `Result[T str]` instead of a `Maybe[T]`.

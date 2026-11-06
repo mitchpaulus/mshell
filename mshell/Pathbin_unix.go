@@ -28,7 +28,9 @@ type PathBinManager struct {
 	// binaryPaths maps every executable's name to its full path, once
 	// scanned is set.
 	binaryPaths map[string]string
-	scanned     bool
+	// names holds the keys of binaryPaths, sorted.
+	names   []string
+	scanned bool
 }
 
 func NewPathBinManager() IPathBinManager {
@@ -48,7 +50,7 @@ func (pbm *PathBinManager) Update() {
 	} else {
 		pbm.currPath = nil
 	}
-	pbm.binMap, pbm.found, pbm.binaryPaths, pbm.scanned = nil, nil, nil, false
+	pbm.binMap, pbm.found, pbm.binaryPaths, pbm.names, pbm.scanned = nil, nil, nil, nil, false
 }
 
 // loadBinMapLocked reads msh_bins.txt the first time it is needed.
@@ -135,7 +137,21 @@ func (pbm *PathBinManager) scanLocked() {
 	for name, path := range pbm.binMap {
 		binaryPaths[name] = path
 	}
-	pbm.binaryPaths, pbm.scanned = binaryPaths, true
+	names := make([]string, 0, len(binaryPaths))
+	for name := range binaryPaths {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	pbm.binaryPaths, pbm.names, pbm.scanned = binaryPaths, names, true
+}
+
+func (pbm *PathBinManager) EachName(fn func(name string)) {
+	pbm.mu.Lock()
+	defer pbm.mu.Unlock()
+	pbm.scanLocked()
+	for _, name := range pbm.names {
+		fn(name)
+	}
 }
 
 func (pbm *PathBinManager) Matches(search string) []string {

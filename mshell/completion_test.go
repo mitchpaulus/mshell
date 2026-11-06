@@ -105,6 +105,17 @@ func (f FakePathBinManager) Matches(search string) []string {
 	return matches
 }
 
+func (f FakePathBinManager) EachName(fn func(name string)) {
+	names := make([]string, 0, len(f.Binaries))
+	for name := range f.Binaries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		fn(name)
+	}
+}
+
 func (f FakePathBinManager) Lookup(binName string) (string, bool) {
 	path, ok := f.Binaries[binName]
 	return path, ok
@@ -981,7 +992,8 @@ func BenchmarkFileCompletionPreferred(b *testing.B) {
 	input := specInput("file", &CompletionSpec{PreferredFiles: []CompletionGlob{g}})
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		appendFileCompletions(nil, input, &fsys)
+		c := newCompletionCollector()
+		appendFileCompletions(&c, input, &fsys)
 	}
 }
 
