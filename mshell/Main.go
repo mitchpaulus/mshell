@@ -1121,6 +1121,8 @@ type TermState struct {
 	tabCycleTokenType  TokenType
 	tabCycleAllFiles   bool
 	tabCycleMatches    []string
+	// tabCycleQuoteWords[i] is quotesWords for tabCycleMatches[i].
+	tabCycleQuoteWords []bool
 	lastArgCycleActive bool
 	lastArgCycleIndex  int
 	lastArgCycleStart  ByteOffset
@@ -1775,6 +1777,7 @@ func (state *TermState) resetTabCycle() {
 	if state.tabCycleMatches != nil {
 		state.tabCycleMatches = state.tabCycleMatches[:0]
 	}
+	state.tabCycleQuoteWords = state.tabCycleQuoteWords[:0]
 }
 
 func (state *TermState) resetLastArgCycle() {
@@ -2112,12 +2115,50 @@ func escapeFormatStringText(text string) string {
 
 var formatStringTextEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `{`, `\{`, `}`, `\}`)
 
-func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, preferPathQuote bool) string {
+// quotesWords reports whether a match of this kind is an argument, which
+// is quoted when typing it bare would mean something else: `2.0` is read
+// as the number 2, `@x` as a variable, and `sort` runs the builtin. A
+// binary, builtin or definition name is left as it is.
+func quotesWords(kind TabMatchType) bool {
+	return kind == TABMATCHVALUE || kind == TABMATCHFILE
+}
+
+// wordReadsAsText reports whether tok, the only token of text, is read as
+// the string text in a command list: a plain word that is not a builtin,
+// a definition or an enum member, or an integer written the way it prints.
+func (state *TermState) wordReadsAsText(tok Token, text string) bool {
+	switch tok.Type {
+	case LITERAL:
+		if tok.Lexeme != text {
+			return false
+		}
+		if _, ok := BuiltInList[text]; ok {
+			return false
+		}
+		if _, ok := state.evalState.EnumMembers[text]; ok {
+			return false
+		}
+		return !IsDefinitionDefined(text, state.stdLibDefs)
+	case INTEGER:
+		n, err := parseIntLiteral(text)
+		return err == nil && strconv.Itoa(n) == text
+	}
+	return false
+}
+
+// buildCompletionInsert gives the text that replaces the typed prefix with
+// match. quoteWords is quotesWords for the match's kind.
+func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, preferPathQuote bool, quoteWords bool) string {
 	switch tokenType {
 	case UNFINISHEDFORMATSTRING:
 		// Replaces only the text after the opener; see completionTokenPrefix.
 		return escapeFormatStringText(match)
 	case UNFINISHEDSINGLEQUOTESTRING:
+		// A value is a whole argument, so its string is closed. A file
+		// name stays open, since it may be a directory to go on into.
+		if quoteWords && !preferPathQuote {
+			return "'" + match + "'"
+		}
 		return "'" + match
 	case UNFINISHEDPATH:
 		insertString := "`" + match
@@ -2128,8 +2169,11 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType,
 	default:
 		state.l.resetInput(match)
 		tokens, err := state.l.Tokenize()
-		if len(tokens) > 2 && err == nil {
-			// Quote when the completion needs multiple tokens to parse.
+		// Quote when the completion needs multiple tokens to parse, or when
+		// its one token would not be read as its own text.
+		needsQuote := err == nil && (len(tokens) > 2 ||
+			(quoteWords && len(tokens) == 2 && !state.wordReadsAsText(tokens[0], match)))
+		if needsQuote {
 			if preferPathQuote {
 				insertString := "`" + match
 				if !strings.HasSuffix(match, string(os.PathSeparator)) {
@@ -2143,7 +2187,10 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType,
 	}
 }
 
-func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, allFileMatches bool) string {
+// buildSharedCompletionInsert gives the text that replaces the typed prefix
+// with the start every match shares. quoteWords is true when every match
+// is quoted as an argument (quotesWords).
+func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, allFileMatches bool, quoteWords bool) string {
 	switch tokenType {
 	case UNFINISHEDFORMATSTRING:
 		return escapeFormatStringText(longestCommonPrefix)
@@ -2155,7 +2202,18 @@ func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, 
 		needsQuoteForWhitespace := strings.ContainsAny(longestCommonPrefix, " \t\r\n")
 		state.l.resetInput(longestCommonPrefix)
 		tokens, err := state.l.Tokenize()
-		if (len(tokens) > 2 && err == nil) || needsQuoteForWhitespace {
+		needsQuote := (len(tokens) > 2 && err == nil) || needsQuoteForWhitespace
+		if !needsQuote && quoteWords && err == nil && len(tokens) == 2 {
+			switch tokens[0].Type {
+			case LITERAL, MINUS, DOUBLEDASH, INTEGER, FLOAT:
+				// The start of a word, an option or a number: what it
+				// reads as is decided once the whole match is in.
+			default:
+				// `@preview/` or `<`: no match can be typed bare.
+				needsQuote = true
+			}
+		}
+		if needsQuote {
 			// Add only the opening quote while user keeps typing to disambiguate.
 			if allFileMatches {
 				return "`" + longestCommonPrefix
@@ -2164,6 +2222,11 @@ func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, 
 		}
 		return longestCommonPrefix
 	}
+}
+
+// tabCycleQuotesWords is quotesWords for the cycled match i.
+func (state *TermState) tabCycleQuotesWords(i int) bool {
+	return i < len(state.tabCycleQuoteWords) && state.tabCycleQuoteWords[i]
 }
 
 func (state *TermState) cycleTabCompletion(direction int) {
@@ -2176,7 +2239,7 @@ func (state *TermState) cycleTabCompletion(direction int) {
 	} else if state.tabCycleIndex < 0 {
 		state.tabCycleIndex = len(state.tabCycleMatches) - 1
 	}
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles, state.tabCycleQuotesWords(state.tabCycleIndex))
 	state.currentCommand = state.tabCycleSource
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.setTabCompletions(state.tabCycleMatches)
@@ -2193,7 +2256,7 @@ func (state *TermState) selectTabCompletion(index int) {
 		index = len(state.tabCycleMatches) - 1
 	}
 	state.tabCycleIndex = index
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles, state.tabCycleQuotesWords(state.tabCycleIndex))
 	state.currentCommand = state.tabCycleSource
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.setTabCompletions(state.tabCycleMatches)
@@ -4569,7 +4632,7 @@ func (state *TermState) completeAtCursor() {
 		fmt.Fprintf(os.Stdout, "\a")
 	} else if len(matches) == 1 {
 		// Lex the match and check if we have to quote around it
-		insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE)
+		insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE, quotesWords(matches[0].TabMatchType))
 
 		// Replace the prefex
 		state.replaceText(insertString, replaceStart, replaceEnd)
@@ -4587,7 +4650,11 @@ func (state *TermState) completeAtCursor() {
 			// Print bell
 			fmt.Fprintf(os.Stdout, "\a")
 		} else {
-			longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, allFileMatches)
+			allQuoteWords := true
+			for _, m := range matches {
+				allQuoteWords = allQuoteWords && quotesWords(m.TabMatchType)
+			}
+			longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, allFileMatches, allQuoteWords)
 
 			// Replace the prefix
 			state.replaceText(longestCommonPrefix, replaceStart, replaceEnd)
@@ -4602,6 +4669,10 @@ func (state *TermState) completeAtCursor() {
 		state.tabCycleTokenType = lastToken.Type
 		state.tabCycleAllFiles = allFileMatches
 		state.tabCycleMatches = append(state.tabCycleMatches[:0], tabMatchTexts...)
+		state.tabCycleQuoteWords = state.tabCycleQuoteWords[:0]
+		for _, m := range matches {
+			state.tabCycleQuoteWords = append(state.tabCycleQuoteWords, quotesWords(m.TabMatchType))
+		}
 		state.setTabCompletions(tabMatchTexts)
 	}
 }

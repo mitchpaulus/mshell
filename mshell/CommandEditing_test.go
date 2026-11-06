@@ -201,10 +201,10 @@ func TestEditingSequenceBoundaries(t *testing.T) {
 
 func TestFormatStringCompletionInsert(t *testing.T) {
 	state := &TermState{}
-	if got := state.buildCompletionInsert(`my {file} "x".txt`, UNFINISHEDFORMATSTRING, true); got != `my \{file\} \"x\".txt` {
+	if got := state.buildCompletionInsert(`my {file} "x".txt`, UNFINISHEDFORMATSTRING, true, true); got != `my \{file\} \"x\".txt` {
 		t.Fatalf("insert = %q", got)
 	}
-	if got := state.buildSharedCompletionInsert(`a\b`, UNFINISHEDFORMATSTRING, true); got != `a\\b` {
+	if got := state.buildSharedCompletionInsert(`a\b`, UNFINISHEDFORMATSTRING, true, true); got != `a\\b` {
 		t.Fatalf("shared insert = %q", got)
 	}
 }

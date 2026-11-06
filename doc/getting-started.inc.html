@@ -280,6 +280,14 @@ When the matches share a start longer than the word, Tab replaces the word with 
 When the word is in the middle of the matches, Tab leaves the word as typed, and pressing Tab again cycles through the matches.
 </p>
 
+<p>
+An argument that would mean something else when typed bare is quoted.
+A file is put in backticks, and an argument from a completion definition in single quotes:
+<code>2.0</code> would be the number <code>2</code>, <code>@preview/charged-ieee</code> a variable,
+<code>&lt;intro&gt;</code> a redirect, and <code>sort</code> the built-in.
+Commands, built-ins and definitions are left as they are.
+</p>
+
 <h1 id="getting-started-key-bindings">Key bindings <a class="section-link" href="#getting-started-key-bindings" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
 
 <p>

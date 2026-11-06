@@ -17,6 +17,9 @@ const (
 	TABMATCHCMD
 	TABMATCHBUILTIN
 	TABMATCHDEF
+	// A value from a binary's completion definition: an argument, so it
+	// is quoted when typing it bare would mean something else.
+	TABMATCHVALUE
 )
 
 // TabMatch represents a single completion match with its type.
@@ -290,7 +293,7 @@ func generateRankedCompletions(input CompletionInput, deps CompletionDeps) ([]Ta
 			if !showOptions && strings.HasPrefix(value, "-") {
 				continue
 			}
-			c.add(TABMATCHCMD, value, typed.rank(value, c.best))
+			c.add(TABMATCHVALUE, value, typed.rank(value, c.best))
 		}
 		if spec.Binaries {
 			deps.Binaries.EachName(func(name string) {

@@ -464,6 +464,7 @@ Patterns match file names, not paths, and are case-sensitive.
 A dictionary without `preferredFiles`, `files`, or `dirs` offers no files.
 A list is the same as `{ 'values': list, 'files': '*' }`.
 Values starting with `-` are only offered once the typed text starts with `-`.
+Return values as plain text: Tab quotes a value that would mean something else typed bare, such as `2.0`, `@preview/x` or `<intro>`.
 
 ```mshell
 def typstCompletion { 'complete': ['typst'] } ([str] -- new CompletionResult)
