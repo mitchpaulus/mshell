@@ -641,6 +641,10 @@ type coreChecker struct {
 	daNames []NameId
 	daSpans []daSpan
 	liveBuf []savedRun
+	// joinBuf and slotBuf hold the arms and slots being joined, as
+	// stacks.
+	joinBuf []nArm
+	slotBuf []coreSlot
 }
 
 // ---------------------------------------------------------------------------
@@ -1990,8 +1994,7 @@ func (c *coreChecker) joinRepeated(sig *coreSig, gens []TypeId, argAt func(i int
 		if !c.hasVars(gens[g]) {
 			continue
 		}
-		var joined coreSlot
-		count := 0
+		var args []coreSlot
 		for i, want := range sig.ins {
 			n := c.arena.nodes[want]
 			if n.Kind != TKParam || int(n.A) != g {
@@ -1999,22 +2002,16 @@ func (c *coreChecker) joinRepeated(sig *coreSig, gens []TypeId, argAt func(i int
 			}
 			arg := argAt(i)
 			if c.waiting(arg) != nil || c.hasVars(arg.t) {
-				count = 0
+				args = nil
 				break
 			}
 			arg.fresh = c.freshish(arg)
-			if count == 0 {
-				joined = arg
-			} else if j, ok := c.joinSlot(joined, arg); ok {
-				joined = j
-			} else {
-				count = 0
-				break
-			}
-			count++
+			args = append(args, arg)
 		}
-		if count >= 2 {
-			c.uni.Unify(gens[g], joined.t)
+		if len(args) >= 2 {
+			if joined, ok := c.joinSlots(args); ok {
+				c.uni.Unify(gens[g], joined.t)
+			}
 		}
 	}
 }
@@ -2264,12 +2261,21 @@ func (c *coreChecker) listLiteral(l *MShellParseList) {
 				fresh = false
 			}
 		}
-		for _, e := range elems[1:] {
-			e.fresh = c.freshish(e)
-			j, ok := c.joinSlot(elem, e)
+		if len(elems) > 1 {
+			mark := len(c.slotBuf)
+			for _, e := range elems {
+				e.fresh = c.freshish(e)
+				c.slotBuf = append(c.slotBuf, e)
+			}
+			j, ok := c.joinSlots(c.slotBuf[mark:len(c.slotBuf):len(c.slotBuf)])
+			c.slotBuf = c.slotBuf[:mark]
 			if !ok {
+				ts := make([]TypeId, len(elems))
+				for i, e := range elems {
+					ts[i] = e.t
+				}
 				c.errs = append(c.errs, TypeError{Kind: TErrNoJoin, Pos: l.StartToken,
-					Hint: "the elements of this list have no common type: " + c.format(elem.t) + " and " + c.format(e.t)})
+					Hint: "the elements of this list have no common type: " + c.formatList(ts)})
 				c.abandoned = true
 				return
 			}
@@ -2592,12 +2598,25 @@ func (c *coreChecker) joinArms(arms []savedRun, tok Token) {
 		}
 	}
 	c.stack = append(c.stack[:0], c.saved[first.start:first.end]...)
-	for _, a := range live[1:] {
+	if len(live) > 1 {
+		mark := len(c.slotBuf)
+		defer func() { c.slotBuf = c.slotBuf[:mark] }()
+		for range live {
+			c.slotBuf = append(c.slotBuf, coreSlot{})
+		}
+		slots := c.slotBuf[mark:len(c.slotBuf):len(c.slotBuf)]
 		for i := range n {
-			j, ok := c.joinSlot(c.stack[i], c.saved[a.start+i])
+			for k, a := range live {
+				slots[k] = c.saved[a.start+i]
+			}
+			j, ok := c.joinSlots(slots)
 			if !ok {
+				ts := make([]TypeId, len(slots))
+				for k, s := range slots {
+					ts[k] = s.t
+				}
 				c.errs = append(c.errs, TypeError{Kind: TErrNoJoin, Pos: tok,
-					Hint: "the arms leave " + c.format(c.stack[i].t) + " and " + c.format(c.saved[a.start+i].t) +
+					Hint: "the arms leave " + c.formatList(ts) +
 						" in the same place, which have no common type; declare the type you want and use `as` in each arm"})
 				c.abandoned = true
 				return
@@ -2800,22 +2819,24 @@ func (c *coreChecker) carryUnknown(i int, o uint32) {
 	c.stack[i].origin = o
 }
 
-// joinSlot joins two slots. A slot with an unsolved variable is unified,
-// never joined, so the answer does not depend on checking order. An
-// unknown in the join keeps the read that made it (coreSlot.origin).
+// joinSlot joins two slots: joinN of the two.
 func (c *coreChecker) joinSlot(a, b coreSlot) (coreSlot, bool) {
-	// The same slot in both arms is the value from before the branch, which
-	// neither arm touched: anything that copies, stores or rewrites it
-	// changes the slot. So it keeps its literal text or names, partly new
-	// mark and origin.
-	if a == b {
-		return a, true
-	}
-	j, ok := c.joinTypes(a, b)
+	pair := [2]coreSlot{a, b}
+	return c.joinSlots(pair[:])
+}
+
+// joinSlots joins slots all at once (joinN). A slot with an unsolved
+// variable is unified, never joined, so the answer does not depend on
+// checking order. An unknown in the join keeps the read that made it
+// (coreSlot.origin).
+func (c *coreChecker) joinSlots(slots []coreSlot) (coreSlot, bool) {
+	j, ok := c.joinN(slots)
 	if ok && j.origin == 0 {
-		o := c.unknownOrigin(a)
-		if o == 0 {
-			o = c.unknownOrigin(b)
+		var o uint32
+		for _, s := range slots {
+			if o = c.unknownOrigin(s); o != 0 {
+				break
+			}
 		}
 		if o != 0 && c.mentionsType(c.subst.Apply(c.arena, j.t), TidUnknown) {
 			j.origin = o
@@ -2824,13 +2845,24 @@ func (c *coreChecker) joinSlot(a, b coreSlot) (coreSlot, bool) {
 	return j, ok
 }
 
-// joinTypes is joinSlot for two different slots.
-func (c *coreChecker) joinTypes(a, b coreSlot) (coreSlot, bool) {
-	// Two partly new arms, or one partly new and one new, stay partly new
-	// when they can take one mark (join_slot3 in formal-ver/PartialJoin.v).
-	if s, ok := c.partialJoin(a, b); ok {
-		return s, true
+// formatList is "A, B and C".
+func (c *coreChecker) formatList(ts []TypeId) string {
+	var parts []string
+	for _, t := range ts {
+		f := c.format(t)
+		if !slices.Contains(parts, f) {
+			parts = append(parts, f)
+		}
 	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
+}
+
+// joinTypes is the pairwise join of two different slots, used where a
+// slot has unsolved variables (joinPairs).
+func (c *coreChecker) joinTypes(a, b coreSlot) (coreSlot, bool) {
 	fresh := a.fresh && b.fresh
 	if a.t == b.t {
 		return coreSlot{t: a.t, pq: a.pq, fresh: fresh}, true

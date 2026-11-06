@@ -1005,8 +1005,17 @@ the core (`if_join`).
   merged mark (`ss_mc`, which changes a mark only where the type holds no value, or a new value to a partly
   new one whose positions are all new), then the types are joined position by position under it: $<=$ at a
   stored position, the fresh join at a new one. Each arm reaches the result by `ss_mc` then `ss_m`.
-  *Mechanized:* `mcompat`, `ss_mc` in `Typing.v`, `mtyped_mcompat` in `Partial.v`; `fmerge`, `mjoin`,
-  `join_slot3`, `join_slot3_ub`, `if_join3` in `PartialJoin.v`; `if_join3_alg` in `Decide.v`.
+  *Mechanized:* `mcompat`, `ss_mc` in `Typing.v`, `mtyped_mcompat` in `Partial.v`; the join itself is now
+  the one below.
++ *One join for all the arms (2026-11-06).* Folding the pairwise join over a `match` let the order of the arms
+  decide whether they join: a new arm that took a shared arm's type gave up its freshness before meeting the
+  others. The arms are now joined all at once (`ai/n-way-join.md`): arms of several kinds kind by kind, the
+  join being the union; arms of one kind by the fresh join when all are new, by one mark for all when some are
+  partly new and none stored, and otherwise by a target (the stored arms' join, or with none, the partly new
+  arms' join with the new arms whose marks agree) that the other arms take where they can, the rest committed
+  and joined in. Each arm reaches the join by subsumption, repeated.
+  *Mechanized:* `fmergeN`, `joinG`, `joinN`, `joinN_stack_ub`, `arm_joinN`, `if_joinN` in `PartialJoin.v`;
+  `if_joinN_alg`, `arm_joinN_alg` and the example `alg_joinN_any_order` in `Decide.v`.
 
 The arms must still leave the same number of stack items (as today). Arms that diverge are ignored
 (@sec-diverge).

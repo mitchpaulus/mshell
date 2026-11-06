@@ -316,35 +316,309 @@ func (c *coreChecker) recordPart(d coreSlot, name NameId, m coreMark) uint16 {
 	return c.newPart(p)
 }
 
-// Joining partly new arms (formal-ver/PartialJoin.v).
+// One join for all the arms (formal-ver/PartialJoin.v, ai/n-way-join.md).
 //
-// `if {a: @xs} else {a: @xs, b: [2]} end` leaves a new dict holding a
-// stored list in each arm. Relations.JoinSlot joins only shared or fresh
-// slots, so without this the arms were committed and the join was a
-// shared {a: [int]}, which no wider dict type is above. Here the arms get
-// one mark (fmerge) and their types are joined position by position under
-// it (mjoin), so the result is partly new too and may still gain optional
-// labels. Each step mirrors the function of the same name in PartialJoin.v.
+// The arms of an if or match, the elements of a list literal and the
+// repeated arguments of a generic are joined all at once, position by
+// position, so the result does not depend on their order the way a
+// pairwise fold does. joinN tries, in order: every arm new (the fresh
+// join); some arm partly new and none stored (one mark for all, fmergeN,
+// then the types joined under it, mjoin); and shared (a target the new
+// and partly new arms take where they can, with the rest committed and
+// joined in). Each step mirrors the function of the same name in
+// PartialJoin.v.
 
-// partialJoin is pjoin in PartialJoin.v: the join of two solved slots when
-// either is partly new and both can take one partly new mark.
-func (c *coreChecker) partialJoin(a, b coreSlot) (coreSlot, bool) {
-	if a.part == 0 && b.part == 0 {
+// nArm is one arm's slot at a position: its mark (a value of an immutable
+// type counts as new) and its solved type.
+type nArm struct {
+	m coreMark
+	t TypeId
+}
+
+// joinN joins the slots the arms leave at one position.
+func (c *coreChecker) joinN(slots []coreSlot) (coreSlot, bool) {
+	if len(slots) == 0 {
 		return coreSlot{}, false
 	}
-	if c.hasVars(a.t) || c.hasVars(b.t) {
-		return coreSlot{}, false
+	same := true
+	for _, s := range slots[1:] {
+		if s != slots[0] {
+			same = false
+			break
+		}
 	}
-	at, bt := c.subst.Apply(c.arena, a.t), c.subst.Apply(c.arena, b.t)
-	m, ok := c.fmerge(slotMark(a), slotMark(b), at, bt)
-	if !ok || m < 2 {
-		return coreSlot{}, false
+	// The same slot in every arm is the value from before the branch.
+	if same {
+		return slots[0], true
 	}
-	t, ok := c.mjoin(m, at, bt)
+	for _, s := range slots {
+		if c.hasVars(s.t) {
+			return c.joinPairs(slots)
+		}
+	}
+	mark := len(c.joinBuf)
+	defer func() { c.joinBuf = c.joinBuf[:mark] }()
+	for range slots {
+		c.joinBuf = append(c.joinBuf, nArm{})
+	}
+	arms := c.joinBuf[mark:len(c.joinBuf):len(c.joinBuf)]
+	flat := true
+	for i, s := range slots {
+		m := slotMark(s)
+		if m == markShared && c.freshish(s) {
+			m = markNew
+		}
+		arms[i] = nArm{m: m, t: c.subst.Apply(c.arena, s.t)}
+		if m != arms[0].m || arms[i].t != arms[0].t || m >= 2 {
+			flat = false
+		}
+	}
+	// One type and one stored or new mark: the join gives it back.
+	if flat {
+		out := coreSlot{t: arms[0].t, fresh: arms[0].m == markNew, pq: slots[0].pq}
+		for _, s := range slots[1:] {
+			if s.pq != out.pq {
+				out.pq = 0
+			}
+		}
+		return out, true
+	}
+	m, t, ok := c.joinKinds(arms)
 	if !ok {
 		return coreSlot{}, false
 	}
-	return coreSlot{t: t, part: uint16(m - 1)}, true
+	switch {
+	case m == markNew:
+		return coreSlot{t: t, fresh: true}, true
+	case m >= 2:
+		return coreSlot{t: t, part: uint16(m - 1)}, true
+	}
+	return coreSlot{t: t}, true
+}
+
+// joinKinds is joinN in PartialJoin.v: arms of two or more kinds are
+// joined kind by kind, and the join is the union of those, new when every
+// kind's join is; otherwise, or when a kind has no join, joinG.
+func (c *coreChecker) joinKinds(arms []nArm) (coreMark, TypeId, bool) {
+	k0, ok0 := c.rel.kindOf(arms[0].t)
+	one := ok0
+	for _, a := range arms[1:] {
+		if !one {
+			break
+		}
+		if k, ok := c.rel.kindOf(a.t); !ok || k != k0 {
+			one = false
+		}
+	}
+	if one {
+		return c.joinG(arms)
+	}
+	// The kinds, in order of first appearance; each kind's arms are
+	// gathered on joinBuf in turn.
+	var kinds [8]valueKind
+	nk := 0
+	for _, a := range arms {
+		k, ok := c.rel.kindOf(a.t)
+		if !ok {
+			return c.joinG(arms)
+		}
+		if !slices.Contains(kinds[:nk], k) {
+			if nk == len(kinds) {
+				return c.joinG(arms)
+			}
+			kinds[nk] = k
+			nk++
+		}
+	}
+	var ts [8]TypeId
+	allNew := true
+	for g := range nk {
+		mark := len(c.joinBuf)
+		for _, a := range arms {
+			if k, _ := c.rel.kindOf(a.t); k == kinds[g] {
+				c.joinBuf = append(c.joinBuf, a)
+			}
+		}
+		m, t, ok := c.joinG(c.joinBuf[mark:len(c.joinBuf):len(c.joinBuf)])
+		c.joinBuf = c.joinBuf[:mark]
+		if !ok {
+			return c.joinG(arms)
+		}
+		if m != markNew {
+			allNew = false
+		}
+		ts[g] = t
+	}
+	m := markShared
+	if allNew {
+		m = markNew
+	}
+	return m, c.arena.MakeUnion(ts[:nk]), true
+}
+
+// joinG joins arms of one kind, or arms not grouped by kind: every arm
+// new, then partly new, then shared.
+func (c *coreChecker) joinG(arms []nArm) (coreMark, TypeId, bool) {
+	allNew := true
+	for _, a := range arms {
+		if a.m != markNew {
+			allNew = false
+		}
+	}
+	if allNew {
+		t, ok := c.foldJoin(true, arms[0].t, arms[1:])
+		return markNew, t, ok
+	}
+	if m, t, ok := c.pjoinN(arms); ok {
+		return m, t, true
+	}
+	if t, ok := c.shjoin(arms); ok {
+		return markShared, t, true
+	}
+	return 0, 0, false
+}
+
+// joinPairs folds the pairwise join over slots with unsolved variables,
+// which unify instead (the model has no variables).
+func (c *coreChecker) joinPairs(slots []coreSlot) (coreSlot, bool) {
+	j := slots[0]
+	for _, s := range slots[1:] {
+		if j == s {
+			continue
+		}
+		var ok bool
+		if j, ok = c.joinTypes(j, s); !ok {
+			return coreSlot{}, false
+		}
+	}
+	return j, true
+}
+
+// jt is the relations' binary join (join_slot's).
+func (c *coreChecker) jt(fr bool, a, b TypeId) (TypeId, bool) {
+	s, ok := c.rel.JoinSlot(Slot{Type: a, Fresh: fr}, Slot{Type: b, Fresh: fr})
+	return s.Type, ok
+}
+
+// foldJoin is foldj (jt fr) over the arms' types.
+func (c *coreChecker) foldJoin(fr bool, acc TypeId, arms []nArm) (TypeId, bool) {
+	for _, a := range arms {
+		var ok bool
+		if acc, ok = c.jt(fr, acc, a.t); !ok {
+			return 0, false
+		}
+	}
+	return acc, true
+}
+
+// pjoinN is the partly new step: some arm partly new and none stored.
+func (c *coreChecker) pjoinN(arms []nArm) (coreMark, TypeId, bool) {
+	partial := false
+	for _, a := range arms {
+		if a.m == markShared {
+			return 0, 0, false
+		}
+		if a.m >= 2 {
+			partial = true
+		}
+	}
+	if !partial {
+		return 0, 0, false
+	}
+	m, ok := c.fmergeN(arms)
+	if !ok || m < 2 {
+		return 0, 0, false
+	}
+	t := arms[0].t
+	for _, a := range arms[1:] {
+		if t, ok = c.mjoin(m, t, a.t); !ok {
+			return 0, 0, false
+		}
+	}
+	return m, t, true
+}
+
+// shjoin is the shared step: the first target, in order, that the arms
+// reach. The target is the join of the stored arms; with no stored arm,
+// the join of the partly new arms with the new arms whose marks agree with
+// theirs, then of the partly new arms alone (the arms joined already reach
+// it), then each partly new arm's own type.
+func (c *coreChecker) shjoin(arms []nArm) (TypeId, bool) {
+	type target struct {
+		t   TypeId
+		abs []bool // the arms that already reach t
+	}
+	var targets []target
+	var stored, partials []nArm
+	isPartial := make([]bool, len(arms))
+	for i, a := range arms {
+		switch {
+		case a.m == markShared:
+			stored = append(stored, a)
+		case a.m >= 2:
+			partials = append(partials, a)
+			isPartial[i] = true
+		}
+	}
+	if len(stored) > 0 {
+		if t, ok := c.foldJoin(false, stored[0].t, stored[1:]); ok {
+			targets = append(targets, target{t: t})
+		}
+	} else {
+		joint := slices.Clone(isPartial)
+		var js []nArm
+		for i, a := range arms {
+			if a.m == markNew {
+				if _, ok := c.fmergeN(append(slices.Clone(partials), a)); ok {
+					joint[i] = true
+				}
+			}
+			if joint[i] {
+				js = append(js, a)
+			}
+		}
+		if _, t, ok := c.pjoinN(js); ok {
+			targets = append(targets, target{t: t, abs: joint})
+		}
+		if _, t, ok := c.pjoinN(partials); ok {
+			targets = append(targets, target{t: t, abs: isPartial})
+		}
+		for _, p := range partials {
+			targets = append(targets, target{t: p.t})
+		}
+	}
+	for _, tg := range targets {
+		if t, ok := c.layer(arms, tg.t, tg.abs); ok {
+			return t, true
+		}
+	}
+	return 0, false
+}
+
+// layer is one target t0: the partly new arms that retype to it take it,
+// the rest are committed and joined in, giving t1; then the same for the
+// new arms against t1. The arms abs marks already reach t0.
+func (c *coreChecker) layer(arms []nArm, t0 TypeId, abs []bool) (TypeId, bool) {
+	t1 := t0
+	var ok bool
+	for i, a := range arms {
+		if a.m >= 2 && (abs == nil || !abs[i]) {
+			if fits, _ := c.markBelow(a.m, a.t, t0); !fits {
+				if t1, ok = c.jt(false, t1, a.t); !ok {
+					return 0, false
+				}
+			}
+		}
+	}
+	t := t1
+	for i, a := range arms {
+		if a.m == markNew && (abs == nil || !abs[i]) && !c.rel.Retype(a.t, t1) {
+			if t, ok = c.jt(false, t, a.t); !ok {
+				return 0, false
+			}
+		}
+	}
+	return t, true
 }
 
 // asListMark is aslist: a new list is a partly new one whose elements are
@@ -412,44 +686,80 @@ func partFieldNames(fs []RecordField) []NameId {
 	return out
 }
 
-// fmerge gives two arms with marks m1 and m2 and types a and b one mark:
-// the arm's own where only one holds a value, the merge of both where each
-// does. A position stored in one arm and new in the other has none.
-func (c *coreChecker) fmerge(m1, m2 coreMark, a, b TypeId) (coreMark, bool) {
-	if m1 == m2 && m1 < 2 {
-		return m1, true
+// fmergeN gives the arms one mark: where only some arms hold a value, the
+// mark of those; where none does, any. A position stored in one arm and
+// new in another has none.
+func (c *coreChecker) fmergeN(arms []nArm) (coreMark, bool) {
+	if len(arms) == 0 {
+		return markNew, true
+	}
+	if m := arms[0].m; m < 2 {
+		flat := true
+		for _, a := range arms[1:] {
+			if a.m != m {
+				flat = false
+				break
+			}
+		}
+		if flat {
+			return m, true
+		}
 	}
 	ar := c.arena
-	an, bn := ar.Node(a), ar.Node(b)
-	switch {
-	case an.Kind == TKList && bn.Kind == TKList:
-		e1, ok1 := c.asListMark(m1)
-		e2, ok2 := c.asListMark(m2)
-		if !ok1 || !ok2 {
-			return 0, false
+	lists, recs := true, true
+	for _, a := range arms {
+		n := ar.Node(a.t)
+		if _, ok := c.asListMark(a.m); !ok || n.Kind != TKList {
+			lists = false
 		}
-		e, ok := c.fmerge(e1, e2, TypeId(an.A), TypeId(bn.A))
+		if _, ok := c.asRecMark(a.m); !ok || n.Kind != TKRecord {
+			recs = false
+		}
+	}
+	switch {
+	case lists:
+		elems := make([]nArm, len(arms))
+		for i, a := range arms {
+			e, _ := c.asListMark(a.m)
+			elems[i] = nArm{m: e, t: TypeId(ar.Node(a.t).A)}
+		}
+		e, ok := c.fmergeN(elems)
 		if !ok {
 			return 0, false
 		}
 		return c.partMark(corePart{list: true, elem: e})
-	case an.Kind == TKRecord && bn.Kind == TKRecord:
-		p1, ok1 := c.asRecMark(m1)
-		p2, ok2 := c.asRecMark(m2)
-		if !ok1 || !ok2 {
-			return 0, false
+	case recs:
+		parts := make([]corePart, len(arms))
+		recsOf := make([]RecordType, len(arms))
+		var keyLists [][]NameId
+		for i, a := range arms {
+			parts[i], _ = c.asRecMark(a.m)
+			recsOf[i] = ar.records[ar.Node(a.t).Extra]
+			keyLists = append(keyLists, labelNames(parts[i].labels), partFieldNames(recsOf[i].Fields))
 		}
-		x, y := ar.records[an.Extra], ar.records[bn.Extra]
-		keys := partKeys(labelNames(p1.labels), labelNames(p2.labels), partFieldNames(x.Fields), partFieldNames(y.Fields))
+		keys := partKeys(keyLists...)
 		out := corePart{labels: make([]coreLabelMark, 0, len(keys))}
+		var sub []nArm
 		for _, k := range keys {
-			m, ok := c.fmat(x.FieldAt(k), y.FieldAt(k), p1.labelMark(k), p2.labelMark(k))
+			sub = sub[:0]
+			for i := range arms {
+				if f := recsOf[i].FieldAt(k); f.Status != FieldAbsent {
+					sub = append(sub, nArm{m: parts[i].labelMark(k), t: fieldTy(f)})
+				}
+			}
+			m, ok := c.fmergeN(slices.Clone(sub))
 			if !ok {
 				return 0, false
 			}
 			out.labels = append(out.labels, coreLabelMark{name: k, m: m})
 		}
-		rest, ok := c.fmat(x.Rest, y.Rest, p1.rest, p2.rest)
+		sub = sub[:0]
+		for i := range arms {
+			if r := recsOf[i].Rest; r.Status != FieldAbsent {
+				sub = append(sub, nArm{m: parts[i].rest, t: fieldTy(r)})
+			}
+		}
+		rest, ok := c.fmergeN(sub)
 		if !ok {
 			return 0, false
 		}
@@ -457,17 +767,6 @@ func (c *coreChecker) fmerge(m1, m2 coreMark, a, b TypeId) (coreMark, bool) {
 		return c.partMark(out)
 	}
 	return 0, false
-}
-
-// fmat is the merged mark of one label.
-func (c *coreChecker) fmat(f1, f2 RecordField, m1, m2 coreMark) (coreMark, bool) {
-	switch {
-	case f1.Status == FieldAbsent:
-		return m2, true
-	case f2.Status == FieldAbsent:
-		return m1, true
-	}
-	return c.fmerge(m1, m2, fieldTy(f1), fieldTy(f2))
 }
 
 // partMark records p and returns its mark, or fails when there are too
