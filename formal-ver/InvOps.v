@@ -267,7 +267,10 @@ Lemma inv_slot_sub_at Σ H sc G P v L sp p p' st Op O Os :
     inv sigs Σ' H sc G (P ++ v :: L) (sp ++ p' :: st) (Op ++ O' :: Os).
 Proof.
   intros Hs L1 L2 I. pose proof (slot_at _ _ _ _ _ _ _ _ _ _ _ _ _ L1 L2 I) as Sl.
-  destruct Hs as [a b Hab|a b Hab|a b Hab|a b Hi Hab|m a b Pm Hab|m a Pm|m a b Pm Hab].
+  destruct Hs as [a b Hab|a b Hab|a b Hab|a b Hi Hab|m a b Pm Hab|m a Pm|m a b Pm Hab|m m' a Pm Hc].
+  8: { exists Σ, O. split; [apply scope_ext_refl|]. split; auto.
+       eapply inv_replace_slot_at; eauto. apply slot_ok_mtyped. apply slot_ok_mtyped in Sl.
+       eapply mtyped_mcompat; eauto. }
   5: { exists Σ, O. split; [apply scope_ext_refl|]. split; auto.
        eapply inv_replace_slot_at; eauto. apply slot_ok_mtyped. apply slot_ok_mtyped in Sl.
        eapply mtyped_msub; eauto. }

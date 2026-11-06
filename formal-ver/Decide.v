@@ -51,7 +51,7 @@
 
 From Stdlib Require Import String List Arith Bool Lia.
 Import ListNotations.
-From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant RtLemmas Validate Generic Join.
+From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant RtLemmas Validate Generic Join PartialJoin.
 From MshellCore Require Recursive.
 
 (** ** Assumption sets *)
@@ -616,6 +616,17 @@ Corollary if_join2_alg n rt
   T sigs G Br Co R e1 s s1 -> T sigs G Br Co R e2 s s2 -> join_stack2 (le_alg n) rt s1 s2 = Some s' ->
   TW sigs G Br Co R (WIf e1 e2) ((Sh, TBool) :: s) s'.
 Proof. apply if_join2; [apply le_alg_ok | exact rt_ok]. Qed.
+
+(** The join that also keeps two partly new arms partly new
+    (PartialJoin.v, [join_slot3]) checks too, given the same. *)
+Corollary if_join3_alg n rt
+  (rt_ok : forall m a c, rt m a c = true ->
+     (m = Dp /\ rsub a c) \/ (partial m = true /\ ((exists b, msub m a b /\ sub b c) \/ sub a c)))
+  sigs G Br Co R e1 e2 s s1 s2 s' :
+  T sigs G Br Co R e1 s (map fden s1) -> T sigs G Br Co R e2 s (map fden s2) ->
+  join_stack3 (le_alg n) rt s1 s2 = Some s' ->
+  TW sigs G Br Co R (WIf e1 e2) ((Sh, TBool) :: s) (map fden s').
+Proof. apply if_join3; [apply le_alg_ok | exact rt_ok]. Qed.
 End RSub.
 
 (** ** Examples

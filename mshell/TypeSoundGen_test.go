@@ -850,8 +850,28 @@ func (p *progGen) stmtOnce(ctx *gctx, blk *gblock) bool {
 		if risky {
 			vt = p.widen(v.t)
 		}
-		t := shapeOf(gfield{name: "a", t: vt}, gfield{name: "b", t: tInt}, gfield{name: "c", t: tStr, opt: true})
 		n := p.name("v")
+		if p.chance(0.5) {
+			// Two partly new arms, joined partly new (formal-ver/PartialJoin.v):
+			// the joined dict may gain optional labels, the stored value
+			// keeps its type. The first arm runs, so `a` is there.
+			t := shapeOf(gfield{name: "a", t: vt, opt: true}, gfield{name: "b", t: tInt, opt: true}, gfield{name: "c", t: tStr, opt: true})
+			arms := p.pick([]string{
+				"{a: @V} else {a: @V, b: 1}",
+				"{a: @V, b: 1} else {a: @V}",
+				"{a: @V} else {b: 1}",
+				"{a: @V} else {b: 1, c: \"x\"}",
+			})
+			code := "true if " + strings.ReplaceAll(arms, "@V", "@"+v.name) + " end as " + t.src() + " " + n + "!"
+			if !p.try(blk, code, risky, func() { sc.add(n, t) }) {
+				return false
+			}
+			if risky {
+				p.exploit(ctx, blk, "@"+n+" :a?", vt, v.t, v)
+			}
+			return true
+		}
+		t := shapeOf(gfield{name: "a", t: vt}, gfield{name: "b", t: tInt}, gfield{name: "c", t: tStr, opt: true})
 		if !p.try(blk, "{a: @"+v.name+", b: 1} as "+t.src()+" "+n+"!", risky, func() { sc.add(n, t) }) {
 			return false
 		}

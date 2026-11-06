@@ -379,6 +379,33 @@ Qed.
 Lemma mtyped_msub Σ H v a m O b : mtyped sigs Σ H v a m O -> msub m a b -> mtyped sigs Σ H v b m O.
 Proof. intros M Hs. exact (proj1 (mtyped_msub_all Σ H) _ _ _ _ M _ Hs). Qed.
 
+(** ** Changing the mark where the type holds no value ([mcompat]) *)
+
+Lemma dtyped_list_mtyped Σ H v t O :
+  dtyped sigs Σ H v (TList t) O -> mtyped sigs Σ H v (TList t) (MList Dp) O.
+Proof.
+  intros D. apply dt_list_inv in D as (l & vs & Os & -> & E & Ds & -> & N).
+  apply mt_list with (vs := vs); auto.
+  clear -Ds. induction Ds; constructor; auto. constructor; auto.
+Qed.
+
+Lemma mtyped_mcompat : forall m m' t, mcompat m m' t ->
+  forall Σ H v O, mtyped sigs Σ H v t m O -> mtyped sigs Σ H v t m' O.
+Proof.
+  induction 1 as [m t|m m'|m m' t Hc IH|f g fs r Hc IH|m t Hc IH|m fs r Hc IH];
+    intros Σ H v O M.
+  - exact M.
+  - exfalso. eapply mtyped_bot; eauto.
+  - apply mt_list_inv in M as (l & vs & Os & -> & E & Ms & -> & N).
+    apply mt_list with (vs := vs); auto.
+    clear -Ms IH. induction Ms; constructor; auto.
+  - apply mt_rec_inv in M as (l & kvs & Os & -> & E & Nk & Rq & Mf & -> & N).
+    apply mt_rec with (kvs := kvs); auto.
+    clear -Mf IH. induction Mf; constructor; auto.
+  - apply IH. inversion M; subst. apply dtyped_list_mtyped; auto.
+  - apply IH. inversion M; subst. apply dtyped_rec_mtyped; auto.
+Qed.
+
 (** ** Committing a partly new value *)
 
 Lemma mtyped_commit_all Σ H :

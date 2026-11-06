@@ -2826,6 +2826,11 @@ func (c *coreChecker) joinSlot(a, b coreSlot) (coreSlot, bool) {
 
 // joinTypes is joinSlot for two different slots.
 func (c *coreChecker) joinTypes(a, b coreSlot) (coreSlot, bool) {
+	// Two partly new arms, or one partly new and one new, stay partly new
+	// when they can take one mark (join_slot3 in formal-ver/PartialJoin.v).
+	if s, ok := c.partialJoin(a, b); ok {
+		return s, true
+	}
 	fresh := a.fresh && b.fresh
 	if a.t == b.t {
 		return coreSlot{t: a.t, pq: a.pq, fresh: fresh}, true

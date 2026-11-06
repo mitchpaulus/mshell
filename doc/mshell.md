@@ -856,6 +856,7 @@ A union with a quotation member, as a parameter or after `as`, checks a literal 
 ### Control flow and variables
 
 The arms of `if`, `iff` and `match` must leave the same number of values; different types join: `1`/`2.5` gives `int | float`, `none`/`5 just` gives `Maybe[int]`, new `[1]`/`["a"]` gives `[int | str]`, stored lists of different types have no join (error).
+New dicts holding stored values, `{a: @xs}`/`{a: @xs, b: [2]}`, give a new `{a: [int], b?: [int]}` that may still gain optional keys; a position stored in one arm and new in the other makes the whole value stored.
 An arm that never returns (`exit`, a `never` def, `return`, `break`) is left out.
 An error about a union a join made names the arm each member came from.
 An overloaded builtin on a union is checked per member; the result is the join (`int | float` through `toFloat` is `float`; `int | float 2.0 /` is an error).

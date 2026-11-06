@@ -288,6 +288,23 @@ func TestCoreChecker(t *testing.T) {
 		{`[1] xs! [@xs] as [[int] | str] l!`, true, ""},
 		{`[1] xs! [@xs] as [[int | str]] l!`, false, "'as' needs evidence"},
 		{`def f ({a?: [int], b?: int} -- ) drop end [] j! {a: @j} f`, true, ""},
+		// Partly new arms stay partly new when they take one mark
+		// (formal-ver/PartialJoin.v).
+		{`type R = {a?: [int], b?: [int]} def pick (bool [int] -- R) xs! if {a: @xs} else {a: @xs} end end`, true, ""},
+		{`type R = {a?: [int], b?: [int]} def pick (bool [int] -- R) xs! if {a: @xs} else {a: @xs, b: [2]} end end`, true, ""},
+		{`[1] xs! true if {a: @xs} else {b: @xs} end as {a?: [int], b?: [int]} drop`, true, ""},
+		{`[1] xs! true if {a: @xs} else {b: [2]} end as {a?: [int], b?: [int | str]} drop`, true, ""},
+		{`[1] xs! true if {a: {c: @xs}} else {a: {c: @xs, d: 1}} end as {a: {c: [int], d?: int, e?: int}} drop`, true, ""},
+		{`[1] xs! 2 match 1 : {a: @xs}, 2 : {b: @xs}, _ : {c: [1]} end as {a?: [int], b?: [int], c?: [int]} drop`, true, ""},
+		{`[1] xs! true if [@xs] else [@xs @xs] end as [[int]] drop`, true, ""},
+		// A stored position keeps its type through the join.
+		{`[1] xs! true if {a: @xs} else {a: @xs, b: [2]} end as {a?: [int | str], b?: [int]} drop`, false, "`a` is a stored [int]"},
+		{`[1] xs! true if {a: {c: @xs}} else {a: {c: @xs, d: 1}} end as {a: {c: [int | str], d?: int}} drop`, false, "`c` in `a` is a stored [int]"},
+		{`[1] xs! true if {a: @xs} else {a: @xs} end dup as {a: [int], b?: int} d! e!`, false, "'as' needs evidence"},
+		// Stored in one arm and new in the other: no one mark, so shared.
+		{`[1] xs! true if {a: [1]} else {a: @xs} end as {a: [int], b?: int} drop`, false, "'as' needs evidence"},
+		{`[1] xs! true if [@xs] else [[3]] end as [[int] | str] drop`, false, "'as' needs evidence"},
+		{`[1] xs! ["s"] ys! true if {a: @xs} else {a: @ys} end drop`, false, "no common type"},
 		// zipPack and tarPack: one form per stored list type, and the
 		// built-in PackEntry alias. A new literal fits several forms with
 		// the same outputs, and takes the first.

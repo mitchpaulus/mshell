@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Partly new values (ai/type-core-calculus.typ, "Freshness, per object";
 // formal-ver/Partial.v).
@@ -311,4 +314,251 @@ func (c *coreChecker) recordPart(d coreSlot, name NameId, m coreMark) uint16 {
 	}
 	p.labels = append(p.labels, coreLabelMark{name: name, m: m})
 	return c.newPart(p)
+}
+
+// Joining partly new arms (formal-ver/PartialJoin.v).
+//
+// `if {a: @xs} else {a: @xs, b: [2]} end` leaves a new dict holding a
+// stored list in each arm. Relations.JoinSlot joins only shared or fresh
+// slots, so without this the arms were committed and the join was a
+// shared {a: [int]}, which no wider dict type is above. Here the arms get
+// one mark (fmerge) and their types are joined position by position under
+// it (mjoin), so the result is partly new too and may still gain optional
+// labels. Each step mirrors the function of the same name in PartialJoin.v.
+
+// partialJoin is pjoin in PartialJoin.v: the join of two solved slots when
+// either is partly new and both can take one partly new mark.
+func (c *coreChecker) partialJoin(a, b coreSlot) (coreSlot, bool) {
+	if a.part == 0 && b.part == 0 {
+		return coreSlot{}, false
+	}
+	if c.hasVars(a.t) || c.hasVars(b.t) {
+		return coreSlot{}, false
+	}
+	at, bt := c.subst.Apply(c.arena, a.t), c.subst.Apply(c.arena, b.t)
+	m, ok := c.fmerge(slotMark(a), slotMark(b), at, bt)
+	if !ok || m < 2 {
+		return coreSlot{}, false
+	}
+	t, ok := c.mjoin(m, at, bt)
+	if !ok {
+		return coreSlot{}, false
+	}
+	return coreSlot{t: t, part: uint16(m - 1)}, true
+}
+
+// asListMark is aslist: a new list is a partly new one whose elements are
+// all new.
+func (c *coreChecker) asListMark(m coreMark) (coreMark, bool) {
+	switch {
+	case m == markNew:
+		return markNew, true
+	case m >= 2 && c.parts[m-2].list:
+		return c.parts[m-2].elem, true
+	}
+	return 0, false
+}
+
+// asRecMark is asrec: a new dict is a partly new one whose labels are all
+// new.
+func (c *coreChecker) asRecMark(m coreMark) (corePart, bool) {
+	switch {
+	case m == markNew:
+		return corePart{rest: markNew}, true
+	case m >= 2 && !c.parts[m-2].list:
+		return c.parts[m-2], true
+	}
+	return corePart{}, false
+}
+
+// fieldTy is fty: the type of a value under a label with this status.
+func fieldTy(f RecordField) TypeId {
+	switch f.Status {
+	case FieldAbsent:
+		return TidBottom
+	case FieldOpen:
+		return TidUnknown
+	}
+	return f.Type
+}
+
+// partKeys is the labels a join of two dicts looks at: those the marks
+// list and those the types list, each once.
+func partKeys(lists ...[]NameId) []NameId {
+	var out []NameId
+	for _, l := range lists {
+		for _, k := range l {
+			if !slices.Contains(out, k) {
+				out = append(out, k)
+			}
+		}
+	}
+	return out
+}
+
+func labelNames(ls []coreLabelMark) []NameId {
+	out := make([]NameId, len(ls))
+	for i, l := range ls {
+		out[i] = l.name
+	}
+	return out
+}
+
+func partFieldNames(fs []RecordField) []NameId {
+	out := make([]NameId, len(fs))
+	for i, f := range fs {
+		out[i] = f.Name
+	}
+	return out
+}
+
+// fmerge gives two arms with marks m1 and m2 and types a and b one mark:
+// the arm's own where only one holds a value, the merge of both where each
+// does. A position stored in one arm and new in the other has none.
+func (c *coreChecker) fmerge(m1, m2 coreMark, a, b TypeId) (coreMark, bool) {
+	if m1 == m2 && m1 < 2 {
+		return m1, true
+	}
+	ar := c.arena
+	an, bn := ar.Node(a), ar.Node(b)
+	switch {
+	case an.Kind == TKList && bn.Kind == TKList:
+		e1, ok1 := c.asListMark(m1)
+		e2, ok2 := c.asListMark(m2)
+		if !ok1 || !ok2 {
+			return 0, false
+		}
+		e, ok := c.fmerge(e1, e2, TypeId(an.A), TypeId(bn.A))
+		if !ok {
+			return 0, false
+		}
+		return c.partMark(corePart{list: true, elem: e})
+	case an.Kind == TKRecord && bn.Kind == TKRecord:
+		p1, ok1 := c.asRecMark(m1)
+		p2, ok2 := c.asRecMark(m2)
+		if !ok1 || !ok2 {
+			return 0, false
+		}
+		x, y := ar.records[an.Extra], ar.records[bn.Extra]
+		keys := partKeys(labelNames(p1.labels), labelNames(p2.labels), partFieldNames(x.Fields), partFieldNames(y.Fields))
+		out := corePart{labels: make([]coreLabelMark, 0, len(keys))}
+		for _, k := range keys {
+			m, ok := c.fmat(x.FieldAt(k), y.FieldAt(k), p1.labelMark(k), p2.labelMark(k))
+			if !ok {
+				return 0, false
+			}
+			out.labels = append(out.labels, coreLabelMark{name: k, m: m})
+		}
+		rest, ok := c.fmat(x.Rest, y.Rest, p1.rest, p2.rest)
+		if !ok {
+			return 0, false
+		}
+		out.rest = rest
+		return c.partMark(out)
+	}
+	return 0, false
+}
+
+// fmat is the merged mark of one label.
+func (c *coreChecker) fmat(f1, f2 RecordField, m1, m2 coreMark) (coreMark, bool) {
+	switch {
+	case f1.Status == FieldAbsent:
+		return m2, true
+	case f2.Status == FieldAbsent:
+		return m1, true
+	}
+	return c.fmerge(m1, m2, fieldTy(f1), fieldTy(f2))
+}
+
+// partMark records p and returns its mark, or fails when there are too
+// many.
+func (c *coreChecker) partMark(p corePart) (coreMark, bool) {
+	part := c.newPart(p)
+	if part == 0 {
+		return 0, false
+	}
+	return coreMark(part) + 1, true
+}
+
+// mjoin joins two types under one mark: Relations.JoinSlot at a stored or
+// new position, and position by position inside a partly new one, so
+// each type is below the result by msub.
+func (c *coreChecker) mjoin(m coreMark, a, b TypeId) (TypeId, bool) {
+	if m < 2 {
+		fr := m == markNew
+		s, ok := c.rel.JoinSlot(Slot{Type: a, Fresh: fr}, Slot{Type: b, Fresh: fr})
+		return s.Type, ok
+	}
+	p := c.parts[m-2]
+	ar := c.arena
+	an, bn := ar.Node(a), ar.Node(b)
+	if p.list {
+		if an.Kind != TKList || bn.Kind != TKList {
+			return 0, false
+		}
+		e, ok := c.mjoin(p.elem, TypeId(an.A), TypeId(bn.A))
+		if !ok {
+			return 0, false
+		}
+		return ar.MakeList(e), true
+	}
+	if an.Kind != TKRecord || bn.Kind != TKRecord {
+		return 0, false
+	}
+	x, y := ar.records[an.Extra], ar.records[bn.Extra]
+	rest, ok := c.mfield(p.rest, x.Rest, y.Rest)
+	if !ok {
+		return 0, false
+	}
+	keys := partKeys(labelNames(p.labels), partFieldNames(x.Fields), partFieldNames(y.Fields))
+	fields := make([]RecordField, 0, len(keys))
+	for _, k := range keys {
+		f, ok := c.mfield(p.labelMark(k), x.FieldAt(k), y.FieldAt(k))
+		if !ok {
+			return 0, false
+		}
+		f.Name = k
+		fields = append(fields, f)
+	}
+	return ar.MakeRecord(fields, rest), true
+}
+
+// mfield joins one label under its mark: as Relations.fieldJoin, but a
+// label present in one arm only is joined with itself (a partly new value
+// is not always msub of itself), and a label holding a partly new value is
+// not made open.
+func (c *coreChecker) mfield(m coreMark, f, g RecordField) (RecordField, bool) {
+	j := func(status FieldStatus, x, y TypeId) (RecordField, bool) {
+		t, ok := c.mjoin(m, x, y)
+		return RecordField{Status: status, Type: t}, ok
+	}
+	var h RecordField
+	ok := true
+	present := func(s FieldStatus) bool {
+		return s == FieldRequired || s == FieldOptional
+	}
+	switch {
+	case f.Status == FieldOpen || g.Status == FieldOpen:
+		h = RecordField{Status: FieldOpen}
+	case f.Status == FieldAbsent && g.Status == FieldAbsent:
+		h = RecordField{Status: FieldAbsent}
+	case f.Status == FieldRequired && g.Status == FieldRequired:
+		h, ok = j(FieldRequired, f.Type, g.Type)
+	case f.Status == FieldDeletable && g.Status == FieldDeletable:
+		h, ok = j(FieldDeletable, f.Type, g.Type)
+	case f.Status == FieldAbsent && g.Status == FieldDeletable:
+		h, ok = j(FieldDeletable, g.Type, g.Type)
+	case f.Status == FieldDeletable && g.Status == FieldAbsent:
+		h, ok = j(FieldDeletable, f.Type, f.Type)
+	case f.Status == FieldAbsent && present(g.Status):
+		h, ok = j(FieldOptional, g.Type, g.Type)
+	case present(f.Status) && g.Status == FieldAbsent:
+		h, ok = j(FieldOptional, f.Type, f.Type)
+	default:
+		h, ok = j(FieldOptional, f.Type, g.Type)
+	}
+	if !ok || (m >= 2 && h.Status == FieldOpen) {
+		return RecordField{}, false
+	}
+	return h, true
 }
