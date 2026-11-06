@@ -34,6 +34,9 @@ type DirListing struct {
 	raw     []byte
 	entries []dirEntryRef
 	picked  []int32 // Scratch: the entries one completion pass keeps.
+	// open is the directory a read can leave open for the stat calls that
+	// follow it. Close releases it.
+	open openDir
 }
 
 // A huge directory should not pin its buffers for the rest of the session.

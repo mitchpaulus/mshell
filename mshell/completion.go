@@ -1,7 +1,6 @@
 package main
 
 import (
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -88,8 +87,10 @@ type CompletionFS interface {
 	ReadDir(dir string) (*DirListing, error)
 	// Getwd returns the current working directory.
 	Getwd() (string, error)
-	// Stat follows symbolic links, so a link to a directory completes as one.
-	Stat(path string) (fs.FileInfo, error)
+	// EntryIsDir reports whether name in dir is a directory, following
+	// symbolic links, so a link to a directory completes as one. listing is
+	// what ReadDir returned for dir.
+	EntryIsDir(listing *DirListing, dir string, name string) bool
 }
 
 // CompletionEnv abstracts environment variable access.
@@ -180,20 +181,35 @@ type CompletionSpec struct {
 	Binaries       bool
 }
 
-// fileFilter picks which files a directory listing offers. Directories are
-// always offered so the user can move into them.
+// fileFilter picks which entries of a directory listing are offered.
 type fileFilter struct {
 	globs   []CompletionGlob
 	anyFile bool
+	// Directories are offered when their rank is below dirsBelow: the zero
+	// value offers none, rankSubstring only those whose names start with the
+	// typed text, and rankNone every directory that fits.
+	dirsBelow matchRank
 }
 
+// newFileFilter offers the files matching globs, and every directory that
+// fits, so the user can move into one.
 func newFileFilter(globs []CompletionGlob) fileFilter {
 	for _, g := range globs {
 		if g.Kind == globAny {
-			return fileFilter{anyFile: true}
+			return fileFilter{anyFile: true, dirsBelow: rankNone}
 		}
 	}
-	return fileFilter{globs: globs}
+	return fileFilter{globs: globs, dirsBelow: rankNone}
+}
+
+// anyFileFilter offers every file and every directory that fits.
+func anyFileFilter() fileFilter {
+	return fileFilter{anyFile: true, dirsBelow: rankNone}
+}
+
+// offersDirAt reports whether a directory of rank r is offered.
+func (f *fileFilter) offersDirAt(r matchRank) bool {
+	return r < f.dirsBelow
 }
 
 func (f *fileFilter) matchesFile(name string) bool {
@@ -213,20 +229,25 @@ func (f *fileFilter) matchesFile(name string) bool {
 // should be offered at all.
 func (spec *CompletionSpec) fileTiers() (first fileFilter, fallback fileFilter, hasFallback bool, ok bool) {
 	if spec == nil {
-		return fileFilter{anyFile: true}, fileFilter{}, false, true
+		return anyFileFilter(), fileFilter{}, false, true
 	}
 	if len(spec.PreferredFiles) > 0 {
-		fallback = fileFilter{anyFile: true}
+		fallback = anyFileFilter()
 		if len(spec.Files) > 0 {
 			fallback = newFileFilter(spec.Files)
 		}
-		return newFileFilter(spec.PreferredFiles), fallback, true, true
+		// A directory that starts with the typed text sits with the preferred
+		// files, so Tab can still move into it. One that only contains the
+		// text waits for the fallback, so it never crowds out a preferred file.
+		first = newFileFilter(spec.PreferredFiles)
+		first.dirsBelow = rankSubstring
+		return first, fallback, true, true
 	}
 	if len(spec.Files) > 0 {
 		return newFileFilter(spec.Files), fileFilter{}, false, true
 	}
 	if spec.Dirs {
-		return fileFilter{}, fileFilter{}, false, true
+		return fileFilter{dirsBelow: rankNone}, fileFilter{}, false, true
 	}
 	return fileFilter{}, fileFilter{}, false, false
 }
@@ -359,7 +380,7 @@ func generateRankedCompletions(input CompletionInput, deps CompletionDeps) ([]Ta
 
 // appendFileCompletions adds the files and directories the input's spec
 // allows. The directory is read once; the fallback tier rescans the same
-// entries only when the first tier offered nothing.
+// entries only when the first tier has nothing that fits.
 func appendFileCompletions(c *completionCollector, input CompletionInput, cfs CompletionFS) {
 	first, fallback, hasFallback, ok := input.Spec.fileTiers()
 	if !ok {
@@ -395,61 +416,72 @@ func appendFileCompletions(c *completionCollector, input CompletionInput, cfs Co
 	if err != nil {
 		return
 	}
+	defer listing.Close()
 
-	offered := appendFilteredEntries(c, listing, &first, dir, &typed, searchDir, cfs)
-	if hasFallback && offered == 0 {
-		appendFilteredEntries(c, listing, &fallback, dir, &typed, searchDir, cfs)
+	// The tier is chosen from the files alone, so a value that fits better
+	// cannot push Tab past the preferred files to the fallback.
+	r := pickEntries(listing, &first, &typed, searchDir, cfs)
+	if r == rankNone && hasFallback {
+		r = pickEntries(listing, &fallback, &typed, searchDir, cfs)
 	}
+	if r == rankNone || r > c.best {
+		return
+	}
+	c.useRank(r)
+	appendPicked(c, listing, dir, searchDir, cfs)
 }
 
-// appendFilteredEntries adds the entries that fit the filter and the typed
-// name, sorted by name, and returns how many it added. The first pass picks
-// entries and sizes the output, so every match string is cut from a single
-// buffer instead of one allocation per match.
-func appendFilteredEntries(c *completionCollector, listing *DirListing, filter *fileFilter, dir string, typed *typedText, searchDir string, cfs CompletionFS) int {
+// pickEntries keeps in listing.picked the entries that fit the filter and
+// share the best rank of the typed text, and returns that rank, or rankNone
+// when nothing fits. A link or unknown entry is only stat'd when its type
+// decides whether it is offered.
+func pickEntries(listing *DirListing, filter *fileFilter, typed *typedText, searchDir string, cfs CompletionFS) matchRank {
 	listing.picked = listing.picked[:0]
-	size := 0
-	best := c.best
+	best := rankNone
 	for i := range listing.entries {
 		name := listing.name(i)
 		r := typed.rank(name, best)
 		if r == rankNone {
 			continue
 		}
-		kind := listing.entries[i].kind
-		if kind == dirKindLink || kind == dirKindUnknown {
-			// Only links and unknowns pay for a stat, and only once the name
-			// fits. The answer is kept for a fallback pass.
-			kind = dirKindFile
-			if info, err := cfs.Stat(filepath.Join(searchDir, name)); err == nil && info.IsDir() {
-				kind = dirKindDir
-			}
-			listing.entries[i].kind = kind
+		fileOK := filter.matchesFile(name)
+		dirOK := filter.offersDirAt(r)
+		if !fileOK && !dirOK {
+			continue
 		}
-		n := len(name)
-		if kind == dirKindDir {
-			n++
-		} else if !filter.matchesFile(name) {
+		kind := listing.entries[i].kind
+		if !(fileOK && dirOK) {
+			kind = resolveKind(listing, i, searchDir, cfs)
+		}
+		if (kind == dirKindDir && !dirOK) || (kind == dirKindFile && !fileOK) {
 			continue
 		}
 		if r < best {
 			// A better rank drops the entries picked so far.
 			best = r
 			listing.picked = listing.picked[:0]
-			size = 0
 		}
-		size += n
 		listing.picked = append(listing.picked, int32(i))
 	}
+	return best
+}
+
+// appendPicked adds the picked entries, sorted by name. Every match string is
+// cut from a single buffer instead of one allocation per match.
+func appendPicked(c *completionCollector, listing *DirListing, dir string, searchDir string, cfs CompletionFS) {
 	count := len(listing.picked)
-	if count == 0 {
-		return 0
+	size := 0
+	for _, i := range listing.picked {
+		// Offered either way; a directory only adds the trailing separator.
+		if resolveKind(listing, int(i), searchDir, cfs) == dirKindDir {
+			size++
+		}
+		size += len(dir) + int(listing.entries[i].n)
 	}
-	c.useRank(best)
 	listing.sortPicked()
 
 	var b strings.Builder
-	b.Grow(size + count*len(dir))
+	b.Grow(size)
 	for _, i := range listing.picked {
 		b.WriteString(dir)
 		b.WriteString(listing.name(int(i)))
@@ -469,7 +501,21 @@ func appendFilteredEntries(c *completionCollector, listing *DirListing, filter *
 		c.matches = append(c.matches, TabMatch{TABMATCHFILE, all[offset : offset+n]})
 		offset += n
 	}
-	return count
+}
+
+// resolveKind learns whether a link or unknown entry is a directory, and
+// keeps the answer for a later pass over the same listing.
+func resolveKind(listing *DirListing, i int, searchDir string, cfs CompletionFS) dirEntryKind {
+	kind := listing.entries[i].kind
+	if kind != dirKindLink && kind != dirKindUnknown {
+		return kind
+	}
+	kind = dirKindFile
+	if cfs.EntryIsDir(listing, searchDir, listing.name(i)) {
+		kind = dirKindDir
+	}
+	listing.entries[i].kind = kind
+	return kind
 }
 
 // OSCompletionFS implements CompletionFS using the real filesystem. Listing is
@@ -493,8 +539,8 @@ func (OSCompletionFS) Getwd() (string, error) {
 	return os.Getwd()
 }
 
-func (OSCompletionFS) Stat(path string) (fs.FileInfo, error) {
-	return os.Stat(path)
+func (OSCompletionFS) EntryIsDir(listing *DirListing, dir string, name string) bool {
+	return listing.entryIsDir(dir, name)
 }
 
 // OSCompletionEnv implements CompletionEnv using real environment.

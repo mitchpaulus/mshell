@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strconv"
 	"testing"
 )
@@ -151,6 +152,122 @@ func TestCompletionOptionsOnlyMatchFromStart(t *testing.T) {
 	expectMatches(t, "option prefix", GenerateCompletions(specInput("--h", spec), deps), "--help")
 	expectMatches(t, "option substring", GenerateCompletions(specInput("-v", spec), deps))
 	expectMatches(t, "value substring", GenerateCompletions(specInput("pil", spec), deps), "compile")
+}
+
+// preferredTestDeps lists one directory for a 'preferredFiles: *.typ'
+// definition.
+func preferredTestDeps(files []string, dirs []string) CompletionDeps {
+	var entries []FakeDirEntry
+	for _, f := range files {
+		entries = append(entries, FakeDirEntry{EntryName: f})
+	}
+	for _, d := range dirs {
+		entries = append(entries, FakeDirEntry{EntryName: d, EntryIsDir: true})
+	}
+	return CompletionDeps{
+		FS:       FakeCompletionFS{Cwd: "/w", Entries: map[string][]FakeDirEntry{".": entries}},
+		Env:      FakeCompletionEnv{},
+		Binaries: FakePathBinManager{},
+	}
+}
+
+func TestPreferredFilesLevels(t *testing.T) {
+	g, _ := CompileCompletionGlob("*.typ")
+	cases := []struct {
+		name   string
+		typed  string
+		values []string
+		files  []string
+		dirs   []string
+		want   []string
+	}{
+		// A preferred file containing the text beats a fallback file
+		// starting with it, and a directory that only contains it.
+		{"preferred substring", "rep", nil, []string{"report.pdf", "my-report.typ"}, []string{"prep"}, []string{"my-report.typ"}},
+		// A directory starting with the text beats a preferred file that
+		// only contains it.
+		{"dir prefix", "sr", nil, []string{"user-srs.typ"}, []string{"src"}, []string{"src/"}},
+		{"preferred and dir prefix", "ma", nil, []string{"main.typ", "manual.pdf"}, []string{"math"}, []string{"main.typ", "math/"}},
+		{"preferred case differs", "Rep", nil, []string{"report.typ", "Report.pdf"}, nil, []string{"report.typ"}},
+		{"dir prefix hides fallback", "no", nil, []string{"notes.pdf"}, []string{"notes"}, []string{"notes/"}},
+		// With no preferred file or prefix directory, the fallback offers
+		// files and directories that contain the text.
+		{"fallback substring", "rc", nil, []string{"arc.pdf"}, []string{"src"}, []string{"arc.pdf", "src/"}},
+		{"preferred beats dir substring", "rc", nil, []string{"orc.typ"}, []string{"src"}, []string{"orc.typ"}},
+		{"preferred substring alone", "co", nil, []string{"deco.typ", "config.toml"}, nil, []string{"deco.typ"}},
+		// A value starting with the text beats a preferred file that only
+		// contains it, without letting the fallback files in.
+		{"value beats preferred substring", "co", []string{"compile"}, []string{"deco.typ", "config.toml"}, nil, []string{"compile"}},
+		{"value and preferred prefix", "co", []string{"compile"}, []string{"cover.typ", "config.toml"}, nil, []string{"compile", "cover.typ"}},
+	}
+	for _, tc := range cases {
+		deps := preferredTestDeps(tc.files, tc.dirs)
+		spec := &CompletionSpec{Values: tc.values, PreferredFiles: []CompletionGlob{g}}
+		expectMatches(t, tc.name, GenerateCompletions(specInput(tc.typed, spec), deps), tc.want...)
+	}
+}
+
+// countingCompletionFS counts the stat calls a completion makes.
+type countingCompletionFS struct {
+	FakeCompletionFS
+	stats *int
+}
+
+func (c countingCompletionFS) EntryIsDir(l *DirListing, dir string, name string) bool {
+	*c.stats++
+	return c.FakeCompletionFS.EntryIsDir(l, dir, name)
+}
+
+func TestCompletionStatsOnlyLinksThatMatter(t *testing.T) {
+	// 50 links that only contain "a", one that starts with it, and a
+	// preferred file that only contains it.
+	var entries []FakeDirEntry
+	for i := 0; i < 50; i++ {
+		entries = append(entries, FakeDirEntry{EntryName: "x-a-" + strconv.Itoa(i), EntryIsLink: true})
+	}
+	entries = append(entries,
+		FakeDirEntry{EntryName: "alpha", EntryIsLink: true},
+		FakeDirEntry{EntryName: "xa.sh"},
+	)
+	stats := 0
+	fsys := countingCompletionFS{FakeCompletionFS{Cwd: "/w", Entries: map[string][]FakeDirEntry{".": entries}}, &stats}
+	deps := CompletionDeps{FS: fsys, Env: FakeCompletionEnv{}, Binaries: FakePathBinManager{}}
+	g, _ := CompileCompletionGlob("*.sh")
+
+	cases := []struct {
+		name      string
+		spec      *CompletionSpec
+		want      []string
+		wantStats int
+	}{
+		// Every entry is offered whatever its type, so only the one shown
+		// is stat'd, for its trailing separator.
+		{"no spec", nil, []string{"alpha"}, 1},
+		// alpha could only be offered as a directory, so it is stat'd. The
+		// links that only contain the text could only be offered as
+		// directories, and directories that only contain it are not
+		// preferred, so they are skipped by name.
+		{"preferred", &CompletionSpec{PreferredFiles: []CompletionGlob{g}}, []string{"xa.sh"}, 1},
+	}
+	for _, tc := range cases {
+		stats = 0
+		expectMatches(t, tc.name, GenerateCompletions(specInput("a", tc.spec), deps), tc.want...)
+		if stats != tc.wantStats {
+			t.Errorf("%s: %d stat calls, want %d", tc.name, stats, tc.wantStats)
+		}
+	}
+}
+
+func TestOSFileCompletionLinksAndClose(t *testing.T) {
+	root := makeCompletionTree(t, 4)
+	fsys := OSCompletionFS{Listing: &DirListing{}}
+	c := newCompletionCollector()
+	appendFileCompletions(&c, specInput(root+"/link", nil), fsys)
+	sep := string(os.PathSeparator)
+	expectMatches(t, "links", c.matches, root+"/linkbroken", root+"/linkdir"+sep)
+	if fsys.Listing.open != (openDir{}) {
+		t.Errorf("the directory was left open after completion")
+	}
 }
 
 // pathLikeNames is a list shaped like the executables on a typical PATH.

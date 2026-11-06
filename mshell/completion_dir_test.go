@@ -40,6 +40,7 @@ func TestReadDirListingMatchesOSReadDir(t *testing.T) {
 	// Enough entries to need several reads and a growing buffer.
 	root := makeCompletionTree(t, 1500)
 	var listing DirListing
+	defer listing.Close()
 	for round := 0; round < 2; round++ { // The second round reuses the buffers.
 		if err := readDirListing(root, &listing); err != nil {
 			t.Fatal(err)
