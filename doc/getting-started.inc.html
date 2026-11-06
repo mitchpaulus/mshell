@@ -258,6 +258,28 @@ Tab in command position offers the words of abbreviations that expand there.
 These types and their members are built in, so their names cannot be used for your own types, members or definitions.
 </p>
 
+<h1 id="getting-started-tab-completion">Tab completion <a class="section-link" href="#getting-started-tab-completion" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
+
+<p>
+Tab completes the word before the cursor from files, commands on <code>PATH</code>, variables, built-ins and definitions.
+A candidate matches when it starts with the word.
+When nothing starts with it, a candidate matches when the word appears anywhere in it, so <code>ctl</code> finds <code>systemctl</code>.
+For a path, only the last part is matched: <code>src/main</code> looks in <code>src/</code>.
+</p>
+
+<p>
+Case is ignored when the word is all lowercase, so <code>mak</code> matches <code>Makefile</code> and <code>makepkg</code>.
+A word with an uppercase letter prefers candidates with the same case: <code>Mak</code> matches only <code>Makefile</code> when it exists,
+and falls back to ignoring case when nothing has the same case.
+</p>
+
+<p>
+Only the best kind of match is offered: when anything starts with the word, candidates that only contain it are not shown.
+A word starting with <code>-</code> only matches options that start with it.
+When the matches share a start longer than the word, Tab replaces the word with it.
+When the word is in the middle of the matches, Tab leaves the word as typed, and pressing Tab again cycles through the matches.
+</p>
+
 <h1 id="getting-started-key-bindings">Key bindings <a class="section-link" href="#getting-started-key-bindings" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
 
 <p>

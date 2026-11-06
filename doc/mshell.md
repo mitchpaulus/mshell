@@ -450,8 +450,10 @@ Every key is optional:
 
 - `values`: a list of values.
 - `preferredFiles`: a glob pattern, or a list of them, like `'*.typ'` or `'*'`.
-  Tab offers the matching files and every directory.
-  When nothing matches, Tab falls back to `files`, or to every file when `files` is not given.
+  Tab offers the matching files, and the directories whose names start with the typed text.
+  A matching file whose name only contains the typed text still comes before every other file and directory.
+  When none of those fit, Tab falls back to `files`, or to every file when `files` is not given,
+  and to directories whose names only contain the typed text.
   Use it when a command usually takes one kind of file but can take any, like an interpreter.
 - `files`: a glob pattern, or a list of them, like `'*.typ'` or `'*'`.
   Tab offers the files in the directory being typed whose names match, and every directory, so you can move into one.
