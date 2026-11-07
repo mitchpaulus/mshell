@@ -880,34 +880,35 @@ func TestJoinOrderIndependent(t *testing.T) {
 		}
 		return first
 	}
-	accepted := 0
-	defer func() {
-		if accepted < 200 {
-			t.Errorf("only %d of 364 three-arm combinations check", accepted)
-		}
-	}()
 	if !check([]string{"{a: [2]}", "{a: @xs}", "{b: 1}"}) || check([]string{"@xs", `["a"]`, "[1]"}) {
 		t.Errorf("the join of a sample is wrong")
 	}
-	n := len(pool)
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			for k := j + 1; k < n; k++ {
-				if try([]string{pool[i], pool[j], pool[k]}) {
-					accepted++
-				}
-			}
+	accepted := 0
+	for _, combo := range combos(pool, 3) {
+		if try(combo) {
+			accepted++
 		}
+	}
+	if accepted < 200 {
+		t.Errorf("only %d of 364 three-arm combinations check", accepted)
 	}
 	// Four arms from part of the pool.
 	small := []string{"{a: 1}", "@t", "{a: @xs}", "{b: @xs}", "{a: [2]}", "[1]", "@xs"}
-	for i := 0; i < len(small); i++ {
-		for j := i + 1; j < len(small); j++ {
-			for k := j + 1; k < len(small); k++ {
-				for l := k + 1; l < len(small); l++ {
-					try([]string{small[i], small[j], small[k], small[l]})
-				}
-			}
+	for _, combo := range combos(small, 4) {
+		try(combo)
+	}
+}
+
+// combos is every choice of k of xs, in the order of xs.
+func combos(xs []string, k int) [][]string {
+	if k == 0 {
+		return [][]string{nil}
+	}
+	var out [][]string
+	for i := range len(xs) - k + 1 {
+		for _, rest := range combos(xs[i+1:], k-1) {
+			out = append(out, append([]string{xs[i]}, rest...))
 		}
 	}
+	return out
 }

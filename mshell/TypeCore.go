@@ -641,10 +641,11 @@ type coreChecker struct {
 	daNames []NameId
 	daSpans []daSpan
 	liveBuf []savedRun
-	// joinBuf and slotBuf hold the arms and slots being joined, as
-	// stacks.
+	// joinBuf, slotBuf and boolBuf hold the arms and slots being joined,
+	// as stacks (pushN, scratch).
 	joinBuf []nArm
 	slotBuf []coreSlot
+	boolBuf []bool
 }
 
 // ---------------------------------------------------------------------------
@@ -1877,7 +1878,7 @@ func (c *coreChecker) instantiate(sig *coreSig) (gens []TypeId, mark int) {
 	for range sig.gens {
 		c.genBuf = append(c.genBuf, c.subst.FreshVar(c.arena))
 	}
-	return c.genBuf[mark:len(c.genBuf):len(c.genBuf)], mark
+	return scratch(c.genBuf, mark), mark
 }
 
 func (c *coreChecker) releaseGens(mark int) { c.genBuf = c.genBuf[:mark] }
@@ -1994,7 +1995,7 @@ func (c *coreChecker) joinRepeated(sig *coreSig, gens []TypeId, argAt func(i int
 		if !c.hasVars(gens[g]) {
 			continue
 		}
-		var args []coreSlot
+		mark := len(c.slotBuf)
 		for i, want := range sig.ins {
 			n := c.arena.nodes[want]
 			if n.Kind != TKParam || int(n.A) != g {
@@ -2002,17 +2003,17 @@ func (c *coreChecker) joinRepeated(sig *coreSig, gens []TypeId, argAt func(i int
 			}
 			arg := argAt(i)
 			if c.waiting(arg) != nil || c.hasVars(arg.t) {
-				args = nil
+				c.slotBuf = c.slotBuf[:mark]
 				break
 			}
-			arg.fresh = c.freshish(arg)
-			args = append(args, arg)
+			c.slotBuf = append(c.slotBuf, arg)
 		}
-		if len(args) >= 2 {
+		if args := scratch(c.slotBuf, mark); len(args) >= 2 {
 			if joined, ok := c.joinSlots(args); ok {
 				c.uni.Unify(gens[g], joined.t)
 			}
 		}
+		c.slotBuf = c.slotBuf[:mark]
 	}
 }
 
@@ -2255,27 +2256,16 @@ func (c *coreChecker) listLiteral(l *MShellParseList) {
 		elem = coreSlot{t: c.subst.FreshVar(c.arena), fresh: true}
 	} else {
 		elem = elems[0]
-		elem.fresh = c.freshish(elem)
 		for _, e := range elems {
 			if !c.freshish(e) {
 				fresh = false
 			}
 		}
 		if len(elems) > 1 {
-			mark := len(c.slotBuf)
-			for _, e := range elems {
-				e.fresh = c.freshish(e)
-				c.slotBuf = append(c.slotBuf, e)
-			}
-			j, ok := c.joinSlots(c.slotBuf[mark:len(c.slotBuf):len(c.slotBuf)])
-			c.slotBuf = c.slotBuf[:mark]
+			j, ok := c.joinSlots(elems)
 			if !ok {
-				ts := make([]TypeId, len(elems))
-				for i, e := range elems {
-					ts[i] = e.t
-				}
 				c.errs = append(c.errs, TypeError{Kind: TErrNoJoin, Pos: l.StartToken,
-					Hint: "the elements of this list have no common type: " + c.formatList(ts)})
+					Hint: "the elements of this list have no common type: " + c.formatList(elems)})
 				c.abandoned = true
 				return
 			}
@@ -2599,24 +2589,16 @@ func (c *coreChecker) joinArms(arms []savedRun, tok Token) {
 	}
 	c.stack = append(c.stack[:0], c.saved[first.start:first.end]...)
 	if len(live) > 1 {
-		mark := len(c.slotBuf)
+		slots, mark := pushN(&c.slotBuf, len(live))
 		defer func() { c.slotBuf = c.slotBuf[:mark] }()
-		for range live {
-			c.slotBuf = append(c.slotBuf, coreSlot{})
-		}
-		slots := c.slotBuf[mark:len(c.slotBuf):len(c.slotBuf)]
 		for i := range n {
 			for k, a := range live {
 				slots[k] = c.saved[a.start+i]
 			}
 			j, ok := c.joinSlots(slots)
 			if !ok {
-				ts := make([]TypeId, len(slots))
-				for k, s := range slots {
-					ts[k] = s.t
-				}
 				c.errs = append(c.errs, TypeError{Kind: TErrNoJoin, Pos: tok,
-					Hint: "the arms leave " + c.formatList(ts) +
+					Hint: "the arms leave " + c.formatList(slots) +
 						" in the same place, which have no common type; declare the type you want and use `as` in each arm"})
 				c.abandoned = true
 				return
@@ -2845,11 +2827,11 @@ func (c *coreChecker) joinSlots(slots []coreSlot) (coreSlot, bool) {
 	return j, ok
 }
 
-// formatList is "A, B and C".
-func (c *coreChecker) formatList(ts []TypeId) string {
+// formatList is the slots' types as "A, B and C", each once.
+func (c *coreChecker) formatList(ss []coreSlot) string {
 	var parts []string
-	for _, t := range ts {
-		f := c.format(t)
+	for _, s := range ss {
+		f := c.format(s.t)
 		if !slices.Contains(parts, f) {
 			parts = append(parts, f)
 		}
@@ -2861,7 +2843,8 @@ func (c *coreChecker) formatList(ts []TypeId) string {
 }
 
 // joinTypes is the pairwise join of two different slots, used where a
-// slot has unsolved variables (joinPairs).
+// slot has unsolved variables (joinPairs): those unify, or are matched
+// against the other side. Two solved slots are joined by joinN.
 func (c *coreChecker) joinTypes(a, b coreSlot) (coreSlot, bool) {
 	fresh := a.fresh && b.fresh
 	if a.t == b.t {
@@ -2896,27 +2879,8 @@ func (c *coreChecker) joinTypes(a, b coreSlot) (coreSlot, bool) {
 		}
 		return coreSlot{t: a.t, fresh: fresh}, false
 	}
-	at, bt := c.subst.Apply(c.arena, a.t), c.subst.Apply(c.arena, b.t)
-	af, bf := c.freshish(a), c.freshish(b)
-	if s, ok := c.rel.JoinSlot(Slot{Type: at, Fresh: af}, Slot{Type: bt, Fresh: bf}); ok {
-		return coreSlot{t: s.Type, fresh: s.Fresh}, true
-	}
-	// A new or partly new arm may be retyped to the other arm's type and
-	// then forgotten (t_sub twice: ss_dp or ss_m, then ss_forget or
-	// ss_m_forget), so a shared arm's type is an upper bound of both:
-	// `{values: [...]}` and a stored CompletionResult give CompletionResult.
-	for _, p := range [2]struct {
-		x      coreSlot
-		xt, yt TypeId
-		yf     bool
-	}{{a, at, bt, bf}, {b, bt, at, af}} {
-		if !p.yf && (p.x.fresh || p.x.part != 0) {
-			if ok, _ := c.markBelow(slotMark(p.x), p.xt, p.yt); ok {
-				return coreSlot{t: p.yt}, true
-			}
-		}
-	}
-	return coreSlot{}, false
+	pair := [2]coreSlot{a, b}
+	return c.joinN(pair[:])
 }
 
 // ---------------------------------------------------------------------------

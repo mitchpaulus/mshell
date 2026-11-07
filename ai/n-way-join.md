@@ -65,8 +65,9 @@ so when several work the result type can depend on the order; whether the join s
 
 ### Unification variables
 
-A slot whose type has an unsolved variable keeps the pairwise fold (unify, then match),
-which the model does not cover today either.
+When some slot's type has an unsolved variable, the solved slots are joined at once as above,
+and the others are folded in one at a time (unify, then match), which the model does not cover today either.
+Which slots are solved is decided before any join, since joining solves variables.
 
 ## Proof
 
@@ -91,7 +92,12 @@ and the pairwise join is still what the checker uses with unification variables.
 ## Go
 
 - `joinN`, `joinKinds`, `joinG`, `pjoinN`, `shjoin`, `layer`, `fmergeN` in `TypeCorePartial.go`, mirroring the model.
+  Every `⊔` is one fold, `foldJoin(m, ...)` over `mjoin` under a mark.
 - `joinArms`, list literals and repeated generic arguments join all their slots at once; `joinSlot(a, b)` is `joinN` of two.
+  The pairwise `joinTypes` only unifies or matches a slot with variables, and joins two solved slots by `joinN`.
+- A step that fails, or keeps only a type (the kinds' union, the shared step), drops the parts it recorded,
+  so trying targets does not use up the unit's partly new marks.
+- `mfield` shares `Relations.fieldJoin`'s status table (`fieldJoinShape`).
 - Error messages list every type the arms leave.
 
 ## Results
@@ -104,4 +110,6 @@ The pool of 14 arms, every three-arm combination in every order (`TestJoinOrderI
 | `partial-join`, pairwise | 54 | 220 |
 | this join | 0 | 220, and every combination either of the others accepts in some order |
 
-Allocations in the checker benchmarks rose about 1% (scripts) and 6% (corpus); time is within noise.
+Allocations in the checker benchmarks rose about 1% (scripts) and 6% (corpus) at first;
+with the joins on reused buffers and the record keys on the stack, the corpus is 17,416 per run (18,364 with the first version)
+and the scripts 2,677 (2,715). Time is within noise.
