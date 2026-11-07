@@ -1499,22 +1499,16 @@ end
 # The templates `typst init` can start from, as `@namespace/name` and `@namespace/name:version`.
 # Packages live at <root>/<namespace>/<name>/<version>.
 def __typstTemplates ([str] -- new [str])
-    [] found!
-    __typstPackageRoots each. root!
-        @root toPath isDir if
-            @root lsDir (isDir) filter each. nsDir!
-                @nsDir lsDir (isDir) filter each. nameDir!
-                    @nameDir lsDir (isDir) filter each. verDir!
-                        @verDir __typstIsTemplate if
-                            $"@{@nsDir basename}/{@nameDir basename}" spec!
-                            @found @spec append $"{@spec}:{@verDir basename}" append drop
-                        end
-                    end
-                end
-            end
-        end
-    end
-    @found uniq sortV
+    __typstPackageRoots (toPath isDir) filter
+    (lsDir (isDir) filter) map concat   # namespaces
+    (lsDir (isDir) filter) map concat   # names
+    (lsDir (isDir) filter) map concat   # versions
+    (__typstIsTemplate) filter
+    (verDir!
+        $"@{@verDir dirname dirname basename}/{@verDir dirname basename}" spec!
+        [@spec $"{@spec}:{@verDir basename}"]
+    ) map concat
+    uniq sortV
 end
 
 # The labels written in a Typst file, like `<intro>`, for a `typst query` selector.
