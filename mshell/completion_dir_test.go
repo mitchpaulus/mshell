@@ -40,6 +40,7 @@ func TestReadDirListingMatchesOSReadDir(t *testing.T) {
 	// Enough entries to need several reads and a growing buffer.
 	root := makeCompletionTree(t, 1500)
 	var listing DirListing
+	defer listing.Close()
 	for round := 0; round < 2; round++ { // The second round reuses the buffers.
 		if err := readDirListing(root, &listing); err != nil {
 			t.Fatal(err)
@@ -82,8 +83,9 @@ func TestOSFileCompletionSortedWithLinks(t *testing.T) {
 	root := makeCompletionTree(t, 12)
 	fsys := OSCompletionFS{Listing: &DirListing{}}
 	spec := &CompletionSpec{Dirs: true}
-	matches := appendFileCompletions(nil, specInput(root+"/", spec), fsys)
-	texts := GetMatchTexts(matches)
+	c := newCompletionCollector()
+	appendFileCompletions(&c, specInput(root+"/", spec), fsys)
+	texts := GetMatchTexts(c.matches)
 	if !sort.StringsAreSorted(texts) {
 		t.Errorf("matches not sorted: %v", texts)
 	}
@@ -104,10 +106,11 @@ func TestOSFileCompletionSteadyStateAllocs(t *testing.T) {
 	fsys := OSCompletionFS{Listing: &DirListing{}}
 	g, _ := CompileCompletionGlob("*.typ")
 	input := specInput(root+"/entry1", &CompletionSpec{PreferredFiles: []CompletionGlob{g}})
-	matches := make([]TabMatch, 0, 512)
-	appendFileCompletions(matches[:0], input, fsys) // Warm the reused buffers.
+	c := completionCollector{matches: make([]TabMatch, 0, 512)}
+	appendFileCompletions(&c, input, fsys) // Warm the reused buffers.
 	allocs := testing.AllocsPerRun(20, func() {
-		appendFileCompletions(matches[:0], input, fsys)
+		c.best, c.matches = rankNone, c.matches[:0]
+		appendFileCompletions(&c, input, fsys)
 	})
 	// The output string buffer, plus what opening the directory costs.
 	if allocs > 3 {
@@ -123,7 +126,8 @@ func BenchmarkRealDirCompletion(b *testing.B) {
 		fsys := OSCompletionFS{Listing: &DirListing{}}
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			appendFileCompletions(nil, input, fsys)
+			c := newCompletionCollector()
+			appendFileCompletions(&c, input, fsys)
 		}
 	})
 	b.Run("os.ReadDir", func(b *testing.B) {

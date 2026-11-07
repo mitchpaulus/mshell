@@ -1121,6 +1121,11 @@ type TermState struct {
 	tabCycleTokenType  TokenType
 	tabCycleAllFiles   bool
 	tabCycleMatches    []string
+	// tabCycleQuoteWords[i] is quotesWords for tabCycleMatches[i].
+	tabCycleQuoteWords []bool
+	// insertTokens is reused by buildCompletionInsert and
+	// buildSharedCompletionInsert to lex a match without allocating.
+	insertTokens []Token
 	lastArgCycleActive bool
 	lastArgCycleIndex  int
 	lastArgCycleStart  ByteOffset
@@ -1775,6 +1780,7 @@ func (state *TermState) resetTabCycle() {
 	if state.tabCycleMatches != nil {
 		state.tabCycleMatches = state.tabCycleMatches[:0]
 	}
+	state.tabCycleQuoteWords = state.tabCycleQuoteWords[:0]
 }
 
 func (state *TermState) resetLastArgCycle() {
@@ -2112,12 +2118,50 @@ func escapeFormatStringText(text string) string {
 
 var formatStringTextEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `{`, `\{`, `}`, `\}`)
 
-func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, preferPathQuote bool) string {
+// quotesWords reports whether a match of this kind is an argument, which
+// is quoted when typing it bare would mean something else: `2.0` is read
+// as the number 2, `@x` as a variable, and `sort` runs the builtin. A
+// binary, builtin or definition name is left as it is.
+func quotesWords(kind TabMatchType) bool {
+	return kind == TABMATCHVALUE || kind == TABMATCHFILE
+}
+
+// wordReadsAsText reports whether tok, the only token of text, is read as
+// the string text in a command list: a plain word that is not a builtin,
+// a definition or an enum member, or an integer written the way it prints.
+func (state *TermState) wordReadsAsText(tok Token, text string) bool {
+	switch tok.Type {
+	case LITERAL:
+		if tok.Lexeme != text {
+			return false
+		}
+		if _, ok := BuiltInList[text]; ok {
+			return false
+		}
+		if _, ok := state.evalState.EnumMembers[text]; ok {
+			return false
+		}
+		return !IsDefinitionDefined(text, state.stdLibDefs)
+	case INTEGER:
+		n, err := parseIntLiteral(text)
+		return err == nil && strconv.Itoa(n) == text
+	}
+	return false
+}
+
+// buildCompletionInsert gives the text that replaces the typed prefix with
+// match. quoteWords is quotesWords for the match's kind.
+func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, preferPathQuote bool, quoteWords bool) string {
 	switch tokenType {
 	case UNFINISHEDFORMATSTRING:
 		// Replaces only the text after the opener; see completionTokenPrefix.
 		return escapeFormatStringText(match)
 	case UNFINISHEDSINGLEQUOTESTRING:
+		// A value is a whole argument, so its string is closed. A file
+		// name stays open, since it may be a directory to go on into.
+		if quoteWords && !preferPathQuote {
+			return "'" + match + "'"
+		}
 		return "'" + match
 	case UNFINISHEDPATH:
 		insertString := "`" + match
@@ -2127,9 +2171,13 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType,
 		return insertString
 	default:
 		state.l.resetInput(match)
-		tokens, err := state.l.Tokenize()
-		if len(tokens) > 2 && err == nil {
-			// Quote when the completion needs multiple tokens to parse.
+		tokens, err := state.l.TokenizeInto(state.insertTokens)
+		state.insertTokens = tokens
+		// Quote when the completion needs multiple tokens to parse, or when
+		// its one token would not be read as its own text.
+		needsQuote := err == nil && (len(tokens) > 2 ||
+			(quoteWords && len(tokens) == 2 && !state.wordReadsAsText(tokens[0], match)))
+		if needsQuote {
 			if preferPathQuote {
 				insertString := "`" + match
 				if !strings.HasSuffix(match, string(os.PathSeparator)) {
@@ -2143,7 +2191,10 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType,
 	}
 }
 
-func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, allFileMatches bool) string {
+// buildSharedCompletionInsert gives the text that replaces the typed prefix
+// with the start every match shares. quoteWords is true when every match
+// is quoted as an argument (quotesWords).
+func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, allFileMatches bool, quoteWords bool) string {
 	switch tokenType {
 	case UNFINISHEDFORMATSTRING:
 		return escapeFormatStringText(longestCommonPrefix)
@@ -2154,8 +2205,20 @@ func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, 
 	default:
 		needsQuoteForWhitespace := strings.ContainsAny(longestCommonPrefix, " \t\r\n")
 		state.l.resetInput(longestCommonPrefix)
-		tokens, err := state.l.Tokenize()
-		if (len(tokens) > 2 && err == nil) || needsQuoteForWhitespace {
+		tokens, err := state.l.TokenizeInto(state.insertTokens)
+		state.insertTokens = tokens
+		needsQuote := (len(tokens) > 2 && err == nil) || needsQuoteForWhitespace
+		if !needsQuote && quoteWords && err == nil && len(tokens) == 2 {
+			switch tokens[0].Type {
+			case LITERAL, MINUS, DOUBLEDASH, INTEGER, FLOAT:
+				// The start of a word, an option or a number: what it
+				// reads as is decided once the whole match is in.
+			default:
+				// `@preview/` or `<`: no match can be typed bare.
+				needsQuote = true
+			}
+		}
+		if needsQuote {
 			// Add only the opening quote while user keeps typing to disambiguate.
 			if allFileMatches {
 				return "`" + longestCommonPrefix
@@ -2164,6 +2227,11 @@ func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, 
 		}
 		return longestCommonPrefix
 	}
+}
+
+// tabCycleQuotesWords is quotesWords for the cycled match i.
+func (state *TermState) tabCycleQuotesWords(i int) bool {
+	return i < len(state.tabCycleQuoteWords) && state.tabCycleQuoteWords[i]
 }
 
 func (state *TermState) cycleTabCompletion(direction int) {
@@ -2176,7 +2244,7 @@ func (state *TermState) cycleTabCompletion(direction int) {
 	} else if state.tabCycleIndex < 0 {
 		state.tabCycleIndex = len(state.tabCycleMatches) - 1
 	}
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles, state.tabCycleQuotesWords(state.tabCycleIndex))
 	state.currentCommand = state.tabCycleSource
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.setTabCompletions(state.tabCycleMatches)
@@ -2193,7 +2261,7 @@ func (state *TermState) selectTabCompletion(index int) {
 		index = len(state.tabCycleMatches) - 1
 	}
 	state.tabCycleIndex = index
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles, state.tabCycleQuotesWords(state.tabCycleIndex))
 	state.currentCommand = state.tabCycleSource
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.setTabCompletions(state.tabCycleMatches)
@@ -2997,13 +3065,17 @@ type StdinReaderState struct {
 // UnreadByte pushes back the byte most recently returned by ReadByte so the
 // next ReadByte returns it again. Every returned byte came from the buffer,
 // so one step back is always valid; calling this twice in a row is not.
-func (state *StdinReaderState) UnreadByte() {
-	if state.i > 0 {
-		state.i--
-		if state.record != nil && len(*state.record) > 0 {
-			*state.record = (*state.record)[:len(*state.record)-1]
-		}
+// It has the io.ByteScanner signature; the error is returned only when
+// nothing has been read from the buffer.
+func (state *StdinReaderState) UnreadByte() error {
+	if state.i == 0 {
+		return errors.New("UnreadByte: no byte to unread")
 	}
+	state.i--
+	if state.record != nil && len(*state.record) > 0 {
+		*state.record = (*state.record)[:len(*state.record)-1]
+	}
+	return nil
 }
 
 func (state *StdinReaderState) ReadByte() (byte, error) {
@@ -4550,7 +4622,7 @@ func (state *TermState) completeAtCursor() {
 	}
 
 	// Generate completions using the extracted function
-	matches := GenerateCompletions(input, deps)
+	matches, rank := generateRankedCompletions(input, deps)
 	allFileMatches := allMatchesAreFiles(matches)
 
 	var insertString string
@@ -4565,20 +4637,29 @@ func (state *TermState) completeAtCursor() {
 		fmt.Fprintf(os.Stdout, "\a")
 	} else if len(matches) == 1 {
 		// Lex the match and check if we have to quote around it
-		insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE)
+		insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE, quotesWords(matches[0].TabMatchType))
 
 		// Replace the prefex
 		state.replaceText(insertString, replaceStart, replaceEnd)
 	} else {
-		// Print out the longest common prefix
-		longestCommonPrefix := completionGraphemePrefix(GetMatchTexts(matches))
+		// Print out the longest common prefix. When the typed text is in the
+		// middle of the matches, a shared start would replace it with
+		// something it is not the start of, so nothing is inserted.
+		longestCommonPrefix := ""
+		if rank <= rankPrefixIgnoreCase {
+			longestCommonPrefix = completionGraphemePrefix(GetMatchTexts(matches))
+		}
 		state.Logf("Longest common prefix: '%s'\n", longestCommonPrefix)
 
 		if len(longestCommonPrefix) <= len(prefix) {
 			// Print bell
 			fmt.Fprintf(os.Stdout, "\a")
 		} else {
-			longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, allFileMatches)
+			allQuoteWords := true
+			for _, m := range matches {
+				allQuoteWords = allQuoteWords && quotesWords(m.TabMatchType)
+			}
+			longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, allFileMatches, allQuoteWords)
 
 			// Replace the prefix
 			state.replaceText(longestCommonPrefix, replaceStart, replaceEnd)
@@ -4593,6 +4674,10 @@ func (state *TermState) completeAtCursor() {
 		state.tabCycleTokenType = lastToken.Type
 		state.tabCycleAllFiles = allFileMatches
 		state.tabCycleMatches = append(state.tabCycleMatches[:0], tabMatchTexts...)
+		state.tabCycleQuoteWords = state.tabCycleQuoteWords[:0]
+		for _, m := range matches {
+			state.tabCycleQuoteWords = append(state.tabCycleQuoteWords, quotesWords(m.TabMatchType))
+		}
 		state.setTabCompletions(tabMatchTexts)
 	}
 }
@@ -4777,10 +4862,10 @@ _msh_completion() {
 
     if [[ $COMP_CWORD -eq 1 ]]; then
         if [[ "$cur" == -* ]]; then
-            COMPREPLY=( $(compgen -W "--html --lex --parse --version --help -h -c" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--html --lex --parse --type-check-only --version --help -h -c" -- "$cur") )
             return 0
         fi
-        COMPREPLY=( $(compgen -W "bin edit lsp completions keys" -- "$cur") )
+        COMPREPLY=( $(compgen -W "bin edit lsp completions keys fm" -- "$cur") )
         return 0
     fi
 
@@ -4809,7 +4894,7 @@ _msh_completion() {
     esac
 
     if [[ "$cur" == -* ]]; then
-        COMPREPLY=( $(compgen -W "--html --lex --parse --version --help -h -c" -- "$cur") )
+        COMPREPLY=( $(compgen -W "--html --lex --parse --type-check-only --version --help -h -c" -- "$cur") )
         return 0
     fi
 
@@ -4822,18 +4907,94 @@ complete -F _msh_completion msh mshell
 }
 
 func fishCompletionScript() string {
-	return `function __msh_register_completions --argument-names cmd
-    complete -c $cmd -f -l html -d 'Render the input as HTML'
-    complete -c $cmd -f -l lex -d 'Print tokens from the input'
-    complete -c $cmd -f -l parse -d 'Print the parsed AST as JSON'
-    complete -c $cmd -f -l version -d 'Print version information'
-    complete -c $cmd -f -s c -r -d 'Execute INPUT as the program'
-    complete -c $cmd -f -s h -l help -d 'Show help'
+	return `# Succeeds when the words between the command name and the cursor match
+# the patterns in $argv, one pattern per word.
+function __msh_words_match
+    set -l words (commandline -opc)
+    set -e words[1]
+    test (count $words) -eq (count $argv); or return 1
+    for i in (seq (count $argv))
+        string match -q -- $argv[$i] $words[$i]; or return 1
+    end
+    return 0
+end
 
-    complete -c $cmd -f -n '__fish_use_subcommand' -a 'bin edit lsp completions keys'
-    complete -c $cmd -f -n '__fish_seen_subcommand_from bin' -a 'add remove list path edit audit debug'
-    complete -c $cmd -f -n '__fish_seen_subcommand_from edit' -a 'init'
-    complete -c $cmd -x -n '__fish_seen_subcommand_from completions' -a 'bash fish nushell elvish'
+# Succeeds when every word in $argv is an option.
+function __msh_all_options
+    for word in $argv
+        switch $word
+            case -c -
+                return 1
+            case '-*'
+                continue
+            case '*'
+                return 1
+        end
+    end
+    return 0
+end
+
+# Succeeds while every word after the command name is an option.
+# Options must come before the script; later words go to the script.
+function __msh_before_script
+    set -l words (commandline -opc)
+    set -e words[1]
+    __msh_all_options $words
+end
+
+# Succeeds when the next word cannot be a file.
+function __msh_no_files
+    set -l words (commandline -opc)
+    set -e words[1]
+    # The word after -c is the program text.
+    if test "$words[-1]" = -c
+        set -e words[-1]
+        __msh_all_options $words; and return 0
+    end
+    switch "$words[1]"
+        case bin
+            # Only 'bin add' takes a path: add <path> or add <name> <path>.
+            if test "$words[2]" = add; and test (count $words) -le 3
+                return 1
+            end
+            return 0
+        case edit completions lsp keys fm
+            return 0
+    end
+    return 1
+end
+
+function __msh_register_completions --argument-names cmd
+    complete -c $cmd -n __msh_before_script -l html -d 'Render the input as HTML'
+    complete -c $cmd -n __msh_before_script -l lex -d 'Print tokens from the input'
+    complete -c $cmd -n __msh_before_script -l parse -d 'Print the parsed AST as JSON'
+    complete -c $cmd -n __msh_before_script -l type-check-only -d 'Type check the input without running it'
+    complete -c $cmd -n __msh_before_script -l version -d 'Print version information'
+    complete -c $cmd -n __msh_before_script -s c -x -d 'Execute INPUT as the program'
+    complete -c $cmd -n __msh_before_script -s h -l help -d 'Show help'
+
+    complete -c $cmd -n __msh_words_match -a bin -d 'Manage msh_bins.txt entries'
+    complete -c $cmd -n __msh_words_match -a edit -d 'Edit common msh files'
+    complete -c $cmd -n __msh_words_match -a completions -d 'Print shell completion script'
+    complete -c $cmd -n __msh_words_match -a lsp -d 'Run the language server'
+    complete -c $cmd -n __msh_words_match -a fm -d 'Open the built-in file manager'
+    complete -c $cmd -n __msh_words_match -a keys -d 'Show each key pressed as a key binding writes it'
+
+    complete -c $cmd -f -n __msh_no_files
+
+    complete -c $cmd -n '__msh_words_match bin' -a add -d 'Add/replace a bin entry'
+    complete -c $cmd -n '__msh_words_match bin' -a remove -d 'Remove a bin entry by binary name'
+    complete -c $cmd -n '__msh_words_match bin' -a list -d 'Print the bin map file contents'
+    complete -c $cmd -n '__msh_words_match bin' -a path -d 'Print the msh_bins.txt file path'
+    complete -c $cmd -n '__msh_words_match bin' -a edit -d 'Edit the bin map file'
+    complete -c $cmd -n '__msh_words_match bin' -a audit -d 'Report invalid or missing bin map entries'
+    complete -c $cmd -n '__msh_words_match bin' -a debug -d 'Print PATH/bin map lookup details for a binary'
+    complete -c $cmd -n '__msh_words_match bin remove' -a "($cmd bin list 2>/dev/null)"
+    complete -c $cmd -n '__msh_words_match bin debug' -a "($cmd bin list 2>/dev/null) (__fish_complete_command)"
+
+    complete -c $cmd -n '__msh_words_match edit' -a init -d 'Edit init.msh'
+    complete -c $cmd -n '__msh_words_match completions' -a 'bash fish nushell elvish'
+    complete -c $cmd -n '__msh_words_match fm' -a '(__fish_complete_directories)'
 end
 
 __msh_register_completions msh
@@ -4847,7 +5008,7 @@ func nushellCompletionScript() string {
 }
 
 def "msh_commands" [] {
-  [bin edit lsp completions keys]
+  [bin edit lsp completions keys fm]
 }
 
 def "msh_bin_subcommands" [] {
@@ -4862,6 +5023,7 @@ export extern "msh" [
   --html
   --lex
   --parse
+  --type-check-only
   --version
   --help
   -h
@@ -4888,6 +5050,7 @@ export extern "mshell" [
   --html
   --lex
   --parse
+  --type-check-only
   --version
   --help
   -h
@@ -4915,7 +5078,7 @@ export extern "mshell completions" [
 func elvishCompletionScript() string {
 	return `fn _msh_complete { |@args|
   if (== (count $args) 0) {
-    put bin edit lsp completions keys --html --lex --parse --version --help -h -c
+    put bin edit lsp completions keys fm --html --lex --parse --type-check-only --version --help -h -c
     return
   }
 

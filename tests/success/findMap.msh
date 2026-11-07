@@ -1,0 +1,5 @@
+["a" "12" "b" "7"] (toInt) findMap str wl
+["a" "b"] (toInt) findMap str wl
+[] (toInt) findMap str wl
+[1 2 3 4] (dup 2 > if 10 * just else drop none end) findMap str wl
+["a" "1" "b"] (dup wl toInt) findMap str wl

@@ -1,0 +1,6 @@
+# An arm with a literal does not cover its lengths.
+['a'] match
+    [] : ,
+    [one] : ,
+    ['a' ...rest] : ,
+end

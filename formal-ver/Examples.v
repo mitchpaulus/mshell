@@ -388,7 +388,7 @@ Example hole_tvar_imm_stuck :
 Proof. vm_compute. reflexivity. Qed.
 
 Example tvar_not_immutable : ~ slot_sub (Sh, TVar 0) (Dp, TVar 0).
-Proof. intros H. inversion H; subst. discriminate. Qed.
+Proof. intros H. inversion H; subst; discriminate. Qed.
 
 (** ** Hole 8: a kind pattern on a type variable
 

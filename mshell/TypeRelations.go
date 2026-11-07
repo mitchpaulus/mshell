@@ -853,30 +853,37 @@ func (r *Relations) recordJoin(x, y RecordType) (TypeId, bool) {
 // in both stays present; otherwise it becomes optional; deletable stays
 // deletable; unknown wins.
 func (r *Relations) fieldJoin(f, g RecordField) (RecordField, bool) {
-	switch {
-	case f.Status == FieldOpen || g.Status == FieldOpen:
-		return RecordField{Status: FieldOpen}, true
-	case f.Status == FieldAbsent && g.Status == FieldAbsent:
-		return RecordField{Status: FieldAbsent}, true
-	case f.Status == FieldRequired && g.Status == FieldRequired:
-		return r.fieldJoinType(FieldRequired, f.Type, g.Type)
-	case f.Status == FieldDeletable && g.Status == FieldDeletable:
-		return r.fieldJoinType(FieldDeletable, f.Type, g.Type)
-	case f.Status == FieldAbsent && g.Status == FieldDeletable:
-		return g, true
-	case f.Status == FieldDeletable && g.Status == FieldAbsent:
-		return f, true
-	case f.Status == FieldAbsent:
-		return RecordField{Status: FieldOptional, Type: g.Type}, true
-	case g.Status == FieldAbsent:
-		return RecordField{Status: FieldOptional, Type: f.Type}, true
+	status, x, y, join := fieldJoinShape(f, g)
+	if !join {
+		return RecordField{Status: status}, true
 	}
-	return r.fieldJoinType(FieldOptional, f.Type, g.Type)
-}
-
-func (r *Relations) fieldJoinType(status FieldStatus, x, y TypeId) (RecordField, bool) {
 	z, ok := r.join(true, x, y)
 	return RecordField{Status: status, Type: z}, ok
+}
+
+// fieldJoinShape is fieldJoin's table: the joined status and, when join is
+// set, the two types whose join is the value there. A label on one side
+// only gives its own type twice, which join gives back.
+func fieldJoinShape(f, g RecordField) (status FieldStatus, x, y TypeId, join bool) {
+	switch {
+	case f.Status == FieldOpen || g.Status == FieldOpen:
+		return FieldOpen, 0, 0, false
+	case f.Status == FieldAbsent && g.Status == FieldAbsent:
+		return FieldAbsent, 0, 0, false
+	case f.Status == FieldRequired && g.Status == FieldRequired:
+		return FieldRequired, f.Type, g.Type, true
+	case f.Status == FieldDeletable && g.Status == FieldDeletable:
+		return FieldDeletable, f.Type, g.Type, true
+	case f.Status == FieldAbsent && g.Status == FieldDeletable:
+		return FieldDeletable, g.Type, g.Type, true
+	case f.Status == FieldDeletable && g.Status == FieldAbsent:
+		return FieldDeletable, f.Type, f.Type, true
+	case f.Status == FieldAbsent:
+		return FieldOptional, g.Type, g.Type, true
+	case g.Status == FieldAbsent:
+		return FieldOptional, f.Type, f.Type, true
+	}
+	return FieldOptional, f.Type, g.Type, true
 }
 
 // enumJoin joins enum arguments: ejoin in Join.v. A fresh-covariant

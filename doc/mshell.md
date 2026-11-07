@@ -371,6 +371,9 @@ $MY_ENV_VAR? if "MY_ENV_VAR exists" else "MY_ENV_VAR does not exist" end wl
 # Reading a variable that may be missing
 "EDITOR" getEnv "vim" maybe wl
 
+# Trying several variables in order
+"VISUAL" getEnv ("EDITOR" getEnv) orElse "vim" maybe wl
+
 # Removing an environment variable
 "MSHELL_VAR" unsetenv
 
@@ -447,8 +450,10 @@ Every key is optional:
 
 - `values`: a list of values.
 - `preferredFiles`: a glob pattern, or a list of them, like `'*.typ'` or `'*'`.
-  Tab offers the matching files and every directory.
-  When nothing matches, Tab falls back to `files`, or to every file when `files` is not given.
+  Tab offers the matching files, and the directories whose names start with the typed text.
+  A matching file whose name only contains the typed text still comes before every other file and directory.
+  When none of those fit, Tab falls back to `files`, or to every file when `files` is not given,
+  and to directories whose names only contain the typed text.
   Use it when a command usually takes one kind of file but can take any, like an interpreter.
 - `files`: a glob pattern, or a list of them, like `'*.typ'` or `'*'`.
   Tab offers the files in the directory being typed whose names match, and every directory, so you can move into one.
@@ -459,6 +464,7 @@ Patterns match file names, not paths, and are case-sensitive.
 A dictionary without `preferredFiles`, `files`, or `dirs` offers no files.
 A list is the same as `{ 'values': list, 'files': '*' }`.
 Values starting with `-` are only offered once the typed text starts with `-`.
+Return values as plain text: Tab quotes a value that would mean something else typed bare, such as `2.0`, `@preview/x` or `<intro>`.
 
 ```mshell
 def typstCompletion { 'complete': ['typst'] } ([str] -- new CompletionResult)
@@ -471,7 +477,7 @@ end
 ```
 
 The standard library includes completion definitions for
-`git`, `fd`, `ssh`, `rg`, `sudo`, `systemctl`, `journalctl`, `cargo`,
+`git`, `fd`, `ssh`, `rg`, `sudo`, `systemctl`, `journalctl`, `cargo`, `typst`,
 and `msh` itself (e.g. `__gitCompletion`, `__cargoCompletion`).
 
 ### Shell completions
@@ -651,6 +657,25 @@ Two enum values are equal when they are the same member of the same enum with eq
 Member names are global.
 A member, an enum, a `type`, a definition and a builtin each need a name of their own.
 
+`Result` is a built-in enum for a value or the error that stopped it: `enum Result[a e] = ok a | err e end`.
+`?` unwraps an `ok` and fails on an `err`, with the error's `str` as the message.
+`orElse` gives an `ok` back as is, and on an `err` runs a quotation on the error that returns a new `Result`.
+`httpGet`, `httpPost`, `parseToml`, `toDt`, `fileSize`, `modTime`, `evalSymLinks` and `linkCount` give `Result[T str]`, with why they failed in the `err`.
+Because `ok` and `err` are words, quote them in a command list: `[echo 'ok']`.
+
+```mshell
+def safeDiv (int int -- Result[int str])
+    d! n!
+    @d 0 = if "divide by zero" err else @n @d / ok end
+end
+
+10 2 safeDiv ? str wl     # 5
+10 0 safeDiv match
+    ok v : @v str wl,
+    err e : $"error: {@e}" wl,
+end                       # error: divide by zero
+```
+
 ### Date/Times
 
 Date/times can be entered using a literal syntax, in ISO-8601 format.
@@ -785,7 +810,10 @@ The mark must match the body exactly: missing on an output that is new on every 
 
 ### Validating data
 
-`tryAs T` checks at run time that the value conforms to `T`, giving `just` the same value or `none`; it never copies.
+`tryAs T` checks at run time that the value conforms to `T`, giving `Result[T str]`: `ok` with the same value, or `err` with why it does not conform; it never copies.
+The reason gives the path to a failing part and what was expected there, e.g. `not of type [Person]: at [1].age, expected int, found str "41"`.
+When several parts fail, the same value always gets the same reason, but it need not name the earliest one.
+`?` stops the program with that reason.
 Every element, dict value and enum payload is checked; a written shape allows other keys; a value that contains itself conforms to a type it has.
 `T` cannot be a quotation type, an enum holding one, or a def's generic.
 A check over 67,108,864 (1 << 26) steps stops the program.
@@ -795,6 +823,10 @@ On a new value (`parseJson tryAs T ?`) any `T` is allowed; a stored value can on
 ```mshell
 type Person = {name: str, age: int}
 '[{"name": "Ada", "age": 36}]' parseJson tryAs [Person] ? (:age?) map sum wl
+$"{$HOME}/people.json" toPath parseJson tryAs [Person] match
+    ok people : @people len wl,
+    err why : @why wle,
+end
 ```
 
 ### Dicts
@@ -820,11 +852,13 @@ A literal followed by `as` and a quotation type is checked against that type, so
 A union with a quotation member, as a parameter or after `as`, checks a literal against that member: `(:a?)` given to an `int | ({a: int} -- int)` parameter.
 `x` needs the quotation's arity known.
 `break` and `continue` are allowed only in a `loop` body and in quotation literals given to `each`, `map` and similar words inside one.
-`map` on a Maybe, `bind` and `map2` run the quotation on the current stack, so a `break` there leaves the loop with what the quotation pushed so far, which must match the loop's stack.
+`map` on a Maybe, `bind`, `map2` and `orElse` run the quotation on the current stack, so a `break` there leaves the loop with what the quotation pushed so far, which must match the loop's stack.
 
 ### Control flow and variables
 
 The arms of `if`, `iff` and `match` must leave the same number of values; different types join: `1`/`2.5` gives `int | float`, `none`/`5 just` gives `Maybe[int]`, new `[1]`/`["a"]` gives `[int | str]`, stored lists of different types have no join (error).
+New dicts holding stored values, `{a: @xs}`/`{a: @xs, b: [2]}`, give a new `{a: [int], b?: [int]}` that may still gain optional keys; a position stored in one arm and new in the other makes the whole value stored.
+The arms are joined all at once, so whether they join does not depend on their order.
 An arm that never returns (`exit`, a `never` def, `return`, `break`) is left out.
 An error about a union a join made names the arm each member came from.
 An overloaded builtin on a union is checked per member; the result is the join (`int | float` through `toFloat` is `float`; `int | float 2.0 /` is an error).
@@ -1088,7 +1122,8 @@ Use `_` to discard one list element or a named dictionary value.
 In list patterns, use `..._` to accept and discard zero or more elements.
 Each binding name may appear only once in a structural pattern.
 List patterns are limited to 256 positions, and dictionary patterns are limited to 256 entries.
-Value, type, and OR tests remain part of normal `match` syntax.
+Its list and dictionary patterns may test literal values and nest, as in `match`: `args => ['run' file]`.
+Type and OR tests remain part of normal `match` syntax.
 
 ### Wildcard
 
@@ -1239,12 +1274,42 @@ The spread binding is a new list, so changing it does not change the matched lis
 end wl # Output: 1 | [2 3 4] | 5
 ```
 
+A position can also be a literal value the element must equal:
+a quoted string, a number, `true`, `false`, a path, a rune, `none`, or `null`.
+
+```mshell
+$args match
+    ['cp' from to]     : $"copy {@from} to {@to}",
+    ['rm' ...files]    : $"remove {@files len str} files",
+    [...rest '--help'] : "help",
+    _                  : "unknown command",
+end wl
+```
+
+A bare word in a pattern is a name, though it is a string in a list literal: `[GET path]` matches any two element list, so write `['GET' path]`.
+A bare word starting with `-` (`-h`) is an error; quote it.
+An enum member without payload values tests the element (`[lparen inner rparen]`); a member with payload values cannot be matched in a position, so bind the element and match it on its own.
+
+A position can be a nested list or dict pattern, which matches the element there:
+
+```mshell
+[["num" 1] ["op" "+"] ["num" 2]] match
+    [["num" a] ["op" "+"] ["num" b]] : $"{@a} plus {@b}",
+    _                                : "no parse",
+end wl # Output: 1 plus 2
+```
+
+A name may appear only once in a pattern, nested patterns included.
+The type checker rejects a literal, member, or nested pattern that can never match the elements' type (`'GET'` in an `[int]`).
+An arm that tests what is in a position does not cover its lengths for exhaustiveness, so such a match usually needs a `_` arm.
+
 ### Dict Destructuring
 
 A dict pattern `{ 'key': v }` matches a dict that contains the given keys,
 binding their values to the given names.
 Use `_` in place of a binding name to require a key without binding its value.
 Dictionary patterns permit extra keys, so they have no spread binding.
+The value for a key may also be a literal or a nested pattern: `{ 'cmd': 'move', 'to': [x y] }`.
 
 ```mshell
 person match
@@ -1331,7 +1396,7 @@ end wl # Output: 11
 - `toCsvCell`: Escape a single CSV cell. If the value contains `,`, `"`, or a newline, wraps the value in double quotes and doubles any embedded quotes; otherwise returns the input unchanged. (`str -- str`)
 - `toCsv`: Serialize a list of rows, or a `Grid` or `GridView`, to a CSV string. Cells are escaped as `toCsvCell` does, joined with `,`, and each row ends with `\n`. A grid is written with a header row of its column names first; `none` is an empty cell, `just v` is written as `v`, and any other value is written in its `str` form. (`[[str]] -- str`) / (`Grid|GridView -- str`)
 - `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. JSON `null` becomes the `null` type (distinct from `none`). A number with no fraction or exponent becomes an `int` (a `float` if it is too large for one), and any other number a `float`. (`path|str|binary -- list|dict|numeric|str|bool|null`)
-- `parseToml`: Parse TOML from a string, binary, or file path. Gives `none` if the text is not valid TOML; a file that cannot be read is still an error. A document is a table, so a valid one gives a dict. Tables become dicts; arrays and arrays of tables become lists. An offset date-time becomes a `datetime` in UTC; a local date-time or local date keeps its clock time; a local time becomes a `str` such as `"07:32:00"`. (`path|str|binary -- Maybe[{Toml}]`)
+- `parseToml`: Parse TOML from a string, binary, or file path. Gives an `err` with the reason if the text is not valid TOML; a file that cannot be read is still an error. A document is a table, so a valid one gives a dict. Tables become dicts; arrays and arrays of tables become lists. An offset date-time becomes a `datetime` in UTC; a local date-time or local date keeps its clock time; a local time becomes a `str` such as `"07:32:00"`. (`path|str|binary -- Result[{Toml} str]`)
 - `parseExcel`: Parse an `.xlsx` (OOXML) spreadsheet into a list of sheets in workbook (tab) order. Each sheet is a dict with a `name` key (the worksheet name), a `data` key holding a rectangular list of rows (list of lists), a `hidden` key (bool; `true` for hidden or veryHidden sheets), and a `visibility` key (`"visible"`, `"hidden"`, or `"veryHidden"`). Cell values are typed: numbers become floats (dates appear as Excel serial floats), strings become strings (shared, inline, and formula-string results all resolved), booleans become booleans, error cells become `excelError` values holding the error's text (`"#DIV/0!" excelError`; match with `excelError code : ...`), and empty/padding cells are the empty string. Chartsheets are skipped; hidden worksheets are included. Dates are returned as raw Excel serial floats; apply `fromOleDate` at the call site to convert. `parseExcel` assumes the default 1900-based date system, which matches `fromOleDate`'s OLE epoch (1899-12-30). Workbooks saved with the 1904 date system (`<workbookPr date1904="true"/>`, seen on some files originally authored on older Mac Excel or with the "Use 1904 date system" option enabled) have serials offset by 1462 days; on those files, add 1462 to each serial before calling `fromOleDate`, e.g. `@wb :0: :data? :3: :0: 1462 + fromOleDate`. A cell has the built-in type `ExcelCell`, so rows stored before use are typed `[[ExcelCell]]`. (`path|binary -- [{name: str, data: [[ExcelCell]], hidden: bool, visibility: str}]`)
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. A count of 0 or less produces an empty list. `(int -- [int])`
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
@@ -1352,8 +1417,8 @@ end wl # Output: 11
 - `isFile`: Check if path is a file. `(path -- bool)`
 - `fileExists`: Check whether a file or directory exists. `(str|path -- bool)`
 - `hardLink`: Create a hard link. `(existingSourcePath newTargetPath -- )`
-- `evalSymLinks`: Follow every symlink in a path and return the path it ends at (Go `filepath.EvalSymlinks`; a relative path gives a relative result). `none` if the path does not exist, a symlink in it is broken, or the symlinks loop. `(str|path -- Maybe[path])`
-- `linkCount`: Number of hard links (names) the file has, following symlinks. `none` if the file is missing or cannot be read. `(str|path -- Maybe[int])`
+- `evalSymLinks`: Follow every symlink in a path and return the path it ends at (Go `filepath.EvalSymlinks`; a relative path gives a relative result). An `err` with the reason if the path does not exist, a symlink in it is broken, or the symlinks loop. `(str|path -- Result[path str])`
+- `linkCount`: Number of hard links (names) the file has, following symlinks. An `err` with the reason if the file is missing or cannot be read. `(str|path -- Result[int str])`
 - `sameFile`: Whether two paths are the same file, following symlinks (hard links and symlink targets give `true`). `false` if either path does not exist; any other error reading a path fails. `(str|path str|path -- bool)`
 - `hardLinks`: Every name of a file as sorted absolute paths, following symlinks; includes the given path. Windows only: fails on other systems. On Unix, compare `linkCount` with a search using `lsDir` and `sameFile`. `(str|path -- [path])`
 - `tempFile`: Create a temporary file with go [`os.CreateTemp`](https://pkg.go.dev/os#CreateTemp) using `dir=""` (defaults to [`os.TempDir`](https://pkg.go.dev/os#TempDir)) and pattern `msh-`, so the filename starts with `msh-` plus a random suffix. Pushes the full path. The file is not removed automatically; use `rm`/`rmf` when you are done. `( -- path)`
@@ -1380,8 +1445,8 @@ end wl # Output: 11
 - `clip`: Copy a string to the system clipboard. Cross-platform: uses `pbcopy` on macOS, `clip` on Windows, and the first available of `wl-copy`, `xclip`, or `xsel` on Linux. `(str | path -- )`
 - `writeFile`: Write a string (UTF-8) or raw binary data to file. Overwrites file if it exists. `(str|binary content str|path file -- )`
 - `appendFile`: Append a string (UTF-8) or raw binary data to file. `(str|binary content str|path file -- )`
-- `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`
-- `modTime`: Get a file's last modification time. Returns a Maybe (None on missing file or IO error). This is the only file timestamp that is portable across operating systems and filesystems; reported in local time. `(str|path -- Maybe datetime)`
+- `fileSize`: Get size of file in bytes. An `err` with the reason if the file is missing or cannot be read. `(str|path -- Result[int str])`
+- `modTime`: Get a file's last modification time. An `err` with the reason if the file is missing or cannot be read. This is the only file timestamp that is portable across operating systems and filesystems; reported in local time. `(str|path -- Result[datetime str])`
 - `lsDir`: Get list of all items (files and directories) in directory. Full paths to the items. `(str|path -- [path])`
 - `sha256sum`: Get SHA256 checksum of file. `(path -- str)`
 - `md5`: Get md5 checksum. A `path` hashes the file's contents; a `str` or `binary` hashes its own bytes. `(path|str|binary -- str)`
@@ -1515,6 +1580,7 @@ Joining onto a binary in a loop (`@acc @chunk + acc!`) does not copy the bytes s
 - `reverse`: Reverse a list, Grid, or GridView. See Sorting section. `(list -- list)` / `(Grid|GridView -- Grid)`
 - `sum`: Sum of list, `([numeric] -- numeric)`
 - `filter`: Filter a list or dictionary, returning a new collection. The input list or dictionary is not modified in place. For dictionaries, the quotation is applied to each value and matching entries are preserved. `([a] (a -- bool) -- [a])`, `(dict (a -- bool) -- dict)`
+- `findMap`: Apply the quotation to each element in order and return the first result that is not `none`. Stops at the first match, so it is cheaper than `map` followed by a search: `["a" "12" "7"] (toInt) findMap` gives `Just(12)`. `([a] (a -- Maybe[b]) -- Maybe[b])`
 - `linearSearch`: Return the first element that satisfies the predicate, or `none` if nothing matches. `([a] (a -- bool) -- Maybe[a])`
 - `linearSearchIndex`: Return the zero-based index of the first element that satisfies the predicate, or `none` if nothing matches. `([a] (a -- bool) -- Maybe[int])`
 - `any`: Check if any element in list satisfies a condition, `([a] (a -- bool) -- bool)`
@@ -1620,7 +1686,7 @@ Access the parts with `:k?` and `:v?`.
 
 ## Date Functions
 
-- `toDt`: Convert string to date/time `(str -- Maybe[datetime])`.
+- `toDt`: Convert string to date/time. An `err` says why a string does not parse, such as an ambiguous order or an out of range component. `(str -- Result[datetime str])`
   Separators are ignored, month names are accepted, and a time with optional AM/PM may follow.
   A leading four digit year is always year-month-day, so ISO dates like `2026-01-02` are never ambiguous.
   Other dates are tried as year-month-day, month-day-year, and day-month-year.
@@ -1691,11 +1757,12 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 - `isNone`: Check if Maybe is None. `(Maybe[a] -- bool)`
 - `just`: Wrap value in Maybe. `(a -- Maybe[a])`
 - `none`: Create a None Maybe. `( -- Maybe[a])`
-- `?`: If Maybe is None, fail immediately. If it is Just, unwrap and continue. `(Maybe[a] -- a)`
+- `?`: If Maybe is None, fail immediately. If it is Just, unwrap and continue. On a `Result`, `ok` unwraps and `err` fails with the error's `str` as the message. `(Maybe[a] -- a)` / `(Result[a e] -- a)`
 - `maybe`: Unwrap a Maybe, returning a default value if it is None. `(Maybe[a] a -- a)`
 - `bind`: This is a monadic bind operation. Allows for chaining operations on Maybe values with functions that themselves return Maybe values. `(Maybe[a] (a -- Maybe[b]) -- Maybe[b])`
 - `map`: Map a function over a Maybe value. If the Maybe is None, it returns None. If it is Just, it applies the function to the value. `(Maybe[a] (a -- b) -- Maybe[b])`
 - `map2`: Map a binary function over a pair of Maybe values. Returns None if either input is None, otherwise applies the function to both inner values. `(Maybe[a] Maybe[b] (a b -- c) -- Maybe[c])`
+- `orElse`: Give back a `just` or `ok` as is. On `none`, run the quotation and give what it returns; on an `err`, run the quotation on the error and give what it returns (the error type may change). The quotation only runs when needed. `(Maybe[a] (-- Maybe[a]) -- Maybe[a])` / `(Result[a e] (e -- Result[a f]) -- Result[a f])`
 - `whenJust`: Run a quotation on the inner value for its side effects if the Maybe is Just; does nothing on None. `(Maybe[a] (a -- ) -- )`
 
 ## Null
@@ -1710,7 +1777,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTTP Requests
 
-- `httpGet`: Make a HTTP GET request. Signature is `(dict -- Maybe[{status: int, reason: str, headers: {[str]}, body: binary, cookieJar?: [dict]}])`. Takes the request information in a dictionary that should have the following keys:
+- `httpGet`: Make a HTTP GET request. Signature is `(HttpRequest -- Result[HttpResponse str])`, where `HttpResponse` is `{status: int, reason: str, headers: {str: [str]}, body: binary, cookieJar?: [Cookie]}`. Takes the request information in a dictionary that should have the following keys:
 
   - `url`: Full URL, including all the query parameters (required, string)
   - `timeout`: Request timeout in seconds (optional, positive integer; default 30)
@@ -1722,9 +1789,9 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
     The list is updated in place and reused across GET and POST requests.
     See [Cookie jars](#cookie-jars) for the record format and behavior.
 
-  Returns a Maybe wrapping a response dictionary.
-  The response is `none` if the web request totally fails, like hitting a timeout.
-  Otherwise a Just Dictionary is returned, with fields
+  Returns a `Result` with a response dictionary.
+  It is an `err` with the reason if there is no response, like a timeout, a refused connection, or a bad certificate, or if the body cannot be read.
+  Any status code, including `404` or `500`, is a response, so it is an `ok` with fields
 
   - `status`: Integer status code
   - `reason`: Full reason line, ex: `"200 OK"`

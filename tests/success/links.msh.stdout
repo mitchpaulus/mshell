@@ -1,7 +1,7 @@
 linkCount
 2
 2
-true
+stat missing-msh-links-test: no such file or directory
 sameFile
 true
 true
@@ -13,4 +13,4 @@ evalSymLinks
 true
 true
 true
-true
+lstat missing-msh-links-test: no such file or directory

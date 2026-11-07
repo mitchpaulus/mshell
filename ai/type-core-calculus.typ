@@ -997,6 +997,25 @@ the core (`if_join`).
   shows each arm reaches the result in two steps, and `if_join2` (`if_join2_alg` in `Decide.v`, with the
   proved procedure for $<=$ and $subset.sq.eq$) that an `if` joined this way checks. It assumes only that
   the checker's retype of a new or partly new value is right when it says yes.
++ *Two partly new arms stay partly new (2026-11-06).* `if {a: @xs} else {a: @xs, b: [2]} end` left
+  a shared `{a: [int]}`, since `join_slot` gives only shared or fresh slots, so no wider declared
+  type was above it. The checker now gives the arms one mark first: an arm's own mark where only it holds a
+  value at a position, the merge of both where each does, a new list or dict counting as partly new with
+  every position new. A position stored in one arm and new in the other has no merge. Each arm takes the
+  merged mark (`ss_mc`, which changes a mark only where the type holds no value, or a new value to a partly
+  new one whose positions are all new), then the types are joined position by position under it: $<=$ at a
+  stored position, the fresh join at a new one. Each arm reaches the result by `ss_mc` then `ss_m`.
+  *Mechanized:* `mcompat`, `ss_mc` in `Typing.v`, `mtyped_mcompat` in `Partial.v`; the join itself is now
+  the one below.
++ *One join for all the arms (2026-11-06).* Folding the pairwise join over a `match` let the order of the arms
+  decide whether they join: a new arm that took a shared arm's type gave up its freshness before meeting the
+  others. The arms are now joined all at once (`ai/n-way-join.md`): arms of several kinds kind by kind, the
+  join being the union; arms of one kind by the fresh join when all are new, by one mark for all when some are
+  partly new and none stored, and otherwise by a target (the stored arms' join, or with none, the partly new
+  arms' join with the new arms whose marks agree) that the other arms take where they can, the rest committed
+  and joined in. Each arm reaches the join by subsumption, repeated.
+  *Mechanized:* `fmergeN`, `joinG`, `joinN`, `joinN_stack_ub`, `arm_joinN`, `if_joinN` in `PartialJoin.v`;
+  `if_joinN_alg`, `arm_joinN_alg` and the example `alg_joinN_any_order` in `Decide.v`.
 
 The arms must still leave the same number of stack items (as today). Arms that diverge are ignored
 (@sec-diverge).

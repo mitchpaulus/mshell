@@ -1,0 +1,75 @@
+# Literal values, enum members without payload values, and nested list and
+# dict patterns inside list and dict patterns.
+
+def route ([str] -- str)
+    match
+        ['GET' path]          : $"get {@path}",
+        ['POST' path ...rest] : $"post {@path} {@rest len str}",
+        [...rest 'end']       : 'ends',
+        []                    : 'empty',
+        _                     : 'other',
+    end
+end
+['GET' '/a'] route wl
+['POST' '/b' 'x' 'y'] route wl
+['a' 'b' 'end'] route wl
+[] route wl
+['PUT' '/c'] route wl
+['GET' '/a' 'extra'] route wl
+
+# Every kind of literal.
+[1 2.5 true `p` 'r' none null] match
+    [1 2.5 true `p` 'r' none null] : 'all literals' wl,
+    _                              : 'no' wl,
+end
+# A kind that differs from the literal's does not match.
+"[1, \"1\"]" parseJson match
+    ["1" _]   : 'string one' wl,
+    [1 "1"]   : 'int then string' wl,
+    _         : 'no' wl,
+end
+
+# Enum members without payload values test the element.
+enum Tok = lparen | rparen | num int end
+[lparen 5 num rparen] match
+    [lparen n rparen] : @n match num v : @v str wl, _ : 'not num' wl, end,
+    _                 : 'no' wl,
+end
+[rparen rparen] match
+    [rparen rparen] : 'two rparens' wl,
+    _               : 'no' wl,
+end
+[rparen lparen] match
+    [lparen _] : 'wrong' wl,
+    _          : 'starts with rparen' wl,
+end
+
+# Members with payload values, like ok and err, stay names.
+[1 2] => [ok err]
+@ok @err + str wl
+
+# Nested list and dict patterns.
+"[[\"num\", 1], [\"op\", \"+\"], [\"num\", 2]]" parseJson match
+    [["num" a] ["op" "+"] ["num" b]] : $"{@a str} plus {@b str}" wl,
+    _                                : 'no parse' wl,
+end
+"{\"cmd\": \"move\", \"to\": [3, 4]}" parseJson match
+    { 'cmd': 'move', 'to': [px py] } : $"move {@px str} {@py str}" wl,
+    { 'cmd': 'quit' }                : 'quit' wl,
+    _                                : 'bad' wl,
+end
+[[1 2 3] [4]] match
+    [[first ...more] [last]] : $"{@first str} {@more len str} {@last str}" wl,
+    _                        : 'no' wl,
+end
+
+# Names from a nested pattern are not set when a later position fails.
+'untouched' la!
+[['p' 'q'] 'y'] match
+    [[la lb] 'x'] : 'wrong' wl,
+    _             : @la wl,
+end
+
+# A literal in an assertive pattern.
+['run' 'build.msh'] => ['run' file]
+@file wl

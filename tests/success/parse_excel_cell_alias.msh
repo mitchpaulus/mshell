@@ -19,7 +19,7 @@ end
 "#N/A" excelError cellText wl
 1.5 cellText wl
 
-1.5 tryAs ExcelCell isNone str wl
-"#REF!" excelError tryAs ExcelCell isNone str wl
-none tryAs ExcelCell isNone str wl
-3 tryAs ExcelCell isNone str wl
+1.5 tryAs ExcelCell match ok _ : "ok", err e : @e, end wl
+"#REF!" excelError tryAs ExcelCell match ok _ : "ok", err e : @e, end wl
+none tryAs ExcelCell match ok _ : "ok", err e : @e, end wl
+3 tryAs ExcelCell match ok _ : "ok", err e : @e, end wl

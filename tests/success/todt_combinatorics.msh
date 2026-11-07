@@ -4,20 +4,20 @@
 # so that two readings can never coincide by accident.
 # Separators are stripped before parsing, so a space stands in for '/', '-', etc.
 # Rules: the orders y-m-d, m-d-y, d-m-y are all tried. A single valid distinct date is accepted.
-# Several distinct valid dates is ambiguous and gives none, since no order has been established.
-# 1 digit years are never valid. Out of range components give none rather than rolling over.
+# Several distinct valid dates is ambiguous and gives err, since no order has been established.
+# 1 digit years are never valid. Out of range components give err rather than rolling over.
 # The file runs as one evaluation. A failed parse never teaches an order and a unique reading is
-# never affected by one, so all none results come first, followed by all the unique dates.
+# never affected by one, so all err results come first, followed by all the unique dates.
 
 def show (str --)
     s!
     @s toDt match
-        just d : $"{@s} -> {@d isoDateFmt}",
-        none   : $"{@s} -> none",
+        ok d  : $"{@s} -> {@d isoDateFmt}",
+        err e : $"{@s} -> {@e}",
     end wl
 end
 
-# ---- ambiguous or invalid: none ----
+# ---- ambiguous or invalid: err ----
 '5 6 7' show
 '5 6 10' show
 '5 6 16' show

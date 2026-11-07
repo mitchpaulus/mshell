@@ -9,7 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `parseToml`: parse a TOML document from a string, binary, or file path. It gives a `Maybe[{Toml}]`, `none` for text that is not valid TOML. `Toml` is a new built-in type.
+- Tab completion for `typst`: subcommands, options and their values, `.typ` files for the input, and output files.
+  `typst init` offers the templates in the local and downloaded package directories,
+  and the `typst query` selector offers the labels in the input file.
+- `findMap`: apply a quotation to each list element and return the first result that is not `none`, without running it on the rest of the list.
+  `["a" "12" "7"] (toInt) findMap` gives `Just(12)`.
+- `orElse`: fall back when a `Maybe` is `none` or a `Result` is an `err`.
+  `'USER' getEnv ('USERNAME' getEnv) orElse` tries `USER`, then `USERNAME`.
+  On an `err` the quotation gets the error and returns a new `Result`. The quotation runs only when needed.
+- `Result`: a built-in enum for a value or the error that stopped it, `enum Result[a e] = ok a | err e end`.
+  `?` unwraps an `ok`, and fails on an `err` with the error's `str` as the message.
+  Since `ok` and `err` are now words, a bare `ok` or `err` in a command list must be quoted: `[echo 'ok']`.
+- `parseToml`: parse a TOML document from a string, binary, or file path. It gives a `Result[{Toml} str]`, an `err` saying why for text that is not valid TOML. `Toml` is a new built-in type.
 - `ExcelCell`: a built-in type for a cell `parseExcel` gives, `str | float | bool | ExcelError`, so stored rows can be typed `[[ExcelCell]]`.
   An error cell is an `excelError` holding the error's text, such as `"#DIV/0!"`.
 - The interactive prompt is set in `init.msh` with `setPrompt`, from a quotation that returns a list of `PromptItem` values:
@@ -26,15 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The enum's name is a match pattern for any of its members (`Shape s : ...`).
   Enums may have parameters (`enum Box[a] = box [a] | empty end`) and may refer to themselves.
   `str` gives `circle(2)`, `toJson` gives `{"circle": 2}`, and `=` compares the member and its payloads.
-- `tryAs T` checks at run time that a value conforms to the type `T`, and gives `just` the same value or `none`:
-  `"people.json" parseJson tryAs [Person] ?`.
+- `tryAs T` checks at run time that a value conforms to the type `T`, and gives a `Result[T str]`:
+  `ok` with the same value, or `err` with where and why the value does not conform,
+  such as `not of type [Person]: at [1].age, expected int, found str "41"`.
+  `"people.json" parseJson tryAs [Person] ?` stops with that message.
   Every element, dictionary value and enum payload is checked, in place, with no copy.
   The match pattern `is T name` does the same check in a match arm, and binds the value.
 - `del` removes a key from a dictionary: `{a: 1, b: 2} "a" del`. Nothing happens when the key is absent.
 - `splitOnce` splits a string at the first occurrence of a delimiter, giving `just [before after]`, or `none` when the delimiter is not found.
 - `getEnv` gets an environment variable by name, giving `none` when it is not set: `"EDITOR" getEnv "vim" maybe`.
 - Functions for symlinks and hard links
-  - `evalSymLinks` follows every symlink in a path, giving `none` for a missing path or broken symlink.
+  - `evalSymLinks` follows every symlink in a path, giving an `err` for a missing path or broken symlink.
   - `linkCount` gives the number of hard links to a file.
   - `sameFile` tests whether two paths are the same file.
   - `hardLinks` lists every name of a file. Windows only.
@@ -109,9 +122,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bindingAdd`, `bindingErase` and `bindingList` manage them.
   - `fmBindingAdd`, `fmBindingErase` and `fmBindingList` manage the file manager's.
   - `editInEditor` edits the line in `$EDITOR`, for `editRunOps`.
+- List and dict patterns in `match` and `=>` can test literal values and nest.
+  A position, or a dict value, can be a quoted string, number, bool, path, rune, `none`, `null`,
+  an enum member without payload values, or another list or dict pattern:
+  `['cp' from to]`, `[...rest '--help']`, `[["num" a] ["op" "+"] ["num" b]]`, `{ 'cmd': 'move', 'to': [x y] }`.
 
 ### Changed
 
+- Tab completion matches a word anywhere in a candidate when nothing starts with it, so `ctl` finds `systemctl`.
+  Lowercase words ignore case everywhere, and a word with an uppercase letter prefers candidates with the same case.
+  Only the best kind of match is offered, and a word starting with `-` still only matches from the start.
+- In a list or dict pattern, `none`, `null`, and enum members without payload values now test the element instead of binding a name with that spelling.
+  A bare word starting with `-` is an error; quote it to match the string (`'-h'`).
+- `httpGet`, `httpPost`, `toDt`, `fileSize`, `modTime`, `evalSymLinks` and `linkCount` give a `Result[T str]` instead of a `Maybe[T]`.
+  An `err` says why there is no value, such as the connection error, the reason a date did not parse, or `stat foo: permission denied`,
+  and `?` fails with that message.
+  An `httpGet` or `httpPost` response body that cannot be read is now an `err` instead of stopping the script.
 - The interactive shell has no built-in aliases; add abbreviations to `init.msh` instead.
 - The interactive shell's personal key sequences are gone: `jf`, `vl`, `qq`, `;r`, `;j`, F1 and Alt-D.
   Letters typed in those pairs now appear at once, and `vlc` and `qq` can be typed. Add any you want back to `init.msh` with `bindingAdd`.
@@ -219,6 +245,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tab quotes an argument that would mean something else typed bare:
+  `2.0` (the number 2), `@preview/x` (a variable), `<intro>` (a redirect), `true`, or the name of a built-in or definition.
+  A file name is put in backticks, a completion definition's value in single quotes.
+- `msh completions fish` completes a script file as the first word, offers `--type-check-only` and `fm`, completes directories after `fm` and bin names after `bin remove` and `bin debug`,
+  and no longer repeats subcommands or offers files where they don't belong.
+  The bash, nushell and elvish completions also offer `--type-check-only` and `fm`.
 - The file manager's rename and search lines take any character, such as `é`, Delete in the rename line deletes instead of typing `~`, and Up or Down no longer closes the search line.
 - Binary data works with `len` and `+`, and takes negative indexes and slices (`-16:`) as strings do.
 - Pressing TAB to complete a command's arguments no longer changes the interactive shell's variables: completion definitions run in a scope of their own.
@@ -262,9 +294,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A single valid reading is accepted, so `12/16/25` and `16/06/2025` now parse
   (`12/16/25` previously became `2013-04-25`). When several readings are valid, like
   `01/02/2026`, the order learned from the most recent unambiguous non-ISO date in the same
-  evaluation is used. With no such evidence the result is `none`, where it previously
+  evaluation is used. With no such evidence the result is an `err`, where it previously
   assumed US month/day/year. Dates with a leading four digit year are unaffected.
-- `toDt` now returns `none` for out of range components such as month 13, Feb 30, or hour 25,
+- `toDt` now returns an `err` for out of range components such as month 13, Feb 30, or hour 25,
   instead of silently rolling them over into the next month or day.
 - `return` inside an `if` or `match` now leaves the whole definition when the definition was called from a quotation run by a function like `map` or `each`.
   It used to leave only the `if` or `match`, and the rest of the definition kept running.

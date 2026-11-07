@@ -411,18 +411,28 @@ The literal may hold stored values, such as a stored list of arguments (<code><s
 <p>
 <code><span class="mshellAS">as</span></code> does nothing at run time, so it cannot say what data from outside the script holds.
 <code><span class="mshellTRYAS">tryAs</span> <span class="mshellLITERAL">T</span></code> checks at run time that the value on top of the stack conforms to <code><span class="mshellLITERAL">T</span></code>.
-It replaces the value with <code><span class="mshellLITERAL">just</span></code> the same value when it does, and with <code><span class="mshellLITERAL">none</span></code> when it does not.
+It replaces the value with a <a href="data-types.html#data-type-result"><code><span class="mshellLITERAL">Result</span></code></a>:
+<code><span class="mshellLITERAL">ok</span></code> with the same value when it conforms,
+and <code><span class="mshellLITERAL">err</span></code> with a <code><span class="mshellSTR">str</span></code> saying why when it does not.
 The value is checked in place, not copied, and nothing about it changes.
 </p>
 
 <pre>
 <code><span class="mshellTYPE">type</span> <span class="mshellLITERAL">Person</span> <span class="mshellEQUALS">=</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span>
 
-<span class="mshellSINGLEQUOTESTRING">&#39;[{&#34;name&#34;: &#34;Ada&#34;, &#34;age&#34;: 36}]&#39;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellTRYAS">tryAs</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">Person</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
-    <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">people</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@people</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">age</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLITERAL">sum</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
-    <span class="mshellLITERAL">none</span> <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;not a list of people&#34;</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
-<span class="mshellEND">end</span><span class="mshellEOF"></span></code>
+<span class="mshellSINGLEQUOTESTRING">&#39;[{&#34;name&#34;: &#34;Ada&#34;, &#34;age&#34;: 36}, {&#34;name&#34;: &#34;Alan&#34;, &#34;age&#34;: &#34;41&#34;}]&#39;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellTRYAS">tryAs</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">Person</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">ok</span> <span class="mshellLITERAL">people</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@people</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">age</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLITERAL">sum</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">err</span> <span class="mshellLITERAL">why</span>   <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@why</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>   <span class="mshellLINECOMMENT"># not of type [Person]: at [1].age, expected int, found str &#34;41&#34;</span>
+<span class="mshellEND">end</span>
+<span class="mshellEOF"></span></code>
 </pre>
+
+<p>
+The reason names where in the value the check failed, written as a path like <code>.packages[1].name</code>,
+and what was expected there: a type, a missing field, or a field that is not allowed.
+<code><span class="mshellQUESTION">?</span></code> unwraps an <code><span class="mshellLITERAL">ok</span></code>, and stops the program with the reason on an <code><span class="mshellLITERAL">err</span></code>,
+so <code><span class="mshellLITERAL">parseJson</span> <span class="mshellTRYAS">tryAs</span> <span class="mshellLITERAL">T</span> <span class="mshellQUESTION">?</span></code> checks data and says what is wrong with it in one step.
+</p>
 
 <p>
 Every part of the value is checked: each element of a list, each value of a dictionary, each payload of an enum value.
@@ -433,7 +443,7 @@ A match arm can check a type too, with <a href="control-flow.html#control-flow-i
 
 <p>
 A quotation cannot be looked inside, so <code><span class="mshellLITERAL">T</span></code> cannot be a quotation type or an enum that holds one, and a def's generic is not known at run time.
-Checking a very large value stops with an error, not <code><span class="mshellLITERAL">none</span></code>, after 67,108,864 (1 &lt;&lt; 26) steps.
+Checking a very large value stops with an error, not <code><span class="mshellLITERAL">err</span></code>, after 67,108,864 (1 &lt;&lt; 26) steps.
 </p>
 
 <p>
@@ -631,7 +641,7 @@ Quotation parameters of definitions have written types, so this is only a questi
 <code><span class="mshellBREAK">break</span></code> and <code><span class="mshellCONTINUE">continue</span></code> are allowed only where they are checked: in a <code><span class="mshellLOOP">loop</span></code> body, and in a quotation literal given to <code><span class="mshellLITERAL">each</span></code>, <code><span class="mshellLITERAL">map</span></code> or a similar word inside one.
 A stored quotation cannot break: it could be run where no loop is running.
 <code><span class="mshellLITERAL">each</span></code>, <code><span class="mshellLITERAL">map</span></code> on a list, and the other words that run a quotation once per element give it a stack of its own, which a <code><span class="mshellBREAK">break</span></code> throws away.
-<code><span class="mshellLITERAL">map</span></code> on a Maybe, <code><span class="mshellLITERAL">bind</span></code> and <code><span class="mshellLITERAL">map2</span></code> run it on the current stack, so the loop is left with what the quotation pushed so far, and that must match the loop's stack.
+<code><span class="mshellLITERAL">map</span></code> on a Maybe, <code><span class="mshellLITERAL">bind</span></code>, <code><span class="mshellLITERAL">map2</span></code> and <code><span class="mshellLITERAL">orElse</span></code> run it on the current stack, so the loop is left with what the quotation pushed so far, and that must match the loop's stack.
 </p>
 
 <h1 id="type-system-control-flow">Control Flow <a class="section-link" href="#type-system-control-flow" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
@@ -656,11 +666,18 @@ Where they leave different types, the result is their join:
     <tr><td><code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> / <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">&#34;a&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> (new)</td><td><code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellPIPE">|</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code></td></tr>
     <tr><td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_CURLY">}</span></code> / <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">2</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">b</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_CURLY">}</span></code> (new)</td><td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">b</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span></code></td></tr>
     <tr><td>a stored <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code> / a stored <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code></td><td>error: neither list may change type</td></tr>
+    <tr><td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@xs</span><span class="mshellRIGHT_CURLY">}</span></code> / <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@xs</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">b</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_CURLY">}</span></code>, <code><span class="mshellLITERAL">xs</span></code> stored</td><td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">b</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_CURLY">}</span></code>, a new dictionary that may still gain optional keys; <code><span class="mshellLITERAL">xs</span></code> keeps its type</td></tr>
+    <tr><td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_CURLY">}</span></code> / <code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@xs</span><span class="mshellRIGHT_CURLY">}</span></code>, <code><span class="mshellLITERAL">xs</span></code> stored</td><td><code><span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">a</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_CURLY">}</span></code>, stored: the list under <code><span class="mshellLITERAL">a</span></code> is new in one arm and stored in the other</td></tr>
     <tr><td><code><span class="mshellINTEGER">1</span></code> / <code><span class="mshellINTEGER">1</span> <span class="mshellLITERAL">exit</span></code></td><td><code><span class="mshellTYPEINT">int</span></code>: an arm that never returns is left out</td></tr>
     <tr><td><code><span class="mshellINTEGER">5</span></code> / <code><span class="mshellSTRING">&#34;x&#34;</span> <span class="mshellLITERAL">parseJson</span></code></td><td><code><span class="mshellLITERAL">Json</span></code></td></tr>
     <tr><td><code><span class="mshellLEFT_PAREN">(</span><span class="mshellINTEGER">2</span> <span class="mshellASTERISK">*</span><span class="mshellRIGHT_PAREN">)</span></code> / <code><span class="mshellLEFT_PAREN">(</span><span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_PAREN">)</span></code></td><td>error: write the quotation type both fit with <code><span class="mshellAS">as</span></code> in each arm</td></tr>
   </tbody>
 </table>
+
+<p>
+The arms are joined all at once, not one pair at a time, so whether they join does not depend on their order.
+Arms of different kinds join kind by kind, and the result is the union.
+</p>
 
 <p>
 When a later word does not take a union that a join made, the error says which arm left which member.

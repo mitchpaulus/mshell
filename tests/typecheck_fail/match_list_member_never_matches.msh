@@ -1,0 +1,5 @@
+enum Tok = lparen | num int end
+['a'] match
+    [lparen ...rest] : ,
+    _ : ,
+end

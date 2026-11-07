@@ -81,6 +81,22 @@ Inductive child_ctx : lctx -> sty -> lctx -> Prop :=
 | cc_exact s : child_ctx (LExact s) s LChild
 | cc_child s : child_ctx LChild s LChild.
 
+(** [mcompat m m' t]: a value of type [t] with mark [m] may be given mark
+    [m'] instead.  A mark says which objects are new, so it matters only
+    where the type holds values: at [TBot] (an absent label) any mark will
+    do.  A new list or dict is also a partly new one whose every position
+    is new.  The join of two partly new arms uses this to give them one
+    mark. *)
+Inductive mcompat : mark -> mark -> ty -> Prop :=
+| mc_refl m t : mcompat m m t
+| mc_bot m m' : mcompat m m' TBot
+| mc_list m m' t : mcompat m m' t -> mcompat (MList m) (MList m') (TList t)
+| mc_rec f g fs r :
+    (forall k, mcompat (f k) (g k) (fty (field_at k fs r))) ->
+    mcompat (MRec f) (MRec g) (TRec fs r)
+| mc_dp_list m t : mcompat (MList Dp) m (TList t) -> mcompat Dp m (TList t)
+| mc_dp_rec m fs r : mcompat (MRec (fun _ => Dp)) m (TRec fs r) -> mcompat Dp m (TRec fs r).
+
 (** Stack subsumption.  [ss_dp] is the doc's Retype (any covariant change
     of a fresh value); [ss_forget] is Forget followed by As. *)
 Inductive slot_sub : slot -> slot -> Prop :=
@@ -91,7 +107,9 @@ Inductive slot_sub : slot -> slot -> Prop :=
 (** A partly new value: retyped position by position, or committed. *)
 | ss_m m a b : partial m = true -> msub m a b -> slot_sub (m, a) (m, b)
 | ss_m_refl m a : partial m = true -> slot_sub (m, a) (m, a)
-| ss_m_forget m a b : partial m = true -> sub a b -> slot_sub (m, a) (Sh, b).
+| ss_m_forget m a b : partial m = true -> sub a b -> slot_sub (m, a) (Sh, b)
+(** A new or partly new value given another partly new mark. *)
+| ss_mc m m' a : partial m' = true -> mcompat m m' a -> slot_sub (m, a) (m', a).
 
 Definition ssub : sty -> sty -> Prop := Forall2 slot_sub.
 

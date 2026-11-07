@@ -811,7 +811,7 @@ func (s *CoreSession) compactParts() {
 	for _, st := range s.slotLists() {
 		for i := range st {
 			if st[i].part != 0 {
-				st[i].part = uint16(visit(coreMark(st[i].part)+1) - 1)
+				st[i].part = uint16(visit(markOfPart(st[i].part)) - 1)
 			}
 		}
 	}

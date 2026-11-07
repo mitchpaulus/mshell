@@ -1,0 +1,19 @@
+# orElse on a Maybe: a just is given back, a none gives what the quote returns.
+5 just (6 just) orElse ? str wl
+none (6 just) orElse ? str wl
+none (none) orElse isNone str wl
+'MSH_OR_ELSE_UNSET_A' getEnv ('MSH_OR_ELSE_UNSET_B' getEnv) orElse ('fallback' just) orElse ? wl
+
+# The quote is not run on a just.
+5 just ("ran" wl 6 just) orElse ? str wl
+
+# orElse on a Result: an ok is given back, an err gives the error to the quote.
+5 ok (drop "ran" wl 0 ok) orElse ? str wl
+"boom" err (len ok) orElse ? str wl
+"boom" err ("wrapped: " swap + err) orElse match ok v : @v str wl, err e : @e wl, end
+
+# The quote may change the error's type.
+"boom" err (drop 42 err) orElse match ok v : "ok" wl, err n : @n 1 + str wl, end
+
+# The stack below is left alone.
+1 2 none (3 just) orElse ? + + str wl

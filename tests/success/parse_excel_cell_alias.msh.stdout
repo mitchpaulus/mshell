@@ -2,7 +2,7 @@ true
 Header
 error #N/A
 1.5
-false
-false
-true
-true
+ok
+ok
+expected ExcelCell (bool | float | str | ExcelError), found none
+expected ExcelCell (bool | float | str | ExcelError), found int 3

@@ -42,6 +42,7 @@ codex.log
 .gomodcache/
 .gopath/
 .cache/
+msh.exe~
 
 *.mshell_history
 *.vsix

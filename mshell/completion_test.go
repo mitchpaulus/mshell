@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 )
 
 // FakeDirEntry implements fs.DirEntry for testing.
@@ -30,19 +29,6 @@ func (e FakeDirEntry) Type() fs.FileMode {
 }
 func (e FakeDirEntry) Info() (fs.FileInfo, error) { return nil, nil }
 
-// fakeFileInfo is what FakeCompletionFS.Stat reports for a link target.
-type fakeFileInfo struct {
-	name  string
-	isDir bool
-}
-
-func (i fakeFileInfo) Name() string       { return i.name }
-func (i fakeFileInfo) Size() int64        { return 0 }
-func (i fakeFileInfo) Mode() fs.FileMode  { if i.isDir { return fs.ModeDir }; return 0 }
-func (i fakeFileInfo) ModTime() time.Time { return time.Time{} }
-func (i fakeFileInfo) IsDir() bool        { return i.isDir }
-func (i fakeFileInfo) Sys() any           { return nil }
-
 // FakeCompletionFS implements CompletionFS for testing.
 type FakeCompletionFS struct {
 	Cwd      string
@@ -50,12 +36,8 @@ type FakeCompletionFS struct {
 	LinkDirs map[string]bool           // link path -> whether its target is a directory
 }
 
-func (f FakeCompletionFS) Stat(path string) (fs.FileInfo, error) {
-	isDir, ok := f.LinkDirs[path]
-	if !ok {
-		return nil, fs.ErrNotExist
-	}
-	return fakeFileInfo{name: filepath.Base(path), isDir: isDir}, nil
+func (f FakeCompletionFS) EntryIsDir(_ *DirListing, dir string, name string) bool {
+	return f.LinkDirs[filepath.Join(dir, name)]
 }
 
 func (f FakeCompletionFS) Getwd() (string, error) {
@@ -103,6 +85,17 @@ func (f FakePathBinManager) Matches(search string) []string {
 	}
 	sort.Strings(matches)
 	return matches
+}
+
+func (f FakePathBinManager) EachName(fn func(name string)) {
+	names := make([]string, 0, len(f.Binaries))
+	for name := range f.Binaries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		fn(name)
+	}
 }
 
 func (f FakePathBinManager) Lookup(binName string) (string, bool) {
@@ -981,7 +974,8 @@ func BenchmarkFileCompletionPreferred(b *testing.B) {
 	input := specInput("file", &CompletionSpec{PreferredFiles: []CompletionGlob{g}})
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		appendFileCompletions(nil, input, &fsys)
+		c := newCompletionCollector()
+		appendFileCompletions(&c, input, &fsys)
 	}
 }
 
@@ -999,7 +993,7 @@ func (p *prebuiltCompletionFS) ReadDir(dir string) (*DirListing, error) {
 	return p.listing, nil
 }
 func (p *prebuiltCompletionFS) Getwd() (string, error)           { return "/w", nil }
-func (p *prebuiltCompletionFS) Stat(string) (fs.FileInfo, error) { return nil, fs.ErrNotExist }
+func (p *prebuiltCompletionFS) EntryIsDir(*DirListing, string, string) bool { return false }
 
 func TestAbbreviationCompletion(t *testing.T) {
 	deps := CompletionDeps{

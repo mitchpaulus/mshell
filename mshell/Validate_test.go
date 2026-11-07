@@ -45,7 +45,7 @@ func strList(xs ...string) *MShellList {
 	return l
 }
 
-// tryAs gives `just` the value itself: validation never copies.
+// tryAs gives `ok` with the value itself: validation never copies.
 func TestTryAsKeepsTheValue(t *testing.T) {
 	file, err := parseMShellInput(`"[[1], [2, 3]]" parseJson tryAs [[int]]`, &TokenFile{"test"})
 	if err != nil {
@@ -60,9 +60,132 @@ func TestTryAsKeepsTheValue(t *testing.T) {
 		t.Fatalf("tryAs failed")
 	}
 	top, _ := stack.Pop()
-	m, ok := top.(*Maybe)
-	if !ok || m.obj != MShellObject(value) {
-		t.Fatalf("tryAs did not give just the same list: %#v", top)
+	r, ok := top.(*MShellEnum)
+	if !ok || r.EnumName != "Result" || r.Member != "ok" || r.Payload[0] != MShellObject(value) {
+		t.Fatalf("tryAs did not give ok with the same list: %#v", top)
+	}
+}
+
+// explainFor validates value against typ, with the declarations decls, and
+// returns why it does not conform.
+func explainFor(t *testing.T, decls string, value MShellObject, typ string) string {
+	t.Helper()
+	file, err := parseMShellInput(decls+"\n0 tryAs "+typ, &TokenFile{"test"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	node := file.Items[len(file.Items)-1].(*MShellTryAs)
+	state := &EvalState{}
+	if err := state.RegisterDeclarations(file.Items, file.Definitions); err != nil {
+		t.Fatal(err)
+	}
+	ok, why, err := state.tryValidate(value, node.Target, &node.resolved)
+	if err != nil || ok {
+		t.Fatalf("%s: ok %v, err %v", typ, ok, err)
+	}
+	return why
+}
+
+// A failed tryAs says where the first failing part is, also in a value that
+// contains itself or shares parts, and names the same part every time.
+func TestTryAsExplains(t *testing.T) {
+	self := NewList(0)
+	self.Items = []MShellObject{self, MShellInt{Value: 1}, MShellString{Content: "x"}}
+	if got, want := explainFor(t, "type T = [T | int]", self, "T"),
+		`not of type T: at [2], expected int | T, found str "x"`; got != want {
+		t.Fatalf("cycle:\n got %s\nwant %s", got, want)
+	}
+
+	// Two bad keys: the first in key order is named.
+	d := NewDict()
+	for _, k := range []string{"c", "a", "b"} {
+		d.Items[k] = MShellString{Content: k}
+	}
+	d.Items["b"] = MShellInt{Value: 1}
+	shared := NewList(0)
+	shared.Items = []MShellObject{d, d}
+	for i := 0; i < 20; i++ {
+		if got, want := explainFor(t, "", shared, "[{str: str}]"),
+			`not of type [{str: str}]: at [0].b, expected str, found int 1`; got != want {
+			t.Fatalf("keys:\n got %s\nwant %s", got, want)
+		}
+	}
+}
+
+// Items, keys and payloads are checked in order: the first bad one is named.
+func TestTryAsExplainsInOrder(t *testing.T) {
+	l := NewList(0)
+	l.Items = []MShellObject{MShellInt{Value: 1}, MShellString{Content: "a"}, MShellString{Content: "b"}}
+	if got, want := explainFor(t, "", l, "[int]"),
+		`not of type [int]: at [1], expected int, found str "a"`; got != want {
+		t.Fatalf("list:\n got %s\nwant %s", got, want)
+	}
+
+	d := NewDict()
+	for _, k := range []string{"d", "c", "b", "a"} {
+		d.Items[k] = MShellInt{Value: 1}
+	}
+	d.Items["b"], d.Items["c"] = MShellString{Content: "b"}, MShellString{Content: "c"}
+	for range 20 {
+		if got, want := explainFor(t, "", d, "{str: int}"),
+			`not of type {str: int}: at .b, expected int, found str "b"`; got != want {
+			t.Fatalf("keys:\n got %s\nwant %s", got, want)
+		}
+	}
+
+	e := &MShellEnum{EnumName: "P", Member: "pair", Payload: []MShellObject{MShellString{Content: "x"}, MShellString{Content: "y"}}}
+	if got, want := explainFor(t, "enum P = pair int int end", e, "P"),
+		`not of type P: at (pair 0), expected int, found str "x"`; got != want {
+		t.Fatalf("payload:\n got %s\nwant %s", got, want)
+	}
+}
+
+// A deep value names the ends of its path, not every step.
+func TestTryAsExplainsDeepValue(t *testing.T) {
+	var x MShellObject = MShellString{Content: "bad"}
+	for range 100_000 {
+		l := NewList(1)
+		l.Items[0] = x
+		x = l
+	}
+	ends := strings.Repeat("[0]", pathEnds)
+	if got, want := explainFor(t, "type T = [T] | int", x, "T"),
+		`not of type T: at `+ends+`...`+ends+`, expected T (int | [T]), found str "bad"`; got != want {
+		t.Fatalf("\n got %s\nwant %s", got, want)
+	}
+	// A path of exactly 2*pathEnds steps is written in full.
+	x = MShellString{Content: "bad"}
+	for range 2 * pathEnds {
+		l := NewList(1)
+		l.Items[0] = x
+		x = l
+	}
+	if got, want := explainFor(t, "type T = [T] | int", x, "T"),
+		`not of type T: at `+ends+ends+`, expected T (int | [T]), found str "bad"`; got != want {
+		t.Fatalf("\n got %s\nwant %s", got, want)
+	}
+}
+
+// Explaining a failure takes dict keys in another order than validating
+// did, so it may run out of steps where validating did not: the value still
+// does not conform, and the reason only names the type.
+func TestTryAsExplainOutOfSteps(t *testing.T) {
+	saved := validateBudget
+	validateBudget = 100
+	defer func() { validateBudget = saved }()
+	file, err := parseMShellInput("0 tryAs [[int]]", &TokenFile{"test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := file.Items[len(file.Items)-1].(*MShellTryAs)
+	state := &EvalState{}
+	env := state.runtimeTypeEnv()
+	defer env.mu.Unlock()
+	env.resolveTarget(node.Target, &node.resolved)
+	l := NewList(0)
+	l.Items = []MShellObject{intList(make([]int, 200)...), strList("x")}
+	if got, want := env.explainFailure(l, node.resolved.t), "not of type [[int]]"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 

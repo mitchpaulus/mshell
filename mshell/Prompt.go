@@ -18,7 +18,8 @@ import (
 // Text items are sanitized and style items take no cells, so the shell
 // lays the prompt out exactly, as it does command text.
 
-// builtinDeclSource declares the types of the prompt builtins, the
+// builtinDeclSource declares Result (a value or an error, unwrapped by
+// '?'), the types of the prompt builtins, the
 // Cipher that encrypt and decrypt take (Crypto.go), the types of the
 // abbreviation builtins (Abbr.go), the types of the key binding
 // builtins (Bindings.go) and of the file manager's (FmBindings.go), and
@@ -26,6 +27,8 @@ import (
 // part of the binary: the type checker and the runtime declare them before
 // any file, and no file can declare their names again.
 const builtinDeclSource = `
+enum Result[a e] = ok a | err e end
+
 enum Base16Color =
       baseBlack | baseRed | baseGreen | baseYellow
     | baseBlue | baseMagenta | baseCyan | baseWhite
