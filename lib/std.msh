@@ -1574,42 +1574,42 @@ def __typstCompletion { 'complete': ['typst'] } ([str] -- CompletionResult)
     @skipNext if
         # Complete the value of the option just typed.
         @last match
-            '--color' : { 'values': ['auto' 'always' 'never'] } as CompletionResult,
-            '--cert' : { 'preferredFiles': ['*.pem' '*.crt' '*.cer'] } as CompletionResult,
+            '--color' : { 'values': ['auto' 'always' 'never'] },
+            '--cert' : { 'preferredFiles': ['*.pem' '*.crt' '*.cer'] },
             '-f' '--format' :
                 ['compile' 'watch'] (@subcmd =) any
-                ({ 'values': ['pdf' 'png' 'svg' 'html' 'bundle'] } as CompletionResult)
-                ({ 'values': ['json' 'yaml'] } as CompletionResult) iff,
-            '--root' '--font-path' '--package-path' '--package-cache-path' : { 'dirs': true } as CompletionResult,
+                ({ 'values': ['pdf' 'png' 'svg' 'html' 'bundle'] })
+                ({ 'values': ['json' 'yaml'] }) iff,
+            '--root' '--font-path' '--package-path' '--package-cache-path' : { 'dirs': true },
             '--pdf-standard' : { 'values': [
                 '1.4' '1.5' '1.6' '1.7' '2.0' 'a-1b' 'a-1a' 'a-2b' 'a-2u' 'a-2a'
                 'a-3b' 'a-3u' 'a-3a' 'a-4' 'a-4f' 'a-4e' 'ua-1'
-            ] } as CompletionResult,
-            '--deps-format' : { 'values': ['json' 'zero' 'make'] } as CompletionResult,
-            '--features' : { 'values': ['html' 'bundle' 'a11y-extras'] } as CompletionResult,
-            '--diagnostic-format' : { 'values': ['human' 'short'] } as CompletionResult,
-            '--target' : { 'values': ['paged' 'html' 'bundle'] } as CompletionResult,
-            '--field' : { 'values': ['value' 'label' 'body' 'level' 'caption' 'numbering' 'supplement' 'kind'] } as CompletionResult,
-            '--in' : { 'values': ['-'], 'preferredFiles': ['*.typ'] } as CompletionResult,
-            '--deps' : { 'values': ['-'], 'files': ['*'] } as CompletionResult,
-            '--timings' '--backup-path' : { 'files': ['*'] } as CompletionResult,
+            ] },
+            '--deps-format' : { 'values': ['json' 'zero' 'make'] },
+            '--features' : { 'values': ['html' 'bundle' 'a11y-extras'] },
+            '--diagnostic-format' : { 'values': ['human' 'short'] },
+            '--target' : { 'values': ['paged' 'html' 'bundle'] },
+            '--field' : { 'values': ['value' 'label' 'body' 'level' 'caption' 'numbering' 'supplement' 'kind'] },
+            '--in' : { 'values': ['-'], 'preferredFiles': ['*.typ'] },
+            '--deps' : { 'values': ['-'], 'files': ['*'] },
+            '--timings' '--backup-path' : { 'files': ['*'] },
             # Free-form values: --input, --pages, --ppi, --jobs, --port, --creation-timestamp
-            _ : { 'values': [] } as CompletionResult,
+            _ : { 'values': [] },
         end
     else* @optionalNext *if
         # Right after `--open`, a word that is not an option is taken as the viewer.
         { 'values': @options, 'binaries': true } as CompletionResult
     else* @subcmd len 0 = *if
-        { 'values': @subcommands ['--color' '--cert' '-h' '--help' '-V' '--version'] extend } as CompletionResult
+        { 'values': @subcommands ['--color' '--cert' '-h' '--help' '-V' '--version'] extend }
     else
         @subcmd match
             'compile' 'watch' : @positional match
-                0 : { 'values': @options ['-'] extend, 'preferredFiles': ['*.typ'] } as CompletionResult,
+                0 : { 'values': @options ['-'] extend, 'preferredFiles': ['*.typ'] },
                 1 : { 'values': @options ['-'] extend, 'preferredFiles': ['*.pdf' '*.png' '*.svg' '*.html'] } as CompletionResult,
-                _ : { 'values': @options } as CompletionResult,
+                _ : { 'values': @options },
             end,
             'query' : @positional match
-                0 : { 'values': @options ['-'] extend, 'preferredFiles': ['*.typ'] } as CompletionResult,
+                0 : { 'values': @options ['-'] extend, 'preferredFiles': ['*.typ'] },
                 1 : { 'values': @options
                         @positionals :0: __typstLabels extend
                         [
@@ -1618,20 +1618,20 @@ def __typstCompletion { 'complete': ['typst'] } ([str] -- CompletionResult)
                             'cite' 'ref' 'bibliography' 'outline'
                         ] extend
                     } as CompletionResult,
-                _ : { 'values': @options } as CompletionResult,
+                _ : { 'values': @options },
             end,
             'init' : @positional match
-                0 : { 'values': @options @input __typstTemplates extend } as CompletionResult,
+                0 : { 'values': @options @input __typstTemplates extend },
                 1 : { 'values': @options, 'dirs': true } as CompletionResult,
-                _ : { 'values': @options } as CompletionResult,
+                _ : { 'values': @options },
             end,
             'completions' : @positional 0 =
-                ({ 'values': ['bash' 'elvish' 'fish' 'powershell' 'zsh'] } as CompletionResult)
-                ({ 'values': [] } as CompletionResult) iff,
+                ({ 'values': ['bash' 'elvish' 'fish' 'powershell' 'zsh'] })
+                ({ 'values': [] }) iff,
             'help' : @positional 0 =
-                ({ 'values': ['compile' 'watch' 'init' 'query' 'eval' 'fonts' 'update' 'completions' 'info' 'help'] } as CompletionResult)
-                ({ 'values': [] } as CompletionResult) iff,
-            _ : { 'values': @options } as CompletionResult,
+                ({ 'values': ['compile' 'watch' 'init' 'query' 'eval' 'fonts' 'update' 'completions' 'info' 'help'] })
+                ({ 'values': [] }) iff,
+            _ : { 'values': @options },
         end
     end
 end
