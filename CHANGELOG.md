@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tab completion for `typst`: subcommands, options and their values, `.typ` files for the input, and output files.
+  `typst init` offers the templates in the local and downloaded package directories,
+  and the `typst query` selector offers the labels in the input file.
 - `findMap`: apply a quotation to each list element and return the first result that is not `none`, without running it on the rest of the list.
   `["a" "12" "7"] (toInt) findMap` gives `Just(12)`.
 - `orElse`: fall back when a `Maybe` is `none` or a `Result` is an `err`.
@@ -242,6 +245,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tab quotes an argument that would mean something else typed bare:
+  `2.0` (the number 2), `@preview/x` (a variable), `<intro>` (a redirect), `true`, or the name of a built-in or definition.
+  A file name is put in backticks, a completion definition's value in single quotes.
 - `msh completions fish` completes a script file as the first word, offers `--type-check-only` and `fm`, completes directories after `fm` and bin names after `bin remove` and `bin debug`,
   and no longer repeats subcommands or offers files where they don't belong.
   The bash, nushell and elvish completions also offer `--type-check-only` and `fm`.

@@ -1,1 +1,5 @@
-(:a?) as ({a: int} -- int)
+type R = {a?: [int], b?: [int]}
+def pick (bool [int] -- R)
+    xs!
+    if { 'a': @xs } else { 'a': @xs } end
+end

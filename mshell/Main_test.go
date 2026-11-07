@@ -394,35 +394,109 @@ func TestAllMatchesAreFiles(t *testing.T) {
 func TestBuildCompletionInsertPrefersPathQuoteForFileMatches(t *testing.T) {
 	state := TermState{l: NewLexer("", nil)}
 
-	got := state.buildCompletionInsert("Floor 0/", LITERAL, true)
+	got := state.buildCompletionInsert("Floor 0/", LITERAL, true, true)
 	want := "`Floor 0/"
 	if got != want {
 		t.Fatalf("buildCompletionInsert() = %q, want %q", got, want)
 	}
 
-	got = state.buildCompletionInsert("Floor 0.txt", LITERAL, true)
+	got = state.buildCompletionInsert("Floor 0.txt", LITERAL, true, true)
 	want = "`Floor 0.txt` "
 	if got != want {
 		t.Fatalf("buildCompletionInsert() = %q, want %q", got, want)
 	}
 
-	got = state.buildCompletionInsert("Floor 0/", LITERAL, false)
+	got = state.buildCompletionInsert("Floor 0/", LITERAL, false, false)
 	want = "'Floor 0/'"
 	if got != want {
 		t.Fatalf("buildCompletionInsert() = %q, want %q", got, want)
 	}
 }
 
+// A value or file name that would not be read as its own text when typed
+// bare is quoted; a binary or builtin name never is.
+func TestBuildCompletionInsertQuotesWordsThatMeanSomethingElse(t *testing.T) {
+	state := TermState{l: NewLexer("", nil)}
+	state.stdLibDefs = []MShellDefinition{{Name: "myDef"}}
+	state.evalState.EnumMembers = map[string]EnumMemberInfo{"circle": {EnumName: "Shape"}}
+
+	for _, tc := range []struct {
+		match string
+		file  bool
+		want  string
+	}{
+		{"compile", false, "compile"},
+		{"--pdf-standard", false, "--pdf-standard"},
+		{"a-1b", false, "a-1b"},
+		{"2021", false, "2021"},
+		{"144", false, "144"},
+		{"2.0", false, "'2.0'"},
+		{"007", false, "'007'"},
+		{"@preview/pro-letter", false, "'@preview/pro-letter'"},
+		{"@preview/pro-letter:0.1.1", false, "'@preview/pro-letter:0.1.1'"},
+		{"<intro>", false, "'<intro>'"},
+		{"-", false, "'-'"},
+		{"--", false, "'--'"},
+		{"true", false, "'true'"},
+		{"none", false, "'none'"},
+		{"sort", false, "'sort'"},
+		{"myDef", false, "'myDef'"},
+		{"circle", false, "'circle'"},
+		{"notes.txt", true, "notes.txt"},
+		{"src/", true, "src/"},
+		{"2.0", true, "`2.0` "},
+		{"sort", true, "`sort` "},
+	} {
+		if got := state.buildCompletionInsert(tc.match, LITERAL, tc.file, true); got != tc.want {
+			t.Errorf("buildCompletionInsert(%q, file=%v) = %q, want %q", tc.match, tc.file, got, tc.want)
+		}
+	}
+
+	// A binary name in command position is left as it is.
+	if got := state.buildCompletionInsert("sort", LITERAL, false, false); got != "sort" {
+		t.Errorf("binary sort = %q, want sort", got)
+	}
+	// A value finished inside an open single quote is closed.
+	if got := state.buildCompletionInsert("@preview/pro-letter", UNFINISHEDSINGLEQUOTESTRING, false, true); got != "'@preview/pro-letter'" {
+		t.Errorf("value in open quote = %q", got)
+	}
+	// A file name inside an open single quote stays open.
+	if got := state.buildCompletionInsert("src/", UNFINISHEDSINGLEQUOTESTRING, true, true); got != "'src/" {
+		t.Errorf("file in open quote = %q", got)
+	}
+}
+
+func TestBuildSharedCompletionInsertOpensQuoteForValues(t *testing.T) {
+	state := TermState{l: NewLexer("", nil)}
+	for _, tc := range []struct{ prefix, want string }{
+		{"@preview/", "'@preview/"},
+		{"<", "'<"},
+		{"-", "-"},
+		{"--", "--"},
+		{"--no-", "--no-"},
+		{"1.", "1."},
+		{"a-", "a-"},
+	} {
+		if got := state.buildSharedCompletionInsert(tc.prefix, LITERAL, false, true); got != tc.want {
+			t.Errorf("buildSharedCompletionInsert(%q) = %q, want %q", tc.prefix, got, tc.want)
+		}
+	}
+	// Binaries and builtins among the matches: nothing is quoted.
+	if got := state.buildSharedCompletionInsert("@preview/", LITERAL, false, false); got != "@preview/" {
+		t.Errorf("mixed matches = %q", got)
+	}
+}
+
 func TestBuildSharedCompletionInsertUsesBacktickForFilePrefixes(t *testing.T) {
 	state := TermState{l: NewLexer("", nil)}
 
-	got := state.buildSharedCompletionInsert("Floor ", LITERAL, true)
+	got := state.buildSharedCompletionInsert("Floor ", LITERAL, true, true)
 	want := "`Floor "
 	if got != want {
 		t.Fatalf("buildSharedCompletionInsert() = %q, want %q", got, want)
 	}
 
-	got = state.buildSharedCompletionInsert("Floor ", LITERAL, false)
+	got = state.buildSharedCompletionInsert("Floor ", LITERAL, false, false)
 	want = "'Floor "
 	if got != want {
 		t.Fatalf("buildSharedCompletionInsert() = %q, want %q", got, want)
