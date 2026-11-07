@@ -202,16 +202,35 @@ For mshell values, search runs over the values themselves.
 == Tabs and panes
 
 Ordinary UI work once blocks exist.
-Open question: does each pane get its own interpreter, or do panes share one? (@sec-questions.)
+Each pane is one session with its own engine process and PTY (@sec-pty), and shows a list of blocks with the prompt editor at the bottom.
 
 = Terminal programs and TUI apps <sec-pty>
 
 This is where the real complexity is.
-The proposed rules:
 
-+ *Every external command runs in its own PTY*, and its block contains a terminal emulator.
+#decision[*One PTY per pane* (decided 2026-11-07), because it is what `msh` does today and has the least complexity.
+Each pane has its own engine process (@sec-arch).
+The engine calls `setsid` and takes the pane's PTY as its controlling terminal, just as terminal `msh` has its terminal.
+Every block in the pane uses that PTY in turn.]
+
+Why not a PTY per block: a PTY can be the controlling terminal of only one session,
+a process group can be put in the foreground only on its own session's terminal,
+and processes can only join groups in their own session.
+So one engine process can drive only one PTY with job control,
+and a PTY per block would need a helper process per block to be each one's session leader.
+
+With one PTY per pane, the existing job control is reused unchanged:
+each pipeline gets its own process group (`Evaluator.go`), which is put in the foreground of the terminal (`SetForegroundProcessGroup` in `Pathbin_linux.go`).
+So pipelines, Ctrl-C, `sudo` password prompts, and programs that open `/dev/tty` (`git log | fzf`) work exactly as they do in a terminal.
+
+The rules:
+
++ *Every block that runs an external program has its own terminal emulator* (a fresh libghostty-vt terminal, @sec-vt), fed from the pane's PTY.
   Even "plain" programs print colours, `\r` progress bars and cursor moves,
   so every block needs a full emulator, not only TUI ones.
+  The engine sends `block_started` and `block_finished` in order with the PTY output, and the frontend sends the bytes in between to that block's emulator.
+  A fresh emulator per block means modes a crashed program left on (mouse tracking, bracketed paste) don't leak into the next block.
+  The kernel's terminal settings (termios) do carry over, as in a terminal.
 + *While a foreground process is running, keystrokes go to its PTY.*
   That covers `python`, `ssh`, `sudo` password prompts and fzf's inline mode, with no special cases.
 + *When a program switches to the alternate screen (DECSET 1049)*, its block grows to fill the pane and gets raw input.
@@ -221,13 +240,13 @@ The proposed rules:
 
 Things still to work out:
 
-- Pipelines: one PTY for the whole pipeline, with only the last stage's stdout going to it?
-  Or a PTY only for stages that are connected to the terminal?
-- Background jobs: where their output goes, and how they get a block.
+- Background jobs: they share the pane's PTY, so their output lands in whichever block is current, as in any terminal.
+  Giving them their own block later would mean a helper process and a PTY for each background job only.
 - Resizing: each block's emulator needs a width; the active block follows the pane width.
   Do finished blocks reflow or keep their width?
 - A command that writes both mshell values and terminal output: what order is shown.
-- Windows: ConPTY behaves differently from Unix PTYs (it rewrites output and has its own resize quirks).
+- Windows: one pseudo console per pane, with each child attached to it through `CreateProcess` attributes, which Go's `os/exec` doesn't expose, so Windows needs its own spawning code.
+  ConPTY also behaves differently from Unix PTYs (it rewrites output and has its own resize quirks).
   libghostty-vt has an option for exactly this: turn off pulling rows back from scrollback on resize, since ConPTY keeps its own screen buffer.
 
 #decision[Do not write the VT emulator ourselves.
@@ -467,6 +486,18 @@ The costs:
   Startup isn't affected: the engine starts in parallel with the window (@sec-startup).
   The prompt is edited locally (@sec-input), and PTY bytes pass through raw (@sec-output).
 
+There is *one engine process per pane* (decided 2026-11-07, @sec-pty).
+Each engine has one session, so the evaluator never needs to run several sessions in one process.
+That matters because the working directory (`os.Chdir`) and the environment (`os.Setenv`) belong to the process.
+
+#note[Measured on the FX-8350 (Linux, 2026-11-07), round trips with 64-byte messages:
+a pipe between a C process and a Go echo loop takes 13--16 µs at the median, 24--42 µs at p99, and 39--103 µs at p99.9.
+Two threads in one process woken by a futex take 17--19 µs, so an engine linked in as a library would be no faster.
+The cost is waking a sleeping thread, not crossing processes.
+Only busy-polling shared memory is faster (0.2--0.6 µs), and it burns a core per pane.
+Throughput through a Go relay in 64 KiB chunks is 1.5 GB/s, well above any VT parser.
+Windows and macOS are not measured yet.]
+
 == Protocol sketch <sec-protocol>
 
 Very rough; just the kinds of messages.
@@ -475,9 +506,9 @@ Binary and length-prefixed: no JSON on the hot paths.
 From the frontend to the engine:
 
 - `run {block_id, source}`
-- `input {block_id, bytes}`: keystrokes for a running process
-- `resize {block_id, cols, rows}`
-- `signal {block_id, sig}`: Ctrl-C and friends
+- `input {bytes}`: keystrokes for the running process, written to the pane's PTY (Ctrl-C is just the byte; the kernel sends the signal)
+- `resize {cols, rows}`: the pane's PTY
+- `signal {sig}`: a signal for the foreground job, for cases a byte can't express
 - `binding_call {version, quote_id, edit_state}`: run a `bindingFunc` or `abbrFunc` (@sec-editor-ask)
 - `run_quote {quote_id, edit_state}`: an `editRun` or `editRunOps` from a fixed binding; it becomes a block
 - LSP-style requests: completion, hover, diagnostics, stack types at the cursor
@@ -485,7 +516,7 @@ From the frontend to the engine:
 From the engine to the frontend:
 
 - `block_started {block_id, cwd, time}`
-- `pty_output {block_id, bytes}`
+- `pty_output {block_id, bytes}`: tagged with the block that is current when the bytes are read
 - `value {block_id, value}`: a structured mshell value, paged if large
 - `stack {block_id, values}`: or a diff from the previous stack
 - `block_finished {block_id, exit_code, duration}`
@@ -606,9 +637,8 @@ Caching last session's config on disk is the fallback if that measures too slow,
 but `init.msh` can build bindings from the environment or the host name, so a cached copy can be wrong and would need correcting.
 
 *Panes.* In the terminal, each `msh` process has its own keymap.
-If each pane has its own interpreter, each pane gets its own copy and behaves the same way.
-If panes share one, a binding added in one pane appears in all of them.
-This goes with open question 4.
+Each pane has its own engine (@sec-arch), so each pane gets its own copy and behaves the same way:
+a binding added in one pane doesn't appear in the others.
 
 *Later.* This guarantee holds because mshell never runs code unprompted.
 If it ever gains background mshell jobs, timers or file-watch hooks, the config still arrives by push;
@@ -795,10 +825,10 @@ Measure after every step against the targets in @sec-targets.
   [1], [Are the targets in @sec-targets the right ones?], [Proposals; need agreeing.],
   [2], [Does "all major platforms" mean Windows, macOS and Linux desktops, or mobile as well?], [Mobile would change the stack a lot.],
   [3], [How important are remote sessions over SSH?], [The strongest reason for the engine/frontend split.],
-  [4], [Does each tab/pane get its own interpreter, or do they share one?], [Decides one engine process per pane versus one process holding several sessions. Need to check whether the evaluator can run several sessions in one process. Also decides whether panes share a keymap (@sec-editor-config).],
+  [4], [Does each tab/pane get its own interpreter, or do they share one?], [*Decided:* one engine process per pane, with its own PTY and keymap (@sec-arch, @sec-pty).],
   [5], [How fast is a key round trip to a local engine, if the engine kept the editor?], [Highlighting is decided: a Rust port of the lexer (@sec-port). This measures the thin-frontend alternative, for the record.],
   [6], [Syntax for using an earlier block's output as a value.], [CLIM's answer is no syntax: click an earlier value where its type fits (@sec-beyond).],
-  [7], [How pipelines and background jobs map onto blocks and PTYs.], [@sec-pty.],
+  [7], [How pipelines and background jobs map onto blocks and PTYs.], [*Mostly decided:* one PTY per pane, with pipelines handled by the existing job control. Background job output still lands in the current block (@sec-pty).],
   [8], [Protocol encoding and paging scheme for large values.], [@sec-protocol.],
   [9], [How much of the existing interactive mode (bindings, file manager, completions) moves to the engine and is shared with the GUI.], [Bindings and abbreviations: @sec-editor. The file manager and completions are still open.],
   [10], [A quotation that returns history or completion operations needs editor state beyond the line (history position, completion cycle).], [Either the `EditState` sent to the engine carries that state, or those operations are sent back to the frontend. Rare in practice; to be decided (@sec-editor-ask).],
