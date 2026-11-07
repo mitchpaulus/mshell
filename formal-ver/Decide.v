@@ -51,7 +51,7 @@
 
 From Stdlib Require Import String List Arith Bool Lia.
 Import ListNotations.
-From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant RtLemmas Validate Generic Join.
+From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant RtLemmas Validate Generic Join PartialJoin.
 From MshellCore Require Recursive.
 
 (** ** Assumption sets *)
@@ -616,6 +616,26 @@ Corollary if_join2_alg n rt
   T sigs G Br Co R e1 s s1 -> T sigs G Br Co R e2 s s2 -> join_stack2 (le_alg n) rt s1 s2 = Some s' ->
   TW sigs G Br Co R (WIf e1 e2) ((Sh, TBool) :: s) s'.
 Proof. apply if_join2; [apply le_alg_ok | exact rt_ok]. Qed.
+
+(** The checker's join of all the arms at once (PartialJoin.v, [joinN])
+    checks too, given the same: for an [if], and for any one arm of a rule
+    with n arms. *)
+Corollary if_joinN_alg n rt
+  (rt_ok : forall m a c, rt m a c = true ->
+     (m = Dp /\ rsub a c) \/ (partial m = true /\ ((exists b, msub m a b /\ sub b c) \/ sub a c)))
+  sigs G Br Co R e1 e2 s k s1 s2 rs :
+  T sigs G Br Co R e1 s (map fden s1) -> T sigs G Br Co R e2 s (map fden s2) ->
+  joinN_stack (le_alg n) rt k [s1; s2] = Some rs ->
+  TW sigs G Br Co R (WIf e1 e2) ((Sh, TBool) :: s) (map fden rs).
+Proof. apply if_joinN; [apply le_alg_ok | exact rt_ok]. Qed.
+
+Corollary arm_joinN_alg n rt
+  (rt_ok : forall m a c, rt m a c = true ->
+     (m = Dp /\ rsub a c) \/ (partial m = true /\ ((exists b, msub m a b /\ sub b c) \/ sub a c)))
+  sigs G Br Co R e s k ss s_i rs :
+  In s_i ss -> joinN_stack (le_alg n) rt k ss = Some rs ->
+  T sigs G Br Co R e s (map fden s_i) -> T sigs G Br Co R e s (map fden rs).
+Proof. apply arm_joinN; [apply le_alg_ok | exact rt_ok]. Qed.
 End RSub.
 
 (** ** Examples
@@ -782,3 +802,22 @@ Example alg_join_union_below :
   join_slot jl (Sh, TUnion TInt TStr) (Sh, TUnion TInt (TUnion TStr TBool))
   = Some (Sh, TUnion TInt (TUnion TStr TBool)).
 Proof. vm_compute. reflexivity. Qed.
+
+(** The order of the arms: [{a: [2]}], [{a: @xs}], [{b: @xs}], with [xs] a
+    stored [[int]], join in every order.  Pairwise, the orders that meet
+    [{a: [2]}] and [{a: @xs}] first did not: their join is shared, and a
+    shared [{a: [int]}] takes [{b: [int]}] nowhere.  Here the partly new
+    arms join first, and the new one takes that type.  The new arm's
+    retype is [rsubq]. *)
+Definition rt_new (m : mark) (a b : ty) : bool := match m with Dp => jl true a b | _ => false end.
+
+Definition ex_li : ty := TList TInt.
+Definition ex_new : fslot := (FmDp, TRec [("a"%string, FReq ex_li)] FAbs).
+Definition ex_pa : fslot := (FmRec [("a"%string, FmSh)] FmDp, TRec [("a"%string, FReq ex_li)] FAbs).
+Definition ex_pb : fslot := (FmRec [("b"%string, FmSh)] FmDp, TRec [("b"%string, FReq ex_li)] FAbs).
+
+Example alg_joinN_any_order :
+  Forall (fun arms => exists r, joinN jl rt_new arms = Some r)
+    [[ex_new; ex_pa; ex_pb]; [ex_new; ex_pb; ex_pa]; [ex_pa; ex_new; ex_pb];
+     [ex_pa; ex_pb; ex_new]; [ex_pb; ex_new; ex_pa]; [ex_pb; ex_pa; ex_new]].
+Proof. repeat constructor; eexists; vm_compute; reflexivity. Qed.

@@ -109,7 +109,7 @@ What you have to read is whether the *definitions* say what the design means:
 |---|---|---|
 | `Syntax.v` | ~420 | types (including recursive types `TMu`, their closedness and unfolding), enum identities, the built-in `Maybe`, substitution, words, values, heap objects |
 | `Interp.v` | ~490 | the interpreter matches `Evaluator.go` where it matters (see below); `eval` is `evalv validate` |
-| `Typing.v` | ~400 | each typing rule matches the doc; marks (`Sh`, `Dp`, `MList`, `MRec`) and `msub`; `genv` holds def signatures and enum declarations; `maybe_ok` |
+| `Typing.v` | ~420 | each typing rule matches the doc; marks (`Sh`, `Dp`, `MList`, `MRec`), `msub`, and `mcompat` (a mark may change where the type holds no value); `genv` holds def signatures and enum declarations; `maybe_ok` |
 | `Decide.v` (definitions only) | ~150 | `step`, `lvl`, `chk` and `rstep`, `rlvl`, `rchk` are what the Go checker will do to decide `<=` and fresh retyping |
 | `Subtyping.v` (definitions only) | ~200 | the one-level relations `subF` and `rsubF` (with `fsubR`, `subsR`, `osubR`, `vsubsR`, `frsubR`, `vrsubsR`), `sub` and `rsub` as their greatest fixed points, `immutable`, and the enum declaration checks `occ_sub`, `occ_fresh`, `wf_payload` |
 
@@ -140,6 +140,7 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | "A diverging effect absorbs what follows" | `t_div`; `diverges` and the `div_*` lemmas in `Frame.v` |
 | Branch joins | `join_slot`, `tjoin` (`tjoin_core`, then one side below the other), `join_slot_ub`, `if_join` in `Join.v`; the join is given the checker's decision procedure `le` for `<=` and fresh retyping, and the proofs assume only that it is right when it says yes (`le_ok`) |
 | The checker's join: a new arm takes a shared arm's type | `join_slot2`, `join_slot2_ub`, `if_join2` in `Join.v` (two subsumption steps per arm); `if_join2_alg` in `Decide.v` |
+| The checker's join of all the arms at once (order-independent; `{a: @xs}` / `{a: @xs, b: [2]}` stays partly new) | the checker's finite marks `fmark`, `den`; one mark for all the arms `fmergeN` (`fmergeN_ok`, brought there by `ss_mc`); the types joined under it `mjoin` (`mjoin_ub`, then `ss_m`); the shared step's targets `shjoin` (`shjoin_ub`); kinds joined apart and unioned; `joinN`, `joinN_ub`, `joinN_stack_ub`, `arm_joinN`, `if_joinN` in `PartialJoin.v`; `if_joinN_alg`, `arm_joinN_alg`, `alg_joinN_any_order` in `Decide.v`; `mtyped_mcompat` in `Partial.v` |
 | A type in a def body naming the def's generics | `as` is `t_sub`; `item_gdefs_ok`, `item_use_typed`, `item_use_never_stuck`, `item_use_runs` in `Examples.v` |
 | The decision procedures for `<=` and fresh retyping (assumption sets) | `subq`, `rsubq` in `Decide.v`; `subq_sound`, `rsubq_sound`; `le_alg_ok` discharges `le_ok`; `join_slot_ub_alg`, `if_join_alg` |
 | Caching their answers | `subq_set_sound`, `rsubq_set_sound`, `chk_confirmed`; `cache_early` |

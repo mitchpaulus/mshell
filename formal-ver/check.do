@@ -7,6 +7,8 @@
     "Print Assumptions soundness."
     "Print Assumptions if_join_alg."
     "Print Assumptions if_join2_alg."
+    "Print Assumptions if_joinN_alg."
+    "Print Assumptions arm_joinN_alg."
     "Print Assumptions subq_set_sound."
     "Print Assumptions rsubq_set_sound."
     "Print Assumptions kind_list_once."

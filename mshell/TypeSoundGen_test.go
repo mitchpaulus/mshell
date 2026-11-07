@@ -850,8 +850,40 @@ func (p *progGen) stmtOnce(ctx *gctx, blk *gblock) bool {
 		if risky {
 			vt = p.widen(v.t)
 		}
-		t := shapeOf(gfield{name: "a", t: vt}, gfield{name: "b", t: tInt}, gfield{name: "c", t: tStr, opt: true})
 		n := p.name("v")
+		if p.chance(0.5) {
+			// Two partly new arms, joined partly new (formal-ver/PartialJoin.v):
+			// the joined dict may gain optional labels, the stored value
+			// keeps its type. The first arm runs, so `a` is there.
+			t := shapeOf(gfield{name: "a", t: vt, opt: true}, gfield{name: "b", t: tInt, opt: true}, gfield{name: "c", t: tStr, opt: true})
+			arms := p.pick([]string{
+				"{a: @V} else {a: @V, b: 1}",
+				"{a: @V, b: 1} else {a: @V}",
+				"{a: @V} else {b: 1}",
+				"{a: @V} else {b: 1, c: \"x\"}",
+			})
+			code := "true if " + arms + " end"
+			if p.chance(0.5) {
+				// Three or four arms; the first runs, so `a` is there.
+				rest := []string{"{b: 1}", "{a: @V, b: 1}", "{c: \"x\"}", "{a: @V, c: \"y\"}", "{}"}
+				p.rng.Shuffle(len(rest), func(i, j int) { rest[i], rest[j] = rest[j], rest[i] })
+				k := 2 + p.rng.Intn(2)
+				code = "1 match 1 : {a: @V}"
+				for i := 0; i < k-1; i++ {
+					code += ", " + strconv.Itoa(i+2) + " : " + rest[i]
+				}
+				code += ", _ : " + rest[k-1] + " end"
+			}
+			code = strings.ReplaceAll(code, "@V", "@"+v.name) + " as " + t.src() + " " + n + "!"
+			if !p.try(blk, code, risky, func() { sc.add(n, t) }) {
+				return false
+			}
+			if risky {
+				p.exploit(ctx, blk, "@"+n+" :a?", vt, v.t, v)
+			}
+			return true
+		}
+		t := shapeOf(gfield{name: "a", t: vt}, gfield{name: "b", t: tInt}, gfield{name: "c", t: tStr, opt: true})
 		if !p.try(blk, "{a: @"+v.name+", b: 1} as "+t.src()+" "+n+"!", risky, func() { sc.add(n, t) }) {
 			return false
 		}
@@ -1057,7 +1089,12 @@ func (p *progGen) join(ctx *gctx, blk *gblock) bool {
 		if b == nil {
 			return false
 		}
-		if !p.try(blk, cond+" if @"+a.name+" else @"+b.name+" end "+n+"!", true, nil) {
+		code := cond + " if @" + a.name + " else @" + b.name + " end " + n + "!"
+		if p.chance(0.4) {
+			// Three arms, joined all at once (ai/n-way-join.md).
+			code = "3 match 1 : @" + a.name + ", 2 : @" + b.name + ", _ : " + p.expr(ctx, a.t, 2) + " end " + n + "!"
+		}
+		if !p.try(blk, code, true, nil) {
 			return false
 		}
 		p.try(blk, "@"+a.name+" "+p.consume(ctx, a.t, 4), false, nil)
@@ -1068,6 +1105,13 @@ func (p *progGen) join(ctx *gctx, blk *gblock) bool {
 	var a, b *gty = t, t
 	if t.k == gUnion {
 		a, b = t.members[0], t.members[1]
+	}
+	if p.chance(0.4) {
+		// Three arms, in a random order of the members.
+		arms := []*gty{a, b, t}
+		p.rng.Shuffle(len(arms), func(i, j int) { arms[i], arms[j] = arms[j], arms[i] })
+		return p.try(blk, "3 match 1 : "+p.expr(ctx, arms[0], 2)+", 2 : "+p.expr(ctx, arms[1], 2)+", _ : "+
+			p.expr(ctx, arms[2], 2)+" end as "+t.src()+" "+n+"!", false, func() { sc.add(n, t) })
 	}
 	return p.try(blk, cond+" if "+p.expr(ctx, a, 2)+" else "+p.expr(ctx, b, 2)+" end as "+t.src()+" "+n+"!", false,
 		func() { sc.add(n, t) })
