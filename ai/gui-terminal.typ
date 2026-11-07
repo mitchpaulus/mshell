@@ -26,7 +26,7 @@
 #align(center)[
   #text(size: 20pt, weight: "bold")[mshell GUI terminal]
   #v(0.3em)
-  #text(size: 11pt)[Design notes --- 2026-10-25, updated 2026-11-02, branch `gui-terminal-design`]
+  #text(size: 11pt)[Design notes --- 2026-10-25, updated 2026-11-07, branch `gui-terminal-design`]
   #v(0.2em)
   #text(size: 10pt, style: "italic")[Early thinking, nothing decided. Nothing is built yet.]
 ]
@@ -120,6 +120,8 @@ Alacritty, Ghostty and WezTerm are installed on the benchmark machine, so they c
 
 - Draw only when something changes; no continuous render loop.
 - Track which regions changed and redraw only those where possible.
+  For terminal output, libghostty-vt reports this directly: each render-state update is clean, partly dirty or fully dirty, with dirty flags and stable ids per row (@sec-vt).
+- Respect synchronized output (mode 2026): hold the block's frame while the program asks for it.
 - Text goes through a glyph atlas and is drawn as instanced quads.
 - Fast path for monospace terminal cells: plain ASCII doesn't need full text shaping.
 - Lay out only the blocks that are visible.
@@ -129,7 +131,8 @@ Alacritty, Ghostty and WezTerm are installed on the benchmark machine, so they c
 == Output <sec-output>
 
 - The engine reads PTY output in large chunks and sends it on raw, without re-encoding.
-- The frontend runs the VT parser off the UI thread and draws at most once per display refresh, however much output arrives.
+- The frontend runs the VT parser (libghostty-vt, @sec-vt) off the UI thread and draws at most once per display refresh, however much output arrives.
+  The UI thread holds the terminal's lock only to start a render-state update; finishing it and drawing happen while the parser keeps going.
 - Backpressure: if the frontend falls behind, the engine stops reading from the PTY, rather than buffering without limit.
   The program then blocks on write, which is what a normal terminal does too.
 - Large mshell values (big grids) are paged on demand, not sent whole.
@@ -192,6 +195,8 @@ Each block keeps its own output, so search can be scoped:
 - take an earlier block's output back in as a value (syntax to be decided).
 
 For terminal output, the searchable text comes from the block's emulator, both the screen and its scrollback.
+libghostty-vt's incremental search does this, and its work steps can run on a background thread while the terminal keeps receiving output (@sec-vt).
+Copying or saving a block's output goes through its formatter, as plain text or with styles.
 For mshell values, search runs over the values themselves.
 
 == Tabs and panes
@@ -223,9 +228,58 @@ Things still to work out:
   Do finished blocks reflow or keep their width?
 - A command that writes both mshell values and terminal output: what order is shown.
 - Windows: ConPTY behaves differently from Unix PTYs (it rewrites output and has its own resize quirks).
+  libghostty-vt has an option for exactly this: turn off pulling rows back from scrollback on resize, since ConPTY keeps its own screen buffer.
 
 #decision[Do not write the VT emulator ourselves.
-Getting it right takes decades of edge cases; use a battle-tested one (@sec-frontend).]
+Getting it right takes decades of edge cases; use a battle-tested one.
+*All interpretation of escape sequences and program output goes through libghostty-vt* (@sec-vt).
+No other part of the app, frontend or engine, parses escape sequences.]
+
+= VT emulation: libghostty-vt <sec-vt>
+
+`libghostty-vt` 1.0 was released on 2026-11-06 (tag `vt-1.0.0`).
+It is the terminal emulation core of Ghostty, as a C library: parsing, terminal state, screen and scrollback, modes, and the protocols built on them.
+Both the library and its C ABI are stable from 1.0 and follow semantic versioning.
+It is MIT licensed with no copyleft dependencies, needs nothing beyond libc at runtime, and creates no threads of its own.
+JetBrains' IDE terminal moved to it in 2026.3.
+
+It has *no* renderer, fonts, text shaping or PTY code.
+That is the split this design wants: PTYs live in the Go engine (@sec-arch), and the frontend owns drawing and text (@sec-frontend).
+
+Every block that runs an external program has its own libghostty-vt terminal.
+The engine sends PTY bytes on raw (@sec-output), and the frontend writes them into that terminal.
+Anything the frontend wants to know about the output, it asks the terminal for.
+
+== What it covers for us
+
+#table(
+  columns: (auto, 1fr),
+  inset: 4pt,
+  table.header([*Need*], [*libghostty-vt*]),
+  [Replies to queries (DA, DSR, size reports, …)], [A PTY-write callback. Its bytes go back to the engine as an `input` message for the block.],
+  [Drawing], [A render state is a copy of one frame's rows, cells, cursor and colours. Updating it is split in two, so only the first half needs the terminal's lock. Dirty state per update and per row, and stable row ids.],
+  [Synchronized output (mode 2026)], [A render-hold callback.],
+  [Keys and mouse to the program], [Key and mouse encoders that take their settings from the terminal's modes, including the Kitty keyboard protocol. The frontend encodes keys and sends the bytes.],
+  [Alternate screen (@sec-pty)], [No callback when it changes. Read the active screen after each write, which is a cheap getter.],
+  [OSC 133 and OSC 7], [Callbacks for each step of a command (with exit code and command line) and for directory changes. Not how our own blocks are found (the protocol does that), but it makes a nested shell work, e.g. bash over `ssh` inside a block.],
+  [Clipboard (OSC 52), title, bell, notifications, progress, reset], [Callbacks.],
+  [Search], [Incremental search over the screen and scrollback of both screens; its work steps are safe on a background thread (@sec-output).],
+  [Many emulators at once], [Scrollback limits in bytes and lines, a memory-usage query, and scrollback compression that can run in small steps when idle.],
+  [Compact finished blocks], [The whole terminal can be saved to bytes and restored. A block scrolled far out of view could be kept that way. The byte format isn't covered by the ABI promise, which doesn't matter inside one process.],
+  [Selection, Kitty graphics, plain or styled text export], [Included.],
+)
+
+== Costs and gaps
+
+- *Zig to build it.* The sources disagree on the version (0.16 or 0.17); pin whatever `vt-1.0.0` needs.
+  It links statically, so one binary is still possible (@sec-startup).
+- *Rust bindings are community-maintained.* `libghostty-rs` has a raw `-sys` crate and safe wrappers, but on 2026-11-07 it pinned a Ghostty commit 245 commits before `vt-1.0.0`.
+  Now the ABI is stable, our own thin `-sys` crate generated with bindgen is a small, low-risk fallback.
+- *Threading is ours to arrange.* The render-state split and the search steps are documented as safe alongside writes; everything else on one terminal has to be serialized, e.g. one lock per terminal shared by the parser thread and the UI thread.
+- *Defaults to check.* A header comment gives the scrollback default as 10,000 bytes. Set the limits explicitly either way.
+- *No shaping.* It handles graphemes, not shaping or layout; that stays with the text library (@sec-recommendation).
+
+Things to measure in the startup spike: the cost of creating a terminal (one per block, @sec-targets), memory per idle finished block, and parsing throughput against Alacritty and Ghostty on vtebench.
 
 = Beyond the terminal <sec-beyond>
 
@@ -670,19 +724,23 @@ What to keep in mind now: keep the UI's element structure clean (prompt, block l
   columns: (1fr, 1fr, 1.2fr, 1.4fr),
   inset: 4pt,
   table.header([*Option*], [*VT emulator*], [*Strengths*], [*Weaknesses*]),
-  [*Rust: winit + wgpu + text library*], [`alacritty_terminal`, or libghostty-vt], [Full control; each piece is a focused library], [We build the layout, widget and editor layer ourselves; wgpu startup cost must be measured],
+  [*Rust: winit + wgpu + text library*], [libghostty-vt (@sec-vt)], [Full control; each piece is a focused library], [We build the layout, widget and editor layer ourselves; wgpu startup cost must be measured],
   [Rust: winit + direct OpenGL / Metal], [same], [What Alacritty (OpenGL) and Ghostty (OpenGL, Metal) do; startup cost well understood; renderer is small], [Two backends to maintain; OpenGL is deprecated on macOS],
   [Rust + GPUI (Zed's framework)], [`alacritty_terminal` (as in Zed)], [Editor and terminal panes already proven together], [Before 1.0, thin docs, API follows Zed's needs; its own element model limits control],
   [Native per platform + libghostty], [libghostty-vt (C ABI)], [Best feel on each OS], [Three UI codebases; not "full control"],
   [Tauri/Wails + xterm.js], [xterm.js (WebGL)], [Fastest to build rich UI], [Webview startup, latency and memory; rules itself out under @sec-perf],
-  [Go + Gio], [`charmbracelet/x/vt` or similar], [One language; draw everything], [Go VT emulators are much less proven; GC pauses on the frame path need care],
+  [Go + Gio], [libghostty-vt through cgo (`go-libghostty`)], [One language; draw everything; reuses the Go lexer and key resolver, so no port (@sec-port)], [GC pauses on the frame path; a cgo call costs 55--67 ns (measured 2026-11-07), so a full redraw read cell by cell is 2--3 ms; thinner GPU and text libraries],
 )
 
 == Current recommendation <sec-recommendation>
 
+#decision[The frontend is Rust (decided 2026-11-07), for absolute performance.
+A Go frontend was reconsidered once libghostty-vt removed the worry about Go VT emulators, since it would have avoided the Rust port.
+It lost on garbage collection on the frame path, the cost of cgo calls, and thinner GPU and text libraries.]
+
 *A Go engine, and a Rust frontend on winit*, with:
 
-- `alacritty_terminal` for VT emulation (libghostty-vt is the alternative to watch),
+- libghostty-vt for all VT emulation (@sec-vt),
 - Rust ports of the lexer, key resolver and fixed edit operations (@sec-port),
 - `parley` or `cosmic-text` with `swash` for text layout and rasterising, loading font files directly rather than scanning system fonts (@sec-startup),
 - `arboard` for the clipboard,
