@@ -1449,7 +1449,7 @@ def __typstOptionValue ([str] str -- Maybe[str])
     @input len seq findMap. i!
         @input @i nth tok!
         @tok @opt = if
-            @i 1 + @input len < (@input @i 1 + nth just) (none) iff
+            @i 1 + @input len < if @input @i 1 + nth just else none end
         else* @tok $"{@opt}=" startsWith *if
             @tok @opt len 1 + skip just
         else
@@ -1513,12 +1513,7 @@ end
 
 # The labels written in a Typst file, like `<intro>`, for a `typst query` selector.
 def __typstLabels (str -- new [str])
-    file!
-    @file toPath isFile if
-        @file readFile '<[A-Za-z_][A-Za-z0-9_.:-]*>' reFindAll (:0:) map uniq
-    else
-        []
-    end
+    file! @file toPath isFile match true: @file readFile '<[A-Za-z_][A-Za-z0-9_.:-]*>' reFindAll (:0:) map uniq, _: [] end
 end
 
 def __typstCompletion { 'complete': ['typst'] } ([str] -- CompletionResult)
@@ -1563,7 +1558,7 @@ def __typstCompletion { 'complete': ['typst'] } ([str] -- CompletionResult)
     @subcmd __typstOptionsForSubcmd options!
     @optionsDone if [] options! end
     @positionals len positional!
-    @input len 0 > ( @input :-1: ) ( "" ) iff last!
+    @input len 0 > if @input :-1: else "" end last!
 
     @skipNext if
         # Complete the value of the option just typed.
@@ -1571,9 +1566,11 @@ def __typstCompletion { 'complete': ['typst'] } ([str] -- CompletionResult)
             '--color' : { 'values': ['auto' 'always' 'never'] },
             '--cert' : { 'preferredFiles': ['*.pem' '*.crt' '*.cer'] },
             '-f' '--format' :
-                ['compile' 'watch'] (@subcmd =) any
-                ({ 'values': ['pdf' 'png' 'svg' 'html' 'bundle'] })
-                ({ 'values': ['json' 'yaml'] }) iff,
+                ['compile' 'watch'] (@subcmd =) any if
+                    { 'values': ['pdf' 'png' 'svg' 'html' 'bundle'] }
+                else
+                    { 'values': ['json' 'yaml'] }
+                end,
             '--root' '--font-path' '--package-path' '--package-cache-path' : { 'dirs': true },
             '--pdf-standard' : { 'values': [
                 '1.4' '1.5' '1.6' '1.7' '2.0' 'a-1b' 'a-1a' 'a-2b' 'a-2u' 'a-2a'
@@ -1619,12 +1616,14 @@ def __typstCompletion { 'complete': ['typst'] } ([str] -- CompletionResult)
                 1 : { 'values': @options, 'dirs': true } as CompletionResult,
                 _ : { 'values': @options },
             end,
-            'completions' : @positional 0 =
-                ({ 'values': ['bash' 'elvish' 'fish' 'powershell' 'zsh'] })
-                ({ 'values': [] }) iff,
-            'help' : @positional 0 =
-                ({ 'values': ['compile' 'watch' 'init' 'query' 'eval' 'fonts' 'update' 'completions' 'info' 'help'] })
-                ({ 'values': [] }) iff,
+            'completions' : @positional match
+                0 : { 'values': ['bash' 'elvish' 'fish' 'powershell' 'zsh'] },
+                _ : { 'values': [] },
+            end,
+            'help' : @positional match
+                0 : { 'values': ['compile' 'watch' 'init' 'query' 'eval' 'fonts' 'update' 'completions' 'info' 'help'] },
+                _ : { 'values': [] },
+            end,
             _ : { 'values': @options },
         end
     end
