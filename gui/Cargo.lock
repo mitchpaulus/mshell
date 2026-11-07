@@ -1628,10 +1628,17 @@ dependencies = [
 name = "startup-spike"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
+ "libc",
  "pollster",
+ "raw-window-handle",
  "swash",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-sys",
  "wgpu",
  "winit",
+ "xkbcommon-dl",
 ]
 
 [[package]]

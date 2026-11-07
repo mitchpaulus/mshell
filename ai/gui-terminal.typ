@@ -68,7 +68,7 @@ These are proposals to measure against, not agreed numbers.
   columns: (auto, 1fr),
   inset: 4pt,
   table.header([*What*], [*Target*]),
-  [Launch to first frame with an editable prompt], [Under 50 ms with files in the page cache; no slower than Alacritty or Ghostty on the same machine],
+  [Launch to first frame with an editable prompt], [Under 100 ms, slowest launches included, with files in the page cache; no slower than Alacritty or Ghostty on the same machine],
   [New tab or pane], [Shown in the next frame; engine ready in under 20 ms],
   [Keystroke to frame], [Frontend work under 1 ms; the frame never waits on the engine; never miss a frame],
   [Output flood (`cat` of a huge file, `yes`)], [UI keeps responding to input and scrolling; throughput comparable to Alacritty (vtebench)],
@@ -78,7 +78,14 @@ These are proposals to measure against, not agreed numbers.
 
 #note[`msh -c '1 wl'` starts in about 11 ms on the FX-8350 machine (hyperfine, 2026-10-25).
 So the engine is unlikely to be the slow part of startup.
-GPU setup and font loading are the likely problems (@sec-startup).]
+GPU setup and font loading were the likely problems (@sec-startup).
+
+The startup spike (`gui/startup-spike`, 2026-11-07) gets a first frame to the compositor 18–19 ms after launch on that machine (median),
+against 160 ms for Alacritty, 279 ms for WezTerm and Konsole, and 462 ms for Ghostty, measured the same way.
+Drawn by the GPU instead, its first frame takes 44–68 ms, depending on how much work goes into GPU startup.
+Even the plainest version (stock winit, Vulkan only, GPU on the first frame) stayed under 90 ms in all 70 launches measured,
+and under 75 ms on most of them with implicit Vulkan layers disabled.
+So 100 ms leaves room for the prompt and the engine, which the spike doesn't have yet.]
 
 Alacritty, Ghostty and WezTerm are installed on the benchmark machine, so they can serve as references.
 
@@ -89,16 +96,31 @@ Alacritty, Ghostty and WezTerm are installed on the benchmark machine, so they c
   The user's key bindings don't exist until the engine has run `init.msh`,
   so keys typed before the engine sends them are queued, each with the time it arrived,
   and handled as soon as they arrive (@sec-editor-config).
-- *GPU setup is the biggest unknown.*
-  Creating a Vulkan instance and device, and compiling shaders and pipelines, can take a noticeable amount of time on some drivers.
-  This has to be measured on real machines before we commit to a renderer (@sec-recommendation).
-  Use a pipeline cache, and keep the shaders few and small.
+- *The first frame doesn't wait for the GPU.*
+  On the FX-8350 machine, getting a Vulkan device takes 20–30 ms even after every fix below, most of it loading the driver (RADV links libLLVM).
+  So a frame thread draws the first frame on the CPU into shared memory while the window is being created,
+  the main thread shows it as soon as the window exists,
+  and the GPU takes over when it's ready, with the same pixels (measured: `gui/startup-spike/README.md`).
+- *Start the GPU at the top of `main`, on its own thread,* and keep it off the main thread's path:
+  - only the Vulkan backend (wgpu initialises OpenGL too by default: ~15 ms),
+  - no implicit Vulkan layers (Mesa's device-select layer opens its own compositor connection: ~10 ms),
+  - only the Vulkan driver that worked last time (the loader otherwise loads every installed driver),
+  - before the GPU thread starts, create every thread and do everything else that takes glibc's loader lock
+    (`dlopen`, `dlsym`, thread-local destructors), and map the first frame's memory,
+    because loading the driver holds that lock, and the kernel's `mmap_lock`, for milliseconds at a time.
+- *Defer what the first frame doesn't need.*
+  Inside libraries too, where it pays: winit compiles the keymap and parses the Compose file before the first frame (~5–12 ms).
+  A small patch to winit defers them (kept as `gui/startup-spike/winit-defer-keymap.patch`),
+  but it isn't worth carrying a copy of winit for under a 100 ms target; send it upstream, or apply it if the target tightens.
 - *Fonts: never scan the system's fonts at startup.*
   Load the configured font file directly.
   Load fallback fonts (emoji, CJK) only when a glyph is missing.
-  A cached glyph atlas for ASCII could be saved to disk if rasterising it shows up in measurements.
+  Cache the rasterised ASCII atlas on disk, keyed by font file, size and display scale: then startup doesn't read the font at all.
+  The display scale isn't known until the window exists, so the first frame uses the last one seen.
 - *Load everything else lazily:* history, the LSP, the search index, completions.
-- One static binary with few dynamic libraries.
+- One binary with few dynamic libraries.
+  Pre-`main` work measured about 2 ms; a non-PIE build and skipping Rust's runtime setup save about 1 ms of it,
+  but that didn't reach the first frame, which waits on the compositor.
 - Optional later: a single-instance mode, where launching again opens a window in the already running process.
   That makes new windows instant, at the cost of one crash taking down every window.
 - Keep one warm spare engine process ready, so a new tab doesn't wait for process startup.
@@ -785,6 +807,11 @@ So keep it behind a narrow interface, and choose the backend by measuring:
   Compare launch-to-first-frame with Alacritty and Ghostty.
 + If wgpu meets the startup target, use it: one backend for all platforms.
 + If not, write the renderer directly against OpenGL (Linux, Windows) and Metal (macOS), as Alacritty and Ghostty do.
+
+On Linux the spike's answer is wgpu, Vulkan only: it meets the 100 ms target without tricks,
+and drawing the first frame on the CPU (@sec-startup) takes the driver load off the first frame if the target tightens.
+The time goes into loading the Vulkan driver, which a direct OpenGL renderer would pay too (EGL setup was slower still).
+Mac and Windows are still to measure.
 
 The PTYs live in the Go engine (@sec-arch), so the frontend doesn't need a PTY library.
 Go has ConPTY wrappers for Windows.

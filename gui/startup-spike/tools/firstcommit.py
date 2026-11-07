@@ -39,4 +39,6 @@ for _ in range(n):  # interleave, so drift hits every command alike
         if v is not None: res[i].append(v)
 for i, c in enumerate(cmds):
     v = sorted(res[i])
-    print(f"median {statistics.median(v):7.2f} ms  min {v[0]:7.2f}  max {v[-1]:7.2f}  n={len(v)}/{n}  {' '.join(c)}")
+    p90 = v[min(len(v) - 1, int(0.9 * len(v)))]
+    print(f"median {statistics.median(v):7.2f} ms  min {v[0]:7.2f}  p90 {p90:7.2f}  max {v[-1]:7.2f}  n={len(v)}/{n}  {' '.join(c)}")
+    print("   runs:", ' '.join(f'{x:.1f}' for x in v))
