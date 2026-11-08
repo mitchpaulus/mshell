@@ -838,6 +838,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
+name = "msh-client"
+version = "0.1.0"
+dependencies = [
+ "msh-editor",
+]
+
+[[package]]
 name = "msh-editor"
 version = "0.1.0"
 dependencies = [

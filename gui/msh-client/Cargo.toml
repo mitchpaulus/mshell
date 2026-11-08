@@ -1,0 +1,8 @@
+[package]
+name = "msh-client"
+version = "0.1.0"
+edition = "2024"
+description = "The GUI frontend's side of the msh server protocol"
+
+[dependencies]
+msh-editor = { path = "../msh-editor" }

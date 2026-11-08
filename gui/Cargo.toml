@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["startup-spike", "ghostty-vt-sys", "msh-editor"]
+members = ["startup-spike", "ghostty-vt-sys", "msh-editor", "msh-client"]
 
 [profile.release]
 opt-level = 3
