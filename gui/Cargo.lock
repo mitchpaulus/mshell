@@ -852,6 +852,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "msh-gui"
+version = "0.1.0"
+dependencies = [
+ "ghostty-vt-sys",
+ "msh-client",
+ "msh-editor",
+ "pollster",
+ "swash",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "naga"
 version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

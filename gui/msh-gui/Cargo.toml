@@ -1,0 +1,14 @@
+[package]
+name = "msh-gui"
+version = "0.1.0"
+edition = "2024"
+description = "The mshell GUI: blocks with their own terminal emulators, and the prompt edited locally"
+
+[dependencies]
+ghostty-vt-sys = { path = "../ghostty-vt-sys" }
+msh-client = { path = "../msh-client" }
+msh-editor = { path = "../msh-editor" }
+pollster = "1"
+swash = "0.2"
+wgpu = "30"
+winit = "0.30"
