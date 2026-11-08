@@ -36,6 +36,11 @@ type serverEvent struct {
 	ver    uint32
 	durNs  uint64
 	unixNs int64
+	// editor_config: version and the config bytes; call_result: request and
+	// status, with the rest in data.
+	version uint32
+	request uint32
+	status  byte
 }
 
 type serverClient struct {
@@ -43,6 +48,20 @@ type serverClient struct {
 	in     io.WriteCloser
 	events chan serverEvent
 	cmd    *exec.Cmd
+	// The last editor config, and the version of each config seen in
+	// order.
+	config   serverEvent
+	versions []uint32
+}
+
+// note keeps an editor config.
+func (c *serverClient) note(e serverEvent) bool {
+	if e.kind != serverMsgEditorConfig {
+		return false
+	}
+	c.config = e
+	c.versions = append(c.versions, e.version)
+	return true
 }
 
 func startServer(t *testing.T) *serverClient {
@@ -113,6 +132,10 @@ func (c *serverClient) read(out io.Reader) {
 			e.id, e.code, e.durNs = le.Uint64(p), int32(le.Uint32(p[8:])), le.Uint64(p[12:])
 		case serverMsgExit:
 			e.code = int32(le.Uint32(p))
+		case serverMsgEditorConfig:
+			e.version, e.data = le.Uint32(p), append([]byte(nil), p[4:]...)
+		case serverMsgCallResult:
+			e.request, e.status, e.data = le.Uint32(p), p[4], append([]byte(nil), p[5:]...)
 		}
 		c.events <- e
 	}
@@ -167,7 +190,7 @@ func (c *serverClient) block(id uint64) (output string, code int32) {
 func (c *serverClient) started(id uint64) {
 	c.t.Helper()
 	var e serverEvent
-	for e = c.next(); e.kind == serverMsgPtyOutput && e.id == 0; e = c.next() {
+	for e = c.next(); (e.kind == serverMsgPtyOutput && e.id == 0) || c.note(e); e = c.next() {
 	}
 	if e.kind != serverMsgBlockStarted || e.id != id {
 		c.t.Fatalf("got %+v, want block_started %d", e, id)
@@ -190,6 +213,7 @@ func (c *serverClient) rest(id uint64) (output string, code int32) {
 			out.Write(e.data)
 		case e.kind == serverMsgBlockFinished && e.id == id:
 			return out.String(), e.code
+		case c.note(e):
 		default:
 			c.t.Fatalf("inside block %d: %+v", id, e)
 		}
@@ -321,5 +345,200 @@ func TestServerExit(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("engine still running after exit")
+	}
+}
+
+// The editor config as the test reads it.
+type testConfig struct {
+	bindings []testBinding
+	abbrs    []testAbbr
+}
+
+type testBinding struct {
+	keys  []KeyCode
+	quote int // a bindingFunc's quote, or -1
+	ops   int
+}
+
+type testAbbr struct {
+	regex bool
+	word  string
+	quote int // an abbrFunc's quote, or -1
+	text  string
+}
+
+func decodeTestConfig(t *testing.T, b []byte) testConfig {
+	t.Helper()
+	le := binary.LittleEndian
+	take := func(n int) []byte {
+		if len(b) < n {
+			t.Fatalf("config ends early")
+		}
+		v := b[:n]
+		b = b[n:]
+		return v
+	}
+	u8 := func() byte { return take(1)[0] }
+	u16 := func() int { return int(le.Uint16(take(2))) }
+	u32 := func() uint32 { return le.Uint32(take(4)) }
+	str := func() string { return string(take(int(u32()))) }
+	var c testConfig
+	for range u32() {
+		var tb testBinding
+		u8()
+		u32()
+		u32()
+		for range u8() {
+			tb.keys = append(tb.keys, KeyCode(u32()))
+		}
+		tb.quote = -1
+		if u8() == 1 {
+			tb.quote = int(u32())
+		} else {
+			tb.ops = u16()
+			for range tb.ops {
+				switch editOpKind(u8()) {
+				case opInsert, opMessage:
+					str()
+				case opSetLine:
+					str()
+					str()
+				case opRun, opRunOps:
+					u32()
+				}
+			}
+		}
+		c.bindings = append(c.bindings, tb)
+	}
+	for range u32() {
+		ta := testAbbr{regex: u8() == 1, word: str(), quote: -1}
+		if u8() == byte(abbrPosArgOf) {
+			for range u16() {
+				str()
+			}
+		}
+		if u8() == 1 {
+			ta.quote = int(u32())
+		} else {
+			ta.text = str()
+		}
+		str()
+		c.abbrs = append(c.abbrs, ta)
+	}
+	if len(b) != 0 {
+		t.Fatalf("%d bytes after the config", len(b))
+	}
+	return c
+}
+
+// call sends a request and waits for its result, keeping configs.
+func (c *serverClient) call(kind byte, request uint32, payload []byte) serverEvent {
+	c.t.Helper()
+	c.send(kind, append(binary.LittleEndian.AppendUint32(nil, request), payload...))
+	for {
+		e := c.next()
+		if c.note(e) || (e.kind == serverMsgPtyOutput && e.id == 0) {
+			continue
+		}
+		if e.kind != serverMsgCallResult || e.request != request {
+			c.t.Fatalf("waiting for result %d: %+v", request, e)
+		}
+		return e
+	}
+}
+
+func appendTestStr(b []byte, s string) []byte {
+	return append(binary.LittleEndian.AppendUint32(b, uint32(len(s))), s...)
+}
+
+func TestServerEditorConfigAndCalls(t *testing.T) {
+	c := startServer(t)
+	le := binary.LittleEndian
+
+	// The first config arrives before any block: the default keymap.
+	c.run(1, "echo first")
+	if out, code := c.block(1); out != "first\r\n" || code != 0 {
+		t.Fatalf("first block: %q, %d", out, code)
+	}
+	if len(c.versions) != 1 || c.versions[0] != 1 {
+		t.Fatalf("configs before any change: %v", c.versions)
+	}
+	defaults := decodeTestConfig(t, c.config.data)
+	if len(defaults.bindings) < 30 {
+		t.Fatalf("%d bindings in the default config", len(defaults.bindings))
+	}
+
+	// A line that adds a binding and abbreviations sends the new config
+	// before its block_finished (block() fails on anything after it).
+	add := `{keys: [r'x' keyCtrl], action: (drop ['hi' editInsert] just) bindingFunc} bindingAdd ` +
+		`{abbr: 'gs' abbrWord, expansion: (drop 'git status' just) abbrFunc} abbrAdd ` +
+		`{abbr: '\.\.+' abbrRegex, expansion: 'cd ..' abbrText} abbrAdd`
+	c.run(2, add)
+	if out, code := c.block(2); out != "" || code != 0 {
+		t.Fatalf("adding: %q, %d", out, code)
+	}
+	if len(c.versions) != 2 || c.versions[1] != 2 {
+		t.Fatalf("configs after adding: %v", c.versions)
+	}
+	config := decodeTestConfig(t, c.config.data)
+	var binding testBinding
+	for _, b := range config.bindings {
+		if len(b.keys) == 1 && b.keys[0] == 'x'|KeyModCtrl {
+			binding = b
+		}
+	}
+	if binding.quote < 0 || len(config.abbrs) != 2 || config.abbrs[0].quote < 0 || !config.abbrs[1].regex {
+		t.Fatalf("config after adding: %+v", config)
+	}
+	version := c.config.version
+
+	// binding_call runs the quote on the EditState and returns its ops.
+	callBinding := func(request, version uint32) serverEvent {
+		p := le.AppendUint32(nil, version)
+		p = le.AppendUint32(p, uint32(binding.quote))
+		p = append(p, 0, 1)
+		p = le.AppendUint32(p, uint32('x'|KeyModCtrl))
+		p = appendTestStr(p, "echo ")
+		return c.call(serverMsgBindingCall, request, append(p, "after"...))
+	}
+	r := callBinding(10, version)
+	want := append(le.AppendUint16(nil, 1), byte(opInsert))
+	want = appendTestStr(want, "hi")
+	if r.status != callYes || !bytes.Equal(r.data, want) {
+		t.Fatalf("binding_call: status %d, %q", r.status, r.data)
+	}
+	// An old version is refused: the frontend resolves the keys again.
+	if r := callBinding(11, version-1); r.status != callStale {
+		t.Fatalf("stale binding_call: status %d", r.status)
+	}
+
+	// abbr_call runs an abbrFunc on the word.
+	p := le.AppendUint32(nil, version)
+	p = le.AppendUint32(p, uint32(config.abbrs[0].quote))
+	p = append(p, 0)
+	p = appendTestStr(p, "gs")
+	p = appendTestStr(p, "")
+	if r := c.call(serverMsgAbbrCall, 12, append(p, "gs"...)); r.status != callYes || string(r.data) != "git status" {
+		t.Fatalf("abbr_call: status %d, %q", r.status, r.data)
+	}
+
+	// regex_match uses Go's regexp; is_program the shell's rule.
+	for i, tc := range []struct {
+		word string
+		want byte
+	}{{"...", callYes}, {"x", callNo}} {
+		p := le.AppendUint32(nil, version)
+		p = le.AppendUint32(p, 1)
+		if r := c.call(serverMsgRegexMatch, uint32(20+i), append(p, tc.word...)); r.status != tc.want {
+			t.Fatalf("regex_match %q: status %d", tc.word, r.status)
+		}
+	}
+	for i, tc := range []struct {
+		word string
+		want byte
+	}{{"sh", callYes}, {"no-such-program-here", callNo}} {
+		if r := c.call(serverMsgIsProgram, uint32(30+i), []byte(tc.word)); r.status != tc.want {
+			t.Fatalf("is_program %q: status %d", tc.word, r.status)
+		}
 	}
 }

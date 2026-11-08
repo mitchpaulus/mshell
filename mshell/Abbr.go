@@ -666,40 +666,11 @@ func (state *TermState) expandAbbrOnEnter() {
 // is set when the quote failed: the word is left as it is, and no other
 // abbreviation is tried. The quote's output is not shown.
 func (state *TermState) runAbbrFunc(e *abbrEntry, word string, site abbrSite) (string, bool, bool) {
-	// The quote may keep what it is given, so it gets copies, not the
-	// editor's arena.
-	info := NewDict()
-	info.Items["word"] = MShellString{strings.Clone(word)}
-	command := &Maybe{}
-	if site.HasCommand {
-		command.obj = MShellString{strings.Clone(site.Command)}
-	}
-	info.Items["command"] = command
-	info.Items["line"] = MShellString{strings.Clone(string(state.currentCommand))}
-	stack := MShellStack{info}
-
-	var out bytes.Buffer
-	context := state.context
-	context.StandardOutput = &out
-	context.StandardError = &out
-	// Only the time limit stops the quote. The terminal stays raw, so
-	// Ctrl-C is a key, read after the quote ends.
-	run := state.runUserQuote(e.fn, &stack, context, abbrTimeout, newEvalCancel())
-
 	what := "The quote of abbreviation " + e.describe()
-	problem := run.problem(what, "the shell", abbrTimeout)
+	text, ok, problem := state.callAbbrFunc(e.fn, what, word, site.Command, site.HasCommand, string(state.currentCommand))
 	if problem == "" {
-		if m, ok := singleMaybe(stack); ok {
-			if m.IsNone() {
-				state.abbrProblem = ""
-				return "", false, false
-			}
-			if s, ok := m.obj.(MShellString); ok {
-				state.abbrProblem = ""
-				return s.Content, true, false
-			}
-		}
-		problem = what + " must leave one Maybe[str] on the stack.\n"
+		state.abbrProblem = ""
+		return text, ok, false
 	}
 	// The same problem is shown once, not again while the quote keeps
 	// failing the same way.
@@ -708,6 +679,46 @@ func (state *TermState) runAbbrFunc(e *abbrEntry, word string, site abbrSite) (s
 	}
 	state.abbrProblem = problem
 	return "", false, true
+}
+
+// callAbbrFunc runs an abbrFunc's quote on an AbbrInfo, with the time
+// limit. It returns the text, ok false when the quote declined, and the
+// problem when it failed, or "". The interactive editor and the server
+// (msh server) both call quotes this way.
+func (state *TermState) callAbbrFunc(fn *MShellQuotation, what, word, commandWord string, hasCommand bool, line string) (string, bool, string) {
+	// The quote may keep what it is given, so it gets copies, not the
+	// editor's arena.
+	info := NewDict()
+	info.Items["word"] = MShellString{strings.Clone(word)}
+	command := &Maybe{}
+	if hasCommand {
+		command.obj = MShellString{strings.Clone(commandWord)}
+	}
+	info.Items["command"] = command
+	info.Items["line"] = MShellString{strings.Clone(line)}
+	stack := MShellStack{info}
+
+	var out bytes.Buffer
+	context := state.context
+	context.StandardOutput = &out
+	context.StandardError = &out
+	// Only the time limit stops the quote. The terminal stays raw, so
+	// Ctrl-C is a key, read after the quote ends.
+	run := state.runUserQuote(fn, &stack, context, abbrTimeout, newEvalCancel())
+
+	problem := run.problem(what, "the shell", abbrTimeout)
+	if problem == "" {
+		if m, ok := singleMaybe(stack); ok {
+			if m.IsNone() {
+				return "", false, ""
+			}
+			if s, ok := m.obj.(MShellString); ok {
+				return s.Content, true, ""
+			}
+		}
+		problem = what + " must leave one Maybe[str] on the stack.\n"
+	}
+	return "", false, problem
 }
 
 // abbrMessageLines are the rows of the message shown below the command

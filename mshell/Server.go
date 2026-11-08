@@ -234,6 +234,8 @@ type server struct {
 
 	// finished receives each block id once its block_finished is sent.
 	finished chan uint64
+
+	editor serverEditor
 }
 
 // readPTY forwards PTY output until the PTY closes, turning markers into
@@ -288,7 +290,7 @@ func (s *server) readPTY() {
 // readProtocol handles input and resize at once, even while a block runs,
 // and queues runs for the main loop. It exits the engine when the frontend
 // closes the protocol.
-func (s *server) readProtocol(in io.Reader, runs chan<- serverRun) {
+func (s *server) readProtocol(in io.Reader, runs chan<- any) {
 	r := bufio.NewReaderSize(in, 64<<10)
 	var buf []byte
 	for {
@@ -310,6 +312,10 @@ func (s *server) readProtocol(in io.Reader, runs chan<- serverRun) {
 				s.protocolError("run with block id 0")
 			}
 			runs <- serverRun{id: id, source: string(payload[8:])}
+		case serverMsgBindingCall, serverMsgAbbrCall, serverMsgRegexMatch, serverMsgIsProgram:
+			// The editor's requests run in order with the blocks, on the
+			// main loop, which owns the evaluator.
+			runs <- serverCall{kind: kind, payload: append([]byte(nil), payload...)}
 		case serverMsgInput:
 			if _, err := s.master.Write(payload); err != nil {
 				fmt.Fprintf(os.Stderr, "msh server: writing input: %v\n", err)
@@ -416,7 +422,7 @@ func runServer() int {
 	}()
 
 	go s.readPTY()
-	runs := make(chan serverRun, 64)
+	runs := make(chan any, 64)
 	go s.readProtocol(os.NewFile(uintptr(protoIn), "protocol in"), runs)
 
 	state := newSessionState(0, 80, 24, nil)
@@ -439,12 +445,20 @@ func runServer() int {
 	state.checker = &replChecker{session: state.evalState.StartupSession}
 	state.printStartupErrors()
 	state.evalState.printAbbrWarnings()
+	// The frontend's editor waits for the first config: the bindings
+	// init.msh added.
+	s.sendConfigIfChanged(&state)
 
-	for run := range runs {
-		code, exit := s.runBlock(&state, run)
-		if exit {
-			s.out.send(serverMsgExit, binary.LittleEndian.AppendUint32(nil, uint32(int32(code))), nil)
-			os.Exit(code)
+	for request := range runs {
+		switch request := request.(type) {
+		case serverRun:
+			code, exit := s.runBlock(&state, request)
+			if exit {
+				s.out.send(serverMsgExit, binary.LittleEndian.AppendUint32(nil, uint32(int32(code))), nil)
+				os.Exit(code)
+			}
+		case serverCall:
+			s.handleCall(&state, request)
 		}
 	}
 	return 0
@@ -469,6 +483,9 @@ func (s *server) runBlock(state *TermState, run serverRun) (int, bool) {
 			code = lineExitStatus(state.lastLineOk, state.evalState.lastExitCode, state.evalState.ranProcess)
 		}
 	}
+	// A line can add bindings or abbreviations: the new config goes before
+	// block_finished, which the end marker becomes.
+	s.sendConfigIfChanged(state)
 	// Back to the cooked state before the end marker, so the marker passes
 	// through whatever the program left the terminal in.
 	state.leaveRawMode()
