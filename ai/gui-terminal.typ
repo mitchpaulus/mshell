@@ -645,9 +645,10 @@ Over SSH it adds one round trip, and only on keys that run mshell code.
 Operations that aren't pure (`editAccept`, `editRun`, completion, history) wait until the queue is empty,
 so Enter can never run a line before an earlier binding has been applied.
 
-#decision[The engine applies the operations a quotation returns, and replies with the final line and cursor.
-The frontend then only ever applies the fixed operations in its own keymap,
-which removes a whole class of ways for the two sides to disagree.]
+#decision[The engine returns the operations a quotation gives, and the frontend applies them (changed 2026-11-08).
+The first plan had the engine apply them and reply with the final line and cursor, to avoid the two sides disagreeing.
+But a quotation's operations can be effects only the frontend can carry out (history, completion, Enter),
+and the Rust port applies pure operations exactly as Go does: 3 million recorded key events match (@sec-port).]
 
 Guessing ahead is possible later: show the result of a decline at once, and undo it and replay the queued keys if the quotation returns operations.
 The resolver's snapshots already support undoing (each pending key carries the line before it).
@@ -876,6 +877,9 @@ The prompt start carries `redraw=0`: `msh` redraws its prompt after a resize onl
   Open: whether a word names a program (`isProgramWord`) depends on the engine's `PATH`, and it decides command position after `|` and which command a word is an argument of.
   The port asks through a callback; the frontend needs an answer without a round trip on Space, probably a set of program names sent with the editor config.
 + Frontend: one pane, prompt editor with the editor config and binding calls (@sec-editor), blocks with embedded emulators, alternate-screen handling.
+  *First version done* (`gui/msh-gui`, `gui/msh-client`): blocks with headers and their own emulators, the prompt edited by the Rust editor with the engine answering its calls, keys to a running program through libghostty's encoder, the alternate screen, scrolling into long blocks.
+  Not yet: history, completion, selection, `editRun`, the user's prompt, resizing finished blocks, fallback fonts and wide characters.
+  `msh-gui --script` runs it headless and writes the frame, for checking.
 + Live stack panel with structured values.
 + Output search.
 + Tabs and panes.
