@@ -28,6 +28,7 @@ const MSG_IS_PROGRAM: u8 = 0x07;
 const MSG_EDIT: u8 = 0x08;
 const MSG_RUN_QUOTE: u8 = 0x09;
 const MSG_FM_INPUT: u8 = 0x0A;
+const MSG_LINE_KIND: u8 = 0x0B;
 
 // Engine to frontend.
 const MSG_HELLO: u8 = 0x81;
@@ -389,6 +390,12 @@ impl Engine {
         let candidates = (0..rd.u16().map_err(bad)?).map(|_| rd.str()).collect::<Result<_, _>>().map_err(bad)?;
         let line = String::from_utf8_lossy(rd.rest()).into_owned();
         Ok(Edited { line, cursor, cycling, selected: (selected >= 0).then_some(selected as usize), bell, candidates })
+    }
+
+    /// Whether a line runs as a command line (the simple CLI parser) rather
+    /// than as mshell, by the rule the engine runs lines with.
+    pub fn is_command_line(&mut self, line: &str) -> io::Result<bool> {
+        Ok(self.call(MSG_LINE_KIND, line.as_bytes())?.status == CALL_YES)
     }
 
     pub fn is_program(&mut self, word: &str) -> io::Result<bool> {

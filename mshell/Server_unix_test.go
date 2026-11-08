@@ -564,6 +564,15 @@ func TestServerEditorConfigAndCalls(t *testing.T) {
 			t.Fatalf("is_program %q: status %d", tc.word, r.status)
 		}
 	}
+	// line_kind: how the line runs, by runLine's rule.
+	for i, tc := range []struct {
+		line string
+		want byte
+	}{{"ls -la | wc", callYes}, {"  sh -c 'x", callYes}, {"1 2 +", callNo}, {"[ls]", callNo}, {"", callNo}, {"no-such-program-here x", callNo}} {
+		if r := c.call(serverMsgLineKind, uint32(40+i), []byte(tc.line)); r.status != tc.want {
+			t.Fatalf("line_kind %q: status %d", tc.line, r.status)
+		}
+	}
 }
 
 func TestServerPromptAndCompletion(t *testing.T) {

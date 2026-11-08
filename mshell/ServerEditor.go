@@ -22,6 +22,8 @@ package main
 //	                   str word, str command, line (rest)
 //	0x06 regex_match   u32 request, u32 version, u32 abbr, word (rest)
 //	0x07 is_program    u32 request, word (rest)
+//	0x0B line_kind     u32 request, line (rest): 1 when the line runs as a
+//	                   command line (simple CLI parser), 0 as mshell
 //
 // Engine to frontend:
 //
@@ -287,6 +289,10 @@ func (s *server) handleCall(state *TermState, call serverCall) {
 		}
 	case serverMsgEdit:
 		status, result = s.handleEdit(state, request, r)
+	case serverMsgLineKind:
+		if state.isCommandLine(r.rest()) {
+			status = callYes
+		}
 	case serverMsgIsProgram:
 		word := r.rest()
 		if r.bad {
@@ -438,6 +444,8 @@ func (s *server) handleEdit(state *TermState, request uint32, r *serverReader) (
 //	0x89 ops        u64 block id, u16 count, ops: what an editRunOps quote
 //	                returned, sent before its block_finished, for the
 //	                frontend to run on the line.
+
+const serverMsgLineKind = 0x0B
 
 const (
 	serverMsgRunQuote = 0x09

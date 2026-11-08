@@ -8,6 +8,7 @@ use msh_client::{Engine, EngineHost, Event, FmView};
 use msh_editor::edit::{EditOp, Line};
 use msh_editor::graphemes::clusters;
 use msh_editor::keys::KeyCode;
+use msh_editor::lexer::{Lexer, TokenKind};
 use msh_editor::resolver::{Config, Editor, Mode};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -161,6 +162,13 @@ pub struct Pane {
     /// last given it.
     pub fm: Option<FmView>,
     fm_size: (u16, u16),
+    /// How the line would run: Some(true) as a command line, Some(false) as
+    /// mshell, None for an empty line. The engine's answers are kept by
+    /// the line's first word until the next block, which can change PATH
+    /// or the definitions.
+    line_kind: Option<bool>,
+    kinds: HashMap<String, bool>,
+    lexer: Lexer,
     key_bytes: Vec<u8>,
 }
 
@@ -188,6 +196,9 @@ impl Pane {
             pending_ops: HashMap::new(),
             fm: None,
             fm_size: (0, 0),
+            line_kind: None,
+            kinds: HashMap::new(),
+            lexer: Lexer::editor(),
             key_bytes: Vec::new(),
         }
     }
@@ -316,6 +327,7 @@ impl Pane {
             }
             Event::BlockFinished { id, exit_code, duration_ns } => {
                 self.fm = None;
+                self.kinds.clear();
                 if let Some(b) = self.blocks.iter_mut().find(|b| b.id == id) {
                     b.finished = Some((exit_code, duration_ns));
                 }
@@ -371,6 +383,31 @@ impl Pane {
         self.after(log.into_inner(), problem, None)
     }
 
+    /// Works out how the line would run, for the prompt box's indicator.
+    fn update_line_kind(&mut self) {
+        let mut tokens = Vec::new();
+        let text = &self.editor.line.text;
+        self.lexer.tokenize_into(text, &mut tokens);
+        let first = tokens.iter().find(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::LineComment));
+        self.line_kind = match first {
+            None => None,
+            Some(t) if t.kind == TokenKind::Eof => None,
+            // Only a word can name a program.
+            Some(t) if t.kind != TokenKind::Literal => Some(false),
+            Some(t) => {
+                let word = t.text(text);
+                match self.kinds.get(word) {
+                    Some(&k) => Some(k),
+                    None => {
+                        let k = self.engine.is_command_line(word).unwrap_or(false);
+                        self.kinds.insert(word.to_string(), k);
+                        Some(k)
+                    }
+                }
+            }
+        };
+    }
+
     /// Carries out what the effects asked for; returns whether the pane
     /// closes.
     fn after(&mut self, e: Effects, problem: Option<String>, label: Option<String>) -> bool {
@@ -389,6 +426,7 @@ impl Pane {
         if let Some(cfg) = self.engine.take_config() {
             self.cfg = Some(cfg);
         }
+        self.update_line_kind();
         if e.clear {
             // As a terminal's clear: the cards so far go above the view.
             self.clear_rows = self.blocks.iter().map(Block::rows).sum();
@@ -602,6 +640,17 @@ impl Pane {
             let text: String = m.trim_end().chars().filter(|c| *c != '\n').collect();
             cv.text(glyphs, PROMPT_INSET, text_top + text_rows, &text, color(DIM));
         }
+        // How the line will run: a stripe down the box's left edge, and a
+        // word at the right of the line, both quiet.
+        if let Some(command) = self.line_kind {
+            let (cw, ch) = (cv.cell.0 as f32, cv.cell.1 as f32);
+            let (stripe, label) = if command { (KIND_COMMAND, "command") } else { (ACCENT, "mshell") };
+            cv.fill_px(0.0, box_top as f32 * ch, 3.0, (rows - box_top) as f32 * ch, color(stripe));
+            let lw = glyphs.ui_width(label);
+            let (_, cy) = at(cursor_cells);
+            let x = cols as f32 * cw - cw - lw;
+            cv.ui_text(glyphs, x, cy as f32 * ch, ch, label, rgba(stripe[0], stripe[1], stripe[2], 0xb0), lw + 1.0);
+        }
     }
 }
 
@@ -808,6 +857,8 @@ fn xterm256(n: u8) -> [u8; 3] {
 
 const FM_BG: [u8; 3] = [0x16, 0x15, 0x1b];
 const FM_INSET: f32 = 14.0;
+/// The indicator's colour for a command line.
+const KIND_COMMAND: [u8; 3] = [0x7e, 0xc6, 0x99];
 const FOLDER: [u8; 3] = [0x6a, 0xa8, 0xe8];
 const FOLDER_BACK: [u8; 3] = [0x3f, 0x6f, 0xa8];
 const FILE_ICON: [u8; 3] = [0x8c, 0x8c, 0x98];

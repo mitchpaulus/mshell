@@ -173,6 +173,11 @@ pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols
             }
         }
     }
+    // What is still arriving (a prompt, output) is drawn, as the window
+    // would a moment later.
+    while let Ok(e) = rx.recv_timeout(Duration::from_millis(150)) {
+        handle(&mut app, e)?;
+    }
     app.compose();
     if app.glyphs.as_ref().is_some_and(|g| g.reset) {
         app.glyphs.as_mut().unwrap().reset = false;

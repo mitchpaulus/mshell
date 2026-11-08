@@ -316,7 +316,7 @@ func (s *server) readProtocol(in io.Reader, runs chan<- any) {
 				s.protocolError("run with block id 0")
 			}
 			runs <- serverRun{id: id, source: string(payload[8:])}
-		case serverMsgBindingCall, serverMsgAbbrCall, serverMsgRegexMatch, serverMsgIsProgram, serverMsgEdit, serverMsgRunQuote:
+		case serverMsgBindingCall, serverMsgAbbrCall, serverMsgRegexMatch, serverMsgIsProgram, serverMsgEdit, serverMsgRunQuote, serverMsgLineKind:
 			// The editor's requests run in order with the blocks, on the
 			// main loop, which owns the evaluator.
 			runs <- serverCall{kind: kind, payload: append([]byte(nil), payload...)}

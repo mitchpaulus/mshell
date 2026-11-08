@@ -2387,6 +2387,29 @@ func (s *TermState) commandLiteralTokenIndex(tokens []Token) int {
 	return -1
 }
 
+// startsCommandLine reports whether a line whose first token is first runs
+// as a command line, with the simple CLI parser (pipes, redirects), rather
+// than as mshell: its first word names a program, and no definition.
+func (state *TermState) startsCommandLine(first Token) bool {
+	if first.Type != LITERAL {
+		return false
+	}
+	literalStr := first.Lexeme
+	firstToken, firstTokenIsCmd := state.isFirstTokenBinary([]Token{first})
+	if firstTokenIsCmd {
+		literalStr = firstToken.Lexeme
+	}
+	return ((strings.Contains(literalStr, string(os.PathSeparator)) && state.context.Pbm.IsExecutableFile(literalStr)) || firstTokenIsCmd) && !IsDefinitionDefined(literalStr, state.stdLibDefs)
+}
+
+// isCommandLine reports whether line, as typed so far, would run as a
+// command line: for the GUI's indicator, by the rule runLine uses.
+func (state *TermState) isCommandLine(line string) bool {
+	l := NewLexer(line, &TokenFile{"REPL"})
+	l.allowUnterminatedString = true
+	return state.startsCommandLine(l.scanToken())
+}
+
 func (s *TermState) isFirstTokenBinary(tokens []Token) (Token, bool) {
 	for _, token := range tokens {
 		if token.Type == WHITESPACE || token.Type == LINECOMMENT {
@@ -4071,13 +4094,7 @@ func (state *TermState) runLine(currentCommandStr string) (exit bool, code int) 
 
 	if p.curr.Type == LITERAL {
 		// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
-		literalStr := p.curr.Lexeme
-
-		firstToken, firstTokenIsCmd := state.isFirstTokenBinary([]Token{p.curr})
-		if firstTokenIsCmd {
-			literalStr = firstToken.Lexeme
-		}
-		if ((strings.Contains(literalStr, string(os.PathSeparator)) && state.context.Pbm.IsExecutableFile(literalStr)) || firstTokenIsCmd) && !IsDefinitionDefined(literalStr, state.stdLibDefs) {
+		if state.startsCommandLine(p.curr) {
 			// Use the simple CLI parser to handle pipes and redirects
 			l.resetInput(currentCommandStr)
 			simpleCliParser := NewMShellSimpleCliParser(l)
