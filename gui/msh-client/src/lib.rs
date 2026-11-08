@@ -26,6 +26,7 @@ const MSG_ABBR_CALL: u8 = 0x05;
 const MSG_REGEX_MATCH: u8 = 0x06;
 const MSG_IS_PROGRAM: u8 = 0x07;
 const MSG_EDIT: u8 = 0x08;
+const MSG_RUN_QUOTE: u8 = 0x09;
 
 // Engine to frontend.
 const MSG_HELLO: u8 = 0x81;
@@ -36,6 +37,7 @@ const MSG_EXIT: u8 = 0x85;
 const MSG_EDITOR_CONFIG: u8 = 0x86;
 const MSG_CALL_RESULT: u8 = 0x87;
 const MSG_PROMPT: u8 = 0x88;
+const MSG_OPS: u8 = 0x89;
 
 const CALL_NO: u8 = 0;
 const CALL_YES: u8 = 1;
@@ -56,6 +58,8 @@ pub enum Event {
     /// The prompt for the next line: text with SGR and OSC 8 escapes and
     /// \r\n line breaks, and the window title it sets, if any.
     Prompt { title: Option<String>, text: Vec<u8> },
+    /// What an editRunOps quote returned, before its block_finished.
+    Ops { id: u64, ops: Vec<EditOp> },
     /// The engine ran `exit`; it exits after this.
     Exit { code: i32 },
     /// The protocol closed or broke.
@@ -238,6 +242,19 @@ impl Engine {
 
     pub fn run(&mut self, block: u64, source: &str) -> io::Result<()> {
         self.send(MSG_RUN, &block.to_le_bytes(), source.as_bytes())
+    }
+
+    /// Runs an editRun (or with `state`, editRunOps) quote as a block; its
+    /// EditState is the line around the cursor.
+    pub fn run_quote(&mut self, block: u64, quote: u32, with_state: bool, before: &str, after: &str) -> io::Result<()> {
+        let mut p = Vec::new();
+        p.extend_from_slice(&block.to_le_bytes());
+        p.extend_from_slice(&self.config_version.to_le_bytes());
+        p.extend_from_slice(&quote.to_le_bytes());
+        p.push(with_state as u8);
+        p.extend_from_slice(&(before.len() as u32).to_le_bytes());
+        p.extend_from_slice(before.as_bytes());
+        self.send(MSG_RUN_QUOTE, &p, after.as_bytes())
     }
 
     /// Keys for the running program, written to the PTY.
@@ -450,6 +467,10 @@ fn decode_event(kind: u8, r: &mut Reader) -> Result<Frame, String> {
         MSG_PTY_OUTPUT => Event::PtyOutput { id: r.u64()?, bytes: r.rest().to_vec() },
         MSG_BLOCK_FINISHED => Event::BlockFinished { id: r.u64()?, exit_code: r.u32()? as i32, duration_ns: r.u64()? },
         MSG_EXIT => Event::Exit { code: r.u32()? as i32 },
+        MSG_OPS => {
+            let id = r.u64()?;
+            Event::Ops { id, ops: (0..r.u16()?).map(|_| r.op()).collect::<Result<_, _>>()? }
+        }
         MSG_PROMPT => {
             let has_title = r.u8()? == 1;
             let title = r.str()?;

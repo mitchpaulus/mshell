@@ -4,8 +4,9 @@
 //! msh-gui --script SCRIPT --dump OUT.ppm [--size COLSxROWS] [MSH]
 //!
 //! SCRIPT is typed at the prompt a key at a time: plain characters, and
-//!   <Enter> <Tab> <Esc> <BS> <Left> <Right> <Up> <Down>
-//!   <C-x> <A-x>     Ctrl or Alt and a key
+//!   <Enter> <Tab> <Esc> <BS> <Left> <Right> <Up> <Down> <Space>
+//!   <C-x> <A-x>     Ctrl or Alt and a key (<A-Enter>, <A-Space> too);
+//!                   the window's keys work as in the window
 //!   <wait>          until no block is running (then the output is drawn)
 //!   <idle N>        N ms more between this key and the next (for timings)
 //!   <input TEXT>    TEXT, raw, to the running program's PTY (\r, \n, \xHH)
@@ -68,6 +69,9 @@ fn parse(script: &str) -> Result<Vec<Step>, String> {
         let (name, arg) = tag.split_once(' ').unwrap_or((tag, ""));
         steps.push(match name {
             "Enter" => Step::Key(KeyCode::ENTER),
+            "Space" => Step::Key(KeyCode::char(' ')),
+            "A-Enter" => Step::Key(KeyCode::ENTER.with(MOD_ALT)),
+            "A-Space" => Step::Key(KeyCode::char(' ').with(MOD_ALT)),
             "Tab" => Step::Key(KeyCode::TAB),
             "Esc" => Step::Key(KeyCode::ESCAPE),
             "BS" => Step::Key(KeyCode::BACKSPACE),
@@ -96,15 +100,24 @@ fn pump(app: &mut App, rx: &Receiver<UserEvent>, done: impl Fn(&App) -> bool) ->
     while !done(app) {
         let left = deadline.saturating_duration_since(Instant::now());
         match rx.recv_timeout(left) {
-            Ok(UserEvent::Engine(e)) => {
-                if app.engine_event(e) {
-                    return Err("the engine ended".into());
-                }
-            }
+            Ok(e) => handle(app, e)?,
             Err(_) => return Err("timed out waiting for the engine".into()),
         }
     }
     Ok(())
+}
+
+fn handle(app: &mut App, e: UserEvent) -> Result<(), String> {
+    let UserEvent::Engine(id, e) = e;
+    if app.engine_event(id, e) {
+        return Err("the last pane closed".into());
+    }
+    Ok(())
+}
+
+/// The focused pane is ready for keys: its config is in, nothing runs.
+fn ready(app: &App) -> bool {
+    app.focused_pane().is_some_and(|p| p.cfg.is_some() && p.running.is_none())
 }
 
 pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -113,38 +126,39 @@ pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols
     let (cw, ch) = (glyphs.cell.w, glyphs.cell.h);
     app.glyphs = Some(glyphs);
     app.resize(cols as u32 * cw, rows as u32 * ch);
-    pump(&mut app, &rx, |a| a.cfg.is_some())?;
+    pump(&mut app, &rx, ready)?;
     let mut now = 0i64;
     for step in steps {
         // Output that has arrived is handled before each step.
-        while let Ok(UserEvent::Engine(e)) = rx.try_recv() {
-            if app.engine_event(e) {
-                return Err("the engine ended".into());
-            }
+        while let Ok(e) = rx.try_recv() {
+            handle(&mut app, e)?;
         }
         match step {
             Step::Key(code) => {
                 now += 50_000_000;
-                if app.running.is_some() {
-                    return Err("a key while a block runs: use <input …>".into());
-                }
-                if app.editor_key(code, now) {
+                // A new pane's keys wait for its config, as in the window.
+                pump(&mut app, &rx, |a| a.focused_pane().is_some_and(|p| p.cfg.is_some()))?;
+                if app.key(code, now) {
                     break;
                 }
             }
-            Step::Wait => pump(&mut app, &rx, |a| a.running.is_none())?,
+            Step::Wait => pump(&mut app, &rx, ready)?,
             Step::Idle(ms) => now += ms * 1_000_000,
             Step::Input(bytes) => {
-                let _ = app.engine.input(&bytes);
+                if let Some(p) = app.focused() {
+                    let _ = p.engine.input(&bytes);
+                }
             }
-            Step::Scroll(n) => app.scroll = n,
+            Step::Scroll(n) => {
+                if let Some(p) = app.focused() {
+                    p.scroll = n;
+                }
+            }
             Step::Sleep(ms) => {
                 let until = Instant::now() + Duration::from_millis(ms);
                 while let Some(left) = until.checked_duration_since(Instant::now()) {
-                    if let Ok(UserEvent::Engine(e)) = rx.recv_timeout(left) {
-                        if app.engine_event(e) {
-                            return Err("the engine ended".into());
-                        }
+                    if let Ok(e) = rx.recv_timeout(left) {
+                        handle(&mut app, e)?;
                     }
                 }
             }

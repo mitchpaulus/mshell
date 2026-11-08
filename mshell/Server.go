@@ -232,7 +232,9 @@ type server struct {
 	mu     sync.Mutex
 	blocks map[uint64]*serverBlock
 
-	// finished receives each block id once its block_finished is sent.
+	// started and finished receive each block id once its block_started or
+	// block_finished is sent.
+	started  chan uint64
 	finished chan uint64
 
 	editor serverEditor
@@ -261,7 +263,9 @@ func (s *server) readPTY() {
 			current = id
 			fixed := binary.LittleEndian.AppendUint64(nil, id)
 			fixed = binary.LittleEndian.AppendUint64(fixed, uint64(b.start.UnixNano()))
-			return s.out.send(serverMsgBlockStarted, fixed, []byte(b.cwd))
+			err := s.out.send(serverMsgBlockStarted, fixed, []byte(b.cwd))
+			s.started <- id
+			return err
 		}
 		current = 0
 		fixed := binary.LittleEndian.AppendUint64(nil, id)
@@ -312,7 +316,7 @@ func (s *server) readProtocol(in io.Reader, runs chan<- any) {
 				s.protocolError("run with block id 0")
 			}
 			runs <- serverRun{id: id, source: string(payload[8:])}
-		case serverMsgBindingCall, serverMsgAbbrCall, serverMsgRegexMatch, serverMsgIsProgram, serverMsgEdit:
+		case serverMsgBindingCall, serverMsgAbbrCall, serverMsgRegexMatch, serverMsgIsProgram, serverMsgEdit, serverMsgRunQuote:
 			// The editor's requests run in order with the blocks, on the
 			// main loop, which owns the evaluator.
 			runs <- serverCall{kind: kind, payload: append([]byte(nil), payload...)}
@@ -347,6 +351,12 @@ func (s *server) protocolError(msg string) {
 type serverRun struct {
 	id     uint64
 	source string
+	// An editRun or editRunOps quote to run instead of source, with the
+	// EditState it is given (editRunOps).
+	quote          *MShellQuotation
+	withState      bool
+	before, after  string
+	staleQuote     bool
 }
 
 // runServer is msh server. It returns only on a setup error.
@@ -393,6 +403,7 @@ func runServer() int {
 		master:   master,
 		marks:    marks,
 		blocks:   map[uint64]*serverBlock{},
+		started:  make(chan uint64, 1),
 		finished: make(chan uint64, 1),
 	}
 
@@ -459,6 +470,14 @@ func runServer() int {
 				os.Exit(code)
 			}
 		case serverCall:
+			if request.kind == serverMsgRunQuote {
+				code, exit := s.runBlock(&state, s.quoteRun(request))
+				if exit {
+					s.out.send(serverMsgExit, binary.LittleEndian.AppendUint32(nil, uint32(int32(code))), nil)
+					os.Exit(code)
+				}
+				continue
+			}
 			s.handleCall(&state, request)
 		}
 	}
@@ -476,16 +495,34 @@ func (s *server) runBlock(state *TermState, run serverRun) (int, bool) {
 
 	state.leaveRawMode()
 	os.Stdout.Write(s.marks.marker('S', run.id))
-	source := strings.TrimSpace(run.source)
-	state.lineRan = source != ""
-	exit, code := state.runLine(source)
-	if state.lineRan {
-		state.recordLine()
+	// What the engine sends itself during the block (a config, a prompt,
+	// ops) must come after block_started, which the reader sends when it
+	// reaches the marker.
+	for id := range s.started {
+		if id == run.id {
+			break
+		}
 	}
-	if !exit {
-		code = 0
-		if source != "" {
-			code = lineExitStatus(state.lastLineOk, state.evalState.lastExitCode, state.evalState.ranProcess)
+	var exit bool
+	var code int
+	if run.quote != nil || run.staleQuote {
+		var program []editOp
+		exit, code, program = s.runQuote(state, run)
+		if program != nil {
+			s.sendOps(run.id, program)
+		}
+	} else {
+		source := strings.TrimSpace(run.source)
+		state.lineRan = source != ""
+		exit, code = state.runLine(source)
+		if state.lineRan {
+			state.recordLine()
+		}
+		if !exit {
+			code = 0
+			if source != "" {
+				code = lineExitStatus(state.lastLineOk, state.evalState.lastExitCode, state.evalState.ranProcess)
+			}
 		}
 	}
 	// A line can add bindings or abbreviations: the new config goes before

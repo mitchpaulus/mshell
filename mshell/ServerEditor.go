@@ -434,3 +434,90 @@ func (s *server) handleEdit(state *TermState, request uint32, r *serverReader) (
 	}
 	return callYes, append(b, state.currentCommand...)
 }
+
+// editRun and editRunOps: the frontend runs a binding's quote as a block.
+//
+//	0x09 run_quote  u64 block id, u32 version, u32 quote, u8 with EditState
+//	                (editRunOps), str before, after (rest). Answered like run:
+//	                block_started, output, block_finished.
+//	0x89 ops        u64 block id, u16 count, ops: what an editRunOps quote
+//	                returned, sent before its block_finished, for the
+//	                frontend to run on the line.
+
+const (
+	serverMsgRunQuote = 0x09
+	serverMsgOps      = 0x89
+)
+
+// quoteRun reads a run_quote request.
+func (s *server) quoteRun(call serverCall) serverRun {
+	r := &serverReader{s: s, b: call.payload}
+	id := uint64(r.u32()) | uint64(r.u32())<<32
+	version, quote, withState := r.u32(), r.u32(), r.u8() != 0
+	before := r.str()
+	after := r.rest()
+	if r.bad || id == 0 {
+		s.protocolError("malformed run_quote")
+	}
+	run := serverRun{id: id, withState: withState, before: before, after: after}
+	if version != s.editor.version || int(quote) >= len(s.editor.quotes) {
+		run.staleQuote = true
+	} else {
+		run.quote = s.editor.quotes[quote]
+	}
+	return run
+}
+
+// runQuote runs an editRun or editRunOps quote as terminal msh does
+// (runBindingQuote): in the foreground, with the terminal, no time limit.
+// It returns whether the quote exited the shell, the block's exit code,
+// and for editRunOps the ops the quote returned.
+func (s *server) runQuote(state *TermState, run serverRun) (bool, int, []editOp) {
+	if run.staleQuote {
+		fmt.Fprintln(os.Stderr, "The binding changed before its quote ran; press its keys again.")
+		return false, 1, nil
+	}
+	ev := &state.evalState
+	stack := MShellStack{}
+	if run.withState {
+		info := NewDict()
+		info.Items["before"] = MShellString{run.before}
+		info.Items["after"] = MShellString{run.after}
+		info.Items["keys"] = NewList(0)
+		info.Items["mode"] = ev.builtinEnumValue("modeInsert")
+		stack = append(stack, info)
+	}
+	ev.clearLastExitCode()
+	result, err := ev.EvaluateQuote(run.quote, &stack, state.context, state.stdLibDefs)
+	ev.printAbbrWarnings()
+	var program []editOp
+	switch {
+	case err != nil:
+		fmt.Fprintln(os.Stderr, terminalSafeText(err.Error(), true))
+	case result.ExitCalled:
+		return true, result.ExitCode, nil
+	case !result.Success:
+	case run.withState:
+		var problem string
+		program, _, problem = stackProgram(stack, "The quote of editRunOps", "Maybe[[EditOp]]", parseEditOps)
+		fmt.Fprint(os.Stderr, terminalSafeText(problem, true))
+	case len(stack) > 0:
+		fmt.Fprintf(os.Stderr, "The quote of editRun left %d values on the stack; they were dropped.\n", len(stack))
+	}
+	ok := err == nil && result.Success
+	return false, lineExitStatus(ok, ev.lastExitCode, ev.ranProcess), program
+}
+
+// sendOps sends what an editRunOps quote returned, with ids for any quotes
+// in the config's table.
+func (s *server) sendOps(block uint64, program []editOp) {
+	b := binary.LittleEndian.AppendUint64(nil, block)
+	b = binary.LittleEndian.AppendUint16(b, uint16(len(program)))
+	for _, op := range program {
+		b = appendEditOp(b, op, func(q *MShellQuotation) uint32 {
+			s.editor.quotes = append(s.editor.quotes, q)
+			return uint32(len(s.editor.quotes) - 1)
+		})
+	}
+	s.out.send(serverMsgOps, b, nil)
+}

@@ -188,3 +188,29 @@ pub fn ghostty_key(event: &KeyEvent) -> g::GhosttyKey {
         _ => g::GHOSTTY_KEY_UNIDENTIFIED,
     }
 }
+
+/// A key as a card header names it: ;r, A-x, F1, Enter.
+pub fn key_label(k: KeyCode) -> String {
+    let mut s = String::new();
+    for (bit, name) in [(MOD_CTRL, "C-"), (MOD_ALT, "A-"), (MOD_SUPER, "S-")] {
+        if k.mods() & bit != 0 {
+            s.push_str(name);
+        }
+    }
+    if k.is_named() {
+        let names = ["Enter", "Tab", "Backspace", "Esc", "Delete", "Insert", "Up", "Down", "Left", "Right", "Home", "End", "PageUp", "PageDown"];
+        let n = (k.base() - NAMED_BASE) as usize;
+        if n < names.len() {
+            s.push_str(names[n]);
+        } else {
+            s.push_str(&format!("F{}", n - names.len() + 1));
+        }
+    } else if let Some(c) = char::from_u32(k.base()) {
+        if k.mods() & MOD_SHIFT != 0 {
+            s.extend(c.to_uppercase());
+        } else {
+            s.push(c);
+        }
+    }
+    s
+}

@@ -56,6 +56,8 @@ type serverClient struct {
 	title    string
 	// The directory blocks start in.
 	cwd string
+	// The last ops message's ops.
+	ops []byte
 }
 
 // note keeps an editor config or a prompt.
@@ -149,6 +151,8 @@ func (c *serverClient) read(out io.Reader) {
 			e.request, e.status, e.data = le.Uint32(p), p[4], append([]byte(nil), p[5:]...)
 		case serverMsgPrompt:
 			e.data = append([]byte(nil), p...)
+		case serverMsgOps:
+			e.id, e.data = le.Uint64(p), append([]byte(nil), p[8:]...)
 		}
 		c.events <- e
 	}
@@ -226,6 +230,8 @@ func (c *serverClient) rest(id uint64) (output string, code int32) {
 		case e.kind == serverMsgBlockFinished && e.id == id:
 			return out.String(), e.code
 		case c.note(e):
+		case e.kind == serverMsgOps && e.id == id:
+			c.ops = e.data
 		default:
 			c.t.Fatalf("inside block %d: %+v", id, e)
 		}
@@ -370,6 +376,7 @@ type testBinding struct {
 	keys  []KeyCode
 	quote int // a bindingFunc's quote, or -1
 	ops   int
+	run   int // the quote of its first editRun or editRunOps, or -1
 }
 
 type testAbbr struct {
@@ -403,7 +410,7 @@ func decodeTestConfig(t *testing.T, b []byte) testConfig {
 		for range u8() {
 			tb.keys = append(tb.keys, KeyCode(u32()))
 		}
-		tb.quote = -1
+		tb.quote, tb.run = -1, -1
 		if u8() == 1 {
 			tb.quote = int(u32())
 		} else {
@@ -416,7 +423,9 @@ func decodeTestConfig(t *testing.T, b []byte) testConfig {
 					str()
 					str()
 				case opRun, opRunOps:
-					u32()
+					if q := int(u32()); tb.run < 0 {
+						tb.run = q
+					}
 				}
 			}
 		}
@@ -615,5 +624,51 @@ func TestServerPromptAndCompletion(t *testing.T) {
 	}
 	if _, _, cycling, _ = edit(13, opCompleteAccept, line, len(line)); cycling {
 		t.Fatal("accept left the cycle on")
+	}
+}
+
+func TestServerRunQuote(t *testing.T) {
+	c := startServer(t)
+	le := binary.LittleEndian
+	c.run(1, `{keys: [r'x' keyAlt], action: [('ran' wl) editRun] bindingOps} bindingAdd `+
+		`{keys: [r'y' keyAlt], action: [(drop ['done' editInsert] just) editRunOps] bindingOps} bindingAdd`)
+	if out, code := c.block(1); code != 0 {
+		t.Fatalf("adding: %q, %d", out, code)
+	}
+	config := decodeTestConfig(t, c.config.data)
+	quoteOf := func(k KeyCode) int {
+		for _, b := range config.bindings {
+			if len(b.keys) == 1 && b.keys[0] == k {
+				return b.run
+			}
+		}
+		t.Fatalf("no binding of %v", k)
+		return 0
+	}
+	runQuote := func(id uint64, quote int, withState bool) {
+		p := le.AppendUint64(nil, id)
+		p = le.AppendUint32(p, c.config.version)
+		p = le.AppendUint32(p, uint32(quote))
+		state := byte(0)
+		if withState {
+			state = 1
+		}
+		p = append(p, state)
+		p = appendTestStr(p, "line ")
+		c.send(serverMsgRunQuote, append(p, "after"...))
+	}
+	// editRun: the quote runs as a block, with the terminal.
+	runQuote(2, quoteOf('x'|KeyModAlt), false)
+	if out, code := c.block(2); out != "ran\r\n" || code != 0 {
+		t.Fatalf("editRun: %q, %d", out, code)
+	}
+	// editRunOps: its ops come back before block_finished.
+	runQuote(3, quoteOf('y'|KeyModAlt), true)
+	if out, code := c.block(3); out != "" || code != 0 {
+		t.Fatalf("editRunOps: %q, %d", out, code)
+	}
+	want := append(le.AppendUint16(nil, 1), byte(opInsert))
+	if !bytes.Equal(c.ops, appendTestStr(want, "done")) {
+		t.Fatalf("editRunOps ops: %q", c.ops)
 	}
 }

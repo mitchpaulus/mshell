@@ -23,6 +23,19 @@ with your `init.msh`, so your bindings and abbreviations work at the prompt.
 - While a block runs, keys go to its program, encoded by libghostty from the terminal's modes.
   A program on the alternate screen (`less`, `vim`, `htop`) gets the whole pane.
 - The mouse wheel scrolls back through the blocks, including long output kept in a block's scrollback.
+  Clearing the screen (Ctrl-L) puts the cards so far above the view, as a terminal does; scrolling up shows them.
+- `editRun` and `editRunOps` bindings run their quotation as a card (named by the binding's keys); the line stays.
+- Tabs hold panes, each with its own engine, laid out as a tiling window manager does.
+  The window's keys come before the editor's and a program's:
+
+  | Key | |
+  |---|---|
+  | Alt-Enter | new tab |
+  | Alt-N, Alt-P | next, previous tab |
+  | Alt-H/J/K/L | focus the pane left, below, above, right |
+  | Alt-S | split: a new pane in this tab |
+  | Alt-R | reorder: swap the pane with the first |
+  | Alt-Space | next layout: everything (the focused pane), columns, right halves, right thirds |
 
 ## Checking it without a window
 
@@ -34,6 +47,6 @@ runs the app headless from a script of keys and writes the frame it would draw (
 
 ## Not yet
 
-History, selection and copy, mouse reporting, `editRun`,
+History, selection and copy, mouse reporting, a GUI file manager (the terminal one runs in its pane),
 resizing finished blocks, fallback fonts, wide characters and bold.
 A cell shows its first code point, one cell wide.
