@@ -736,9 +736,34 @@ impl Pane {
                     cv.ui_text(glyphs, x + name_w + 4.0, y, row, "●", color(ACCENT), 2.0 * cw);
                 }
             }
-            // The preview, past a rule, in the monospace font.
+            // The preview, past a rule: a directory's listing as the
+            // entries are drawn, a file's contents in the monospace font.
             cv.fill_px(x0 + left, body + 4.0, 1.0, rows as f32 * row - 8.0, color(RULE));
             let px = x0 + left + pad + 4.0;
+            if v.preview_dir {
+                let room = x0 + w - pad - px - icon as f32 - 8.0;
+                if v.preview.is_empty() {
+                    cv.ui_text(glyphs, px, body, row, "empty", color(DIM), room);
+                }
+                for (i, line) in v.preview.iter().take(rows).enumerate() {
+                    let text: String = sgr_spans(line).into_iter().map(|(t, _)| t).collect();
+                    let name = text.trim_start();
+                    let (name, dir) = match name.strip_suffix('/') {
+                        Some(n) => (n, true),
+                        None => (name, false),
+                    };
+                    let y = body + i as f32 * row;
+                    let iy = y + ((row - icon as f32) / 2.0).round();
+                    if dir {
+                        cv.icon(glyphs, Icon::FolderBack, px, iy, icon, color(FOLDER_BACK));
+                        cv.icon(glyphs, Icon::FolderFront, px, iy, icon, color(FOLDER));
+                    } else {
+                        cv.icon(glyphs, Icon::File, px, iy, icon, color(FILE_ICON));
+                    }
+                    let fg = if dir { COMMAND } else { PREVIEW };
+                    cv.ui_text(glyphs, px + icon as f32 + 8.0, y, row, name, color(fg), room);
+                }
+            } else {
             let cols = ((x0 + w - pad - px) / cw).max(0.0) as usize;
             let lines = ((rows as f32 * row) / ch) as usize;
             for (i, line) in v.preview.iter().take(lines).enumerate() {
@@ -753,6 +778,7 @@ impl Pane {
                         col += 1;
                     }
                 }
+            }
             }
         }
         // The bottom: the prompt line, or a message, or the summary.

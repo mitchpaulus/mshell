@@ -617,6 +617,9 @@ pub struct FmView {
     pub shown: bool,
     /// The help screen: `preview` holds its lines.
     pub help: bool,
+    /// The preview is a directory's listing: " name", " name/" for a
+    /// directory.
+    pub preview_dir: bool,
     pub header: String,
     pub clipboard: String,
     pub total: u32,
@@ -646,7 +649,7 @@ pub struct FmEntry {
 
 fn decode_fm_view(r: &mut Reader) -> Result<FmView, String> {
     let flags = r.u8()?;
-    let mut v = FmView { shown: flags & 1 != 0, help: flags & 2 != 0, ..FmView::default() };
+    let mut v = FmView { shown: flags & 1 != 0, help: flags & 2 != 0, preview_dir: flags & 4 != 0, ..FmView::default() };
     v.header = r.str()?;
     v.clipboard = r.str()?;
     v.total = r.u32()?;

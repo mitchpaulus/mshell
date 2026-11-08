@@ -16,7 +16,9 @@ package main
 // Engine to frontend:
 //
 //	0x8A fm_view    u8 flags (1 shown: 0 when the file manager ends or lends
-//	                the pane to a program; 2 the help screen), str header,
+//	                the pane to a program; 2 the help screen; 4 the preview
+//	                is a directory's listing: " name", " name/" for a
+//	                directory), str header,
 //	                str clipboard status, u32 entry count, u32 the first
 //	                entry shown, u16 entries shown, each: u8 flags (1 dir,
 //	                2 cursor, 4 selected, 8 cut, 16 copied), str name, str
@@ -172,6 +174,14 @@ func (fm *FileManager) renderGUI() {
 		clip = appendInt(clip, fm.selected.len())
 	}
 	b = appendStr(b, string(clip))
+
+	// The preview is a directory's listing, which the frontend draws as
+	// it draws the entries.
+	if fm.mode != fmModeHelp && fm.cursor < len(fm.entries) && fm.entries[fm.cursor].IsDir() {
+		if lines := fm.getPreview(); len(lines) == 0 || !strings.HasPrefix(lines[0], " (") && lines[0] != " Loading..." {
+			b[0] |= 4
+		}
+	}
 
 	// The entries shown, as the terminal shows them.
 	visible := 0
