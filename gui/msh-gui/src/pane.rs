@@ -497,8 +497,11 @@ impl Pane {
             return;
         }
 
-        // The prompt box, at the bottom: the rendered prompt, then the line.
-        // While a command runs, it says so; keys go to the program.
+        // The prompt box, where a terminal's prompt would be: just after the
+        // output, at the top of a clean screen. Once the output fills the
+        // pane, or while scrolled back, it stays at the bottom, as frozen
+        // panes do. It holds the rendered prompt, then the line; while a
+        // command runs, it says so, and keys go to the program.
         let line = &self.editor.line;
         let (prompt_x, prompt_y) = self.prompt.as_ref().map_or((0, 0), |p| {
             let (x, y) = p.cursor();
@@ -512,19 +515,22 @@ impl Pane {
         } else {
             prompt_y + (prompt_x + line_cells + suggestion_cells + 1).div_ceil(prompt_cols)
         };
-        let box_rows = 2 + text_rows + self.message.is_some() as usize;
-        let box_top = rows.saturating_sub(box_rows);
+        let box_rows = (2 + text_rows + self.message.is_some() as usize).min(rows);
         let menu = &self.menu;
         let menu_width = menu.candidates.iter().map(|c| c.chars().count()).max().unwrap_or(0) + 2;
         let menu_cols = (prompt_cols / menu_width.max(1)).max(1);
         let menu_rows = menu.candidates.len().div_ceil(menu_cols).min(MENU_ROWS);
-        let area = box_top.saturating_sub(menu_rows);
+        // The most rows the cards can have: all but the box and the menu.
+        let most = rows.saturating_sub(box_rows + menu_rows);
 
         // The cards. Cleared ones are above the view until scrolled to.
         let total: usize = self.blocks.iter().map(Block::rows).sum();
-        let bottom_top = self.clear_rows.max(total.saturating_sub(area));
+        let bottom_top = self.clear_rows.max(total.saturating_sub(most));
         self.scroll = self.scroll.min(bottom_top);
         let top = bottom_top - self.scroll;
+        // The cards' rows shown; the menu and the box follow them.
+        let area = total.saturating_sub(top).min(most);
+        let box_top = area + menu_rows;
         let mut y = 0usize;
         for (bi, b) in self.blocks.iter_mut().enumerate() {
             let height = b.rows();
@@ -611,7 +617,7 @@ impl Pane {
 
         // The prompt box.
         let box_bg = if focused { PROMPT_BG } else { PROMPT_BG_UNFOCUSED };
-        for r in box_top..rows {
+        for r in box_top..box_top + box_rows {
             cv.fill(0, r, cols, color(box_bg));
         }
         let text_top = box_top + 1;
@@ -664,7 +670,7 @@ impl Pane {
         if let Some(command) = self.line_kind {
             let (cw, ch) = (cv.cell.0 as f32, cv.cell.1 as f32);
             let (stripe, label) = if command { (KIND_COMMAND, "command") } else { (ACCENT, "mshell") };
-            cv.fill_px(0.0, box_top as f32 * ch, 3.0, (rows - box_top) as f32 * ch, color(stripe));
+            cv.fill_px(0.0, box_top as f32 * ch, 3.0, box_rows as f32 * ch, color(stripe));
             let lw = glyphs.ui_width(label);
             let (_, cy) = at(cursor_cells);
             let x = cols as f32 * cw - cw - lw;

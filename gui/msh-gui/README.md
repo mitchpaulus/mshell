@@ -16,7 +16,9 @@ for program output, the prompt and file previews;
 
 - Not a terminal emulator: each command is a card (a header with the command, a status dot,
   its time and exit code, then its output, which alone runs in its own libghostty-vt terminal),
-  and the prompt is a box of its own at the bottom.
+  and the prompt is a box of its own.
+- The prompt box sits where a terminal's prompt would: just after the last card, at the top of a clean screen.
+  Once the cards fill the pane, or while scrolled back, it stays at the bottom, like frozen panes in a spreadsheet.
 - The prompt is yours: the engine runs `setPrompt`'s quotation (or the built-in prompt) and sends it with its colours.
 - The line is coloured as terminal msh colours it: strings, paths, variables, booleans, dates,
   and on a command line the program and the builtins and definitions underlined.
