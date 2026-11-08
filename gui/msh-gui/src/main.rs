@@ -52,6 +52,7 @@ const BORDER: u32 = 2;
 pub const BG: [u8; 3] = [0x0b, 0x0b, 0x0e];
 const PANE_BG: [u8; 3] = pane::BG;
 const TAB_SELECTED_BG: [u8; 3] = [0x2c, 0x22, 0x36];
+const TAB_PAD: f32 = 10.0;
 
 enum UserEvent {
     /// An event from the engine of the pane with this id.
@@ -95,6 +96,8 @@ struct App {
     renderer: Option<Renderer>,
     glyphs: Option<Glyphs>,
     font: Vec<u8>,
+    /// The font of the app's own text: proportional.
+    ui_font: Vec<u8>,
     font_size: f32,
     /// The window's size in pixels.
     width: usize,
@@ -189,18 +192,24 @@ impl App {
         self.layout();
     }
 
-    /// Each tab's label in the tab bar, and where it starts, in cells.
-    fn tab_labels(&self) -> Vec<(usize, String)> {
-        let mut x = 0;
-        self.tabs
+    /// Each tab's label in the tab bar, with where it starts and its width,
+    /// in pixels.
+    fn tab_labels(&mut self) -> Vec<(f32, f32, String)> {
+        let mut x = 0.0;
+        let labels: Vec<String> = self
+            .tabs
             .iter()
             .enumerate()
-            .map(|(i, tab)| {
-                let title = tab.panes[tab.focus].title.clone().unwrap_or_else(|| format!("{}", i + 1));
-                let label = format!(" {}: {} ", i + 1, title);
+            .map(|(i, tab)| format!("{}  {}", i + 1, tab.panes[tab.focus].title.clone().unwrap_or_default()).trim().to_string())
+            .collect();
+        let Some(glyphs) = &mut self.glyphs else { return Vec::new() };
+        labels
+            .into_iter()
+            .map(|label| {
+                let w = glyphs.ui_width(&label) + 2.0 * TAB_PAD;
                 let at = x;
-                x += label.chars().count() + 1;
-                (at, label)
+                x += w + 2.0;
+                (at, w, label)
             })
             .collect()
     }
@@ -209,8 +218,8 @@ impl App {
     fn click(&mut self) {
         let (px, py) = (self.pointer.0 as usize, self.pointer.1 as usize);
         if py < self.bar_height() {
-            let col = px / self.cell().0 as usize;
-            if let Some(i) = self.tab_labels().iter().position(|(at, l)| col >= *at && col < at + l.chars().count()) {
+            let x = px as f32;
+            if let Some(i) = self.tab_labels().iter().position(|(at, w, _)| x >= *at && x < at + w) {
                 self.tab = i;
                 self.layout();
             }
@@ -377,6 +386,12 @@ impl App {
 
     fn frame(&mut self) {
         self.compose();
+        // The atlas filled and was cleared as the frame was laid out: lay it
+        // out again, with fresh regions.
+        if self.glyphs.as_ref().is_some_and(|g| g.reset) {
+            self.glyphs.as_mut().unwrap().reset = false;
+            self.compose();
+        }
         let (Some(renderer), Some(glyphs)) = (&mut self.renderer, &mut self.glyphs) else { return };
         renderer.draw(glyphs, &self.quads, BG.map(|v| v as f64 / 255.0));
     }
@@ -398,14 +413,16 @@ impl App {
         // The tab bar, when there are tabs: each tab's title or number.
         if self.tabs.len() > 1 {
             let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, top: &mut self.top_quads, on_top: false, x0: 0, y0: 0, cols, rows: 1, cell };
-            for (i, (x, label)) in labels.iter().enumerate() {
+            let h = cell.1 as f32;
+            for (i, (x, w, label)) in labels.iter().enumerate() {
                 if i == self.tab {
-                    cv.fill(*x, 0, label.chars().count(), color(TAB_SELECTED_BG));
+                    cv.fill_px(*x, 0.0, *w, h, color(TAB_SELECTED_BG));
                 }
-                cv.text(glyphs, *x, 0, label, color(if i == self.tab { ACCENT } else { DIM }));
+                cv.ui_text(glyphs, x + TAB_PAD, 0.0, h, label, color(if i == self.tab { ACCENT } else { DIM }), *w);
             }
             let layout = self.tabs[self.tab].layout.name();
-            cv.text(glyphs, cols.saturating_sub(layout.len() + 1), 0, layout, color(DIM));
+            let lw = glyphs.ui_width(layout);
+            cv.ui_text(glyphs, self.width as f32 - lw - TAB_PAD, 0.0, h, layout, color(DIM), lw + 1.0);
         }
         let focus = self.tabs[self.tab].focus;
         let shown = tab_count_shown(&self.tabs[self.tab]);
@@ -417,10 +434,10 @@ impl App {
             if i == focus && shown > 1 {
                 let b = BORDER;
                 for (bx, by, bw, bh) in [(x - b, y - b, w + 2 * b, b), (x - b, y + h, w + 2 * b, b), (x - b, y, b, h), (x + w, y, b, h)] {
-                    self.quads.push(Quad { x: bx, y: by, w: bw, h: bh, glyph: render::SOLID, color: color(ACCENT) });
+                    self.quads.push(Quad::solid(bx, by, bw, bh, color(ACCENT)));
                 }
             }
-            self.quads.push(Quad { x, y, w, h, glyph: render::SOLID, color: color(PANE_BG) });
+            self.quads.push(Quad::solid(x, y, w, h, color(PANE_BG)));
             let pane = &mut self.tabs[self.tab].panes[i];
             let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, top: &mut self.top_quads, on_top: false, x0: x, y0: y, cols: pane.cols, rows: pane.rows, cell };
             pane.compose(&mut cv, glyphs, i == focus);
@@ -442,7 +459,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
         let attrs = Window::default_attributes().with_title("msh").with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
         let window = Arc::new(el.create_window(attrs).expect("create_window"));
-        let glyphs = Glyphs::new(std::mem::take(&mut self.font), self.font_size * window.scale_factor() as f32);
+        let glyphs = Glyphs::new(std::mem::take(&mut self.font), std::mem::take(&mut self.ui_font), self.font_size * window.scale_factor() as f32);
         let renderer = Renderer::new(window.clone(), &glyphs);
         self.glyphs = Some(glyphs);
         self.renderer = Some(renderer);
@@ -539,6 +556,8 @@ fn main() {
     };
     let font_path = std::env::var("MSH_GUI_FONT").unwrap_or_else(|_| "/usr/share/fonts/noto/NotoSansMono-Regular.ttf".into());
     let font = std::fs::read(&font_path).unwrap_or_else(|e| panic!("reading font {font_path}: {e}"));
+    let ui_font_path = std::env::var("MSH_GUI_UI_FONT").unwrap_or_else(|_| "/usr/share/fonts/noto/NotoSans-Regular.ttf".into());
+    let ui_font = std::fs::read(&ui_font_path).unwrap_or_else(|e| panic!("reading font {ui_font_path}: {e}"));
     let font_size = std::env::var("MSH_GUI_FONT_SIZE").ok().and_then(|s| s.parse().ok()).unwrap_or(15.0);
     let mut app = App {
         msh,
@@ -550,6 +569,7 @@ fn main() {
         renderer: None,
         glyphs: None,
         font,
+        ui_font,
         font_size,
         width: 800,
         height: 600,

@@ -2,7 +2,7 @@
 //! prompt box (ai/gui-terminal.typ: one engine and one PTY per pane).
 
 use crate::keys::key_label;
-use crate::render::{rgba, Glyphs, Quad, SOLID};
+use crate::render::{rgba, Glyphs, Icon, Quad};
 use crate::vt;
 use msh_client::{Engine, EngineHost, Event, FmView};
 use msh_editor::edit::{EditOp, Line};
@@ -217,16 +217,23 @@ impl Pane {
         }
     }
 
-    /// The file manager dialog's place in the pane, in cells.
-    fn fm_rect(&self) -> (usize, usize, usize, usize) {
-        let (x, y) = (2.min(self.cols / 10), 1.min(self.rows / 10));
-        (x, y, self.cols - 2 * x, self.rows - 2 * y)
+    /// The file manager dialog's place in the pane, in pixels.
+    fn fm_rect(&self) -> (f32, f32, f32, f32) {
+        let (w, h) = ((self.cols as u32 * self.cell.0) as f32, (self.rows as u32 * self.cell.1) as f32);
+        let inset = FM_INSET.min(w / 10.0).min(h / 10.0);
+        (inset, inset, w - 2.0 * inset, h - 2.0 * inset)
     }
 
-    /// Tells the file manager the dialog's size, when it changed.
+    /// The dialog's row height: roomier than a cell.
+    fn fm_row(&self) -> f32 {
+        (self.cell.1 as f32 * 1.4).round()
+    }
+
+    /// Tells the file manager the dialog's size, when it changed: rows of
+    /// the dialog, and columns of the monospace cell.
     fn size_fm(&mut self) {
         let (_, _, w, h) = self.fm_rect();
-        let size = (w as u16, h as u16);
+        let size = ((w / self.cell.0 as f32) as u16, (h / self.fm_row()) as u16);
         if size != self.fm_size {
             self.fm_size = size;
             let _ = self.engine.fm_resize(size.0, size.1);
@@ -479,18 +486,24 @@ impl Pane {
                     Some((0, _)) => ('●', OK),
                     Some(_) => ('●', FAILED),
                 };
-                if b.command.is_empty() {
-                    cv.text(glyphs, MARGIN, wy, "startup", color(DIM));
-                } else {
-                    cv.put(glyphs, MARGIN, wy, mark, color(mark_color));
-                    let command: String = b.command.chars().filter(|c| *c != '\n').take(cols.saturating_sub(4)).collect();
-                    cv.text(glyphs, MARGIN + 2, wy, &command, color(COMMAND));
-                }
+                // The command and its status in the UI font; the mark is the
+                // monospace font's.
+                let (cw, ch) = (cv.cell.0 as f32, cv.cell.1 as f32);
+                let (hy, width) = (wy as f32 * ch, cols as f32 * cw);
+                let mut status_w = 0.0;
                 if let Some((code, ns)) = b.finished.filter(|_| !b.command.is_empty()) {
                     let secs = ns as f64 / 1e9;
-                    let status = if code == 0 { format!("{secs:.1} s") } else { format!("exit {code}  {secs:.1} s") };
-                    let x = cols.saturating_sub(status.chars().count() + MARGIN);
-                    cv.text(glyphs, x, wy, &status, color(if code == 0 { DIM } else { FAILED }));
+                    let status = if code == 0 { format!("{secs:.1} s") } else { format!("exit {code}   {secs:.1} s") };
+                    status_w = glyphs.ui_width(&status);
+                    let c = color(if code == 0 { DIM } else { FAILED });
+                    cv.ui_text(glyphs, width - cw - status_w, hy, ch, &status, c, status_w + 1.0);
+                }
+                if b.command.is_empty() {
+                    cv.ui_text(glyphs, cw, hy, ch, "startup", color(DIM), width);
+                } else {
+                    cv.put(glyphs, MARGIN, wy, mark, color(mark_color));
+                    let command: String = b.command.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
+                    cv.ui_text(glyphs, 3.0 * cw, hy, ch, &command, color(COMMAND), width - 5.0 * cw - status_w);
                 }
             }
             let content_y = y + 1;
@@ -548,9 +561,11 @@ impl Pane {
         }
         let text_top = box_top + 1;
         if let Some(i) = self.running {
-            cv.text(glyphs, PROMPT_INSET, text_top, "running:", color(DIM));
-            let command: String = self.blocks[i].command.chars().filter(|c| *c != '\n').collect();
-            cv.text(glyphs, PROMPT_INSET + 9, text_top, &command, color(COMMAND));
+            let (cw, ch) = (cv.cell.0 as f32, cv.cell.1 as f32);
+            let (x, y) = (PROMPT_INSET as f32 * cw, text_top as f32 * ch);
+            let label = cv.ui_text(glyphs, x, y, ch, "running", color(DIM), cols as f32 * cw);
+            let command: String = self.blocks[i].command.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
+            cv.ui_text(glyphs, x + label + cw, y, ch, &command, color(COMMAND), (cols - 2 * PROMPT_INSET) as f32 * cw - label - cw);
             return;
         }
         if let Some(p) = &mut self.prompt {
@@ -574,44 +589,52 @@ impl Pane {
 
 impl Pane {
     /// The file manager, as a dialog over the pane: the directory, its
-    /// entries and the preview side by side, the status or prompt line,
-    /// and the key popup or a question in a box over them.
+    /// entries with their icons and the preview side by side, the status or
+    /// prompt line, and the key popup or a question in a box over them.
+    /// The app's own text is in the UI font; the preview, which shows files,
+    /// is monospace.
     fn compose_fm(&mut self, cv: &mut Canvas, glyphs: &mut Glyphs, focused: bool) {
         let (x0, y0, w, h) = self.fm_rect();
+        let row = self.fm_row();
+        let (cw, ch) = (self.cell.0 as f32, self.cell.1 as f32);
         let Some(v) = &self.fm else { return };
-        for r in y0..y0 + h {
-            cv.fill(x0, r, w, color(FM_BG));
-        }
+        let pad = 10.0;
+        cv.fill_px(x0, y0, w, h, color(FM_BG));
         // The header: where, and what is cut, copied and selected.
-        cv.fill(x0, y0, w, color(FM_HEADER_BG));
-        let clip_w = v.clipboard.chars().count();
-        let header: String = v.header.chars().take(w.saturating_sub(clip_w + 2)).collect();
-        cv.text(glyphs, x0 + 1, y0, &header, color(FG));
-        cv.text(glyphs, (x0 + w).saturating_sub(clip_w + 1), y0, &v.clipboard, color(CLIP));
-        let body = y0 + 1;
-        let list_rows = h.saturating_sub(2);
+        cv.fill_px(x0, y0, w, row, color(FM_HEADER_BG));
+        let clip_w = glyphs.ui_width(&v.clipboard);
+        cv.ui_text(glyphs, x0 + w - pad - clip_w, y0, row, &v.clipboard, color(CLIP), clip_w + 1.0);
+        cv.ui_text(glyphs, x0 + pad, y0, row, &v.header, color(FG), w - 3.0 * pad - clip_w);
+        let body = y0 + row;
+        let rows = ((h / row) as usize).saturating_sub(2);
         if v.help {
-            for (i, line) in v.preview.iter().take(list_rows).enumerate() {
-                cv.text(glyphs, x0 + 1, body + i, &truncate(line, w - 2), color(FG));
+            for (i, line) in v.preview.iter().take(rows).enumerate() {
+                cv.ui_text(glyphs, x0 + pad, body + i as f32 * row, row, line.trim_start(), color(FG), w - 2.0 * pad);
             }
         } else {
-            let left = (w * 2 / 5).clamp(20.min(w), w);
-            let marker_w = v.entries.iter().map(|e| e.marker.chars().count()).max().unwrap_or(0);
-            let size_w = v.entries.iter().map(|e| e.size.chars().count()).max().unwrap_or(0);
-            for (i, e) in v.entries.iter().take(list_rows).enumerate() {
-                let row = body + i;
+            let left = (w * 0.42).round();
+            let icon = (row * 0.62).round() as u32;
+            for (i, e) in v.entries.iter().take(rows).enumerate() {
+                let y = body + i as f32 * row;
                 if e.cursor {
-                    cv.fill(x0, row, left, color(if focused { SELECTED_BG } else { MENU_BG }));
+                    cv.fill_px(x0 + 4.0, y + 1.0, left - 8.0, row - 2.0, color(if focused { SELECTED_BG } else { MENU_BG }));
                 }
-                let mut x = x0 + 1;
-                if marker_w > 0 {
-                    cv.text(glyphs, x, row, &e.marker, color(DIM));
-                    x += marker_w + 1;
+                let mut x = x0 + pad;
+                if !e.marker.is_empty() {
+                    x += cv.ui_text(glyphs, x, y, row, &e.marker, color(DIM), 2.0 * cw) + 6.0;
                 }
-                if e.selected {
-                    cv.put(glyphs, x, row, '*', color(ACCENT));
+                let iy = y + ((row - icon as f32) / 2.0).round();
+                if e.dir {
+                    cv.icon(glyphs, Icon::FolderBack, x, iy, icon, color(FOLDER_BACK));
+                    cv.icon(glyphs, Icon::FolderFront, x, iy, icon, color(FOLDER));
+                } else {
+                    cv.icon(glyphs, Icon::File, x, iy, icon, color(FILE_ICON));
                 }
-                x += 1;
+                x += icon as f32 + 8.0;
+                let size_w = if e.size.is_empty() { 0.0 } else { glyphs.ui_width(&e.size) };
+                if size_w > 0.0 {
+                    cv.ui_text(glyphs, x0 + left - pad - size_w, y, row, &e.size, color(DIM), size_w + 1.0);
+                }
                 let name_color = if e.cut {
                     FAILED
                 } else if e.copied {
@@ -621,54 +644,75 @@ impl Pane {
                 } else {
                     FG
                 };
-                let name = if e.dir { format!("{}/", e.name) } else { e.name.clone() };
-                let room = (x0 + left).saturating_sub(x + size_w + 2);
-                cv.text(glyphs, x, row, &truncate(&name, room), color(name_color));
-                if !e.size.is_empty() {
-                    let sx = (x0 + left).saturating_sub(e.size.chars().count() + 1);
-                    cv.text(glyphs, sx, row, &e.size, color(DIM));
+                let room = x0 + left - pad - size_w - 12.0 - x;
+                let name_w = cv.ui_text(glyphs, x, y, row, &e.name, color(name_color), room);
+                if e.selected {
+                    cv.ui_text(glyphs, x + name_w + 4.0, y, row, "●", color(ACCENT), 2.0 * cw);
                 }
             }
-            // The preview, past a rule.
-            let px = x0 + left + 1;
-            for r in 0..list_rows {
-                cv.put(glyphs, x0 + left, body + r, '│', color(RULE));
-            }
-            let room = (x0 + w).saturating_sub(px + 1);
-            for (i, line) in v.preview.iter().take(list_rows).enumerate() {
-                let mut x = px + 1;
+            // The preview, past a rule, in the monospace font.
+            cv.fill_px(x0 + left, body + 4.0, 1.0, rows as f32 * row - 8.0, color(RULE));
+            let px = x0 + left + pad + 4.0;
+            let cols = ((x0 + w - pad - px) / cw).max(0.0) as usize;
+            let lines = ((rows as f32 * row) / ch) as usize;
+            for (i, line) in v.preview.iter().take(lines).enumerate() {
+                let y = body + 4.0 + i as f32 * ch;
+                let mut col = 0;
                 for (text, fg) in sgr_spans(line) {
-                    let n = text.chars().count().min((px + 1 + room).saturating_sub(x));
-                    cv.text(glyphs, x, body + i, &truncate(&text, n), color(fg.unwrap_or(PREVIEW)));
-                    x += n;
+                    for c in text.chars() {
+                        if col >= cols {
+                            break;
+                        }
+                        cv.mono_px(glyphs, px + col as f32 * cw, y, c, color(fg.unwrap_or(PREVIEW)));
+                        col += 1;
+                    }
                 }
             }
         }
         // The bottom: the prompt line, or a message, or the summary.
-        let bottom = y0 + h - 1;
+        let bottom = y0 + h - row;
         if let Some((label, text, cursor)) = &v.line {
-            cv.text(glyphs, x0 + 1, bottom, label, color(ACCENT));
-            let lx = x0 + 1 + label.chars().count();
-            cv.text(glyphs, lx, bottom, text, color(FG));
+            let lw = cv.ui_text(glyphs, x0 + pad, bottom, row, label, color(ACCENT), w / 3.0);
+            let lx = x0 + pad + lw;
+            cv.ui_text(glyphs, lx, bottom, row, text, color(FG), w - 2.0 * pad - lw);
             if focused {
-                let c = text[..(*cursor).min(text.len())].chars().count();
-                cv.cursor(lx + c, bottom);
+                let before = glyphs.ui_width(&text[..(*cursor).min(text.len())]);
+                cv.fill_px(lx + before, bottom + 4.0, 2.0, row - 8.0, color(FG));
             }
         } else if v.status_kind != 0 {
             let c = if v.status_kind == 2 { MESSAGE } else { DIM };
-            cv.text(glyphs, x0 + 1, bottom, &truncate(&v.status, w - 2), color(c));
+            cv.ui_text(glyphs, x0 + pad, bottom, row, &v.status, color(c), w - 2.0 * pad);
         }
         // The key popup or a question, in a box over the rest.
         if !v.overlay.is_empty() {
             cv.on_top = true;
-            let bw = v.overlay.iter().map(|l| l.chars().count()).max().unwrap_or(0).min(w - 4) + 2;
-            let bh = v.overlay.len().min(h - 2);
-            let (bx, by) = (x0 + (w - bw) / 2, y0 + (h - bh) / 2);
-            for r in 0..bh {
-                cv.fill(bx, by + r, bw, color(OVERLAY_BG));
-            }
-            for (i, line) in v.overlay.iter().take(bh).enumerate() {
-                cv.text(glyphs, bx + 1, by + i, &truncate(line, bw - 2), color(if i == 0 { ACCENT } else { FG }));
+            // The popup's lines are key and description, laid out in
+            // columns for the terminal: here the descriptions line up by
+            // their own measure.
+            let keys_w = v.overlay.iter().skip(1).map(|l| glyphs.ui_width(l.trim().split("  ").next().unwrap_or(""))).fold(0.0f32, f32::max);
+            let widest = v.overlay.iter().enumerate().map(|(i, l)| match l.trim().split_once("  ").filter(|_| i > 0) {
+                Some((_, what)) => keys_w + pad + glyphs.ui_width(what.trim()),
+                None => glyphs.ui_width(l.trim()),
+            }).fold(0.0f32, f32::max);
+            let bw = (widest + 3.0 * pad).min(w - 2.0 * pad);
+            let bh = (v.overlay.len() as f32 * row + pad).min(h - 2.0 * pad);
+            let (bx, by) = (x0 + ((w - bw) / 2.0).round(), y0 + ((h - bh) / 2.0).round());
+            cv.fill_px(bx, by, bw, bh, color(OVERLAY_BG));
+            for (i, line) in v.overlay.iter().enumerate() {
+                let y = by + pad / 2.0 + i as f32 * row;
+                if y + row > by + bh {
+                    break;
+                }
+                let line = line.trim();
+                match line.split_once("  ").filter(|_| i > 0) {
+                    Some((key, what)) => {
+                        cv.ui_text(glyphs, bx + 1.5 * pad, y, row, key, color(ACCENT), keys_w + 1.0);
+                        cv.ui_text(glyphs, bx + 2.5 * pad + keys_w, y, row, what.trim(), color(FG), bw - keys_w - 4.0 * pad);
+                    }
+                    None => {
+                        cv.ui_text(glyphs, bx + 1.5 * pad, y, row, line, color(if i == 0 { ACCENT } else { FG }), bw - 3.0 * pad);
+                    }
+                }
             }
             cv.on_top = false;
         }
@@ -743,12 +787,12 @@ fn xterm256(n: u8) -> [u8; 3] {
     }
 }
 
-/// At most `n` characters of `s`.
-fn truncate(s: &str, n: usize) -> String {
-    s.chars().take(n).collect()
-}
 
 const FM_BG: [u8; 3] = [0x16, 0x15, 0x1b];
+const FM_INSET: f32 = 14.0;
+const FOLDER: [u8; 3] = [0x6a, 0xa8, 0xe8];
+const FOLDER_BACK: [u8; 3] = [0x3f, 0x6f, 0xa8];
+const FILE_ICON: [u8; 3] = [0x8c, 0x8c, 0x98];
 const FM_HEADER_BG: [u8; 3] = [0x2c, 0x22, 0x36];
 const OVERLAY_BG: [u8; 3] = [0x30, 0x2a, 0x3a];
 const CLIP: [u8; 3] = [0x6c, 0xc8, 0xd0];
@@ -775,16 +819,24 @@ pub struct Canvas<'a> {
 }
 
 impl Canvas<'_> {
-    fn at(&self, col: usize, row: usize, width: usize, glyph: u32, color: u32) -> Quad {
-        let (cw, ch) = self.cell;
-        Quad { x: self.x0 + col as u32 * cw, y: self.y0 + row as u32 * ch, w: width as u32 * cw, h: ch, glyph, color }
+    fn push_solid(&mut self, q: Quad) {
+        if self.on_top { self.top.push(q) } else { self.solid.push(q) }
+    }
+
+    fn push_glyph(&mut self, q: Quad) {
+        if self.on_top { self.top.push(q) } else { self.glyph.push(q) }
+    }
+
+    /// A cell's top left corner, in pixels.
+    fn cell_px(&self, col: usize, row: usize) -> (u32, u32) {
+        (self.x0 + col as u32 * self.cell.0, self.y0 + row as u32 * self.cell.1)
     }
 
     pub fn put(&mut self, glyphs: &mut Glyphs, col: usize, row: usize, c: char, fg: u32) {
         if c != ' ' && col < self.cols && row < self.rows {
-            let slot = glyphs.slot(c);
-            let q = self.at(col, row, 1, slot, fg);
-            if self.on_top { self.top.push(q) } else { self.glyph.push(q) }
+            let r = glyphs.mono(c);
+            let (x, y) = self.cell_px(col, row);
+            self.push_glyph(Quad { x, y, w: r.w, h: r.h, u: r.u, v: r.v, color: fg });
         }
     }
 
@@ -796,15 +848,51 @@ impl Canvas<'_> {
 
     pub fn fill(&mut self, col: usize, row: usize, width: usize, bg: u32) {
         if row < self.rows && col < self.cols {
-            let q = self.at(col, row, width.min(self.cols - col), SOLID, bg);
-            if self.on_top { self.top.push(q) } else { self.solid.push(q) }
+            let (x, y) = self.cell_px(col, row);
+            let w = width.min(self.cols - col) as u32 * self.cell.0;
+            self.push_solid(Quad::solid(x, y, w, self.cell.1, bg));
         }
+    }
+
+    /// A rectangle in pixels from the origin.
+    pub fn fill_px(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) {
+        if w > 0.0 && h > 0.0 {
+            let (x, y) = (self.x0 + x.max(0.0) as u32, self.y0 + y.max(0.0) as u32);
+            self.push_solid(Quad::solid(x, y, w as u32, h as u32, color));
+        }
+    }
+
+    /// A monospace character at a pixel position from the origin.
+    pub fn mono_px(&mut self, glyphs: &mut Glyphs, x: f32, y: f32, c: char, fg: u32) {
+        if c != ' ' {
+            let r = glyphs.mono(c);
+            self.push_glyph(Quad { x: self.x0 + x as u32, y: self.y0 + y as u32, w: r.w, h: r.h, u: r.u, v: r.v, color: fg });
+        }
+    }
+
+    /// Text in the UI font in a row of height `h` at (x, y) from the
+    /// origin, centred on it, cut to `max` pixels; returns its width.
+    pub fn ui_text(&mut self, glyphs: &mut Glyphs, x: f32, y: f32, h: f32, text: &str, color: u32, max: f32) -> f32 {
+        let m = glyphs.ui;
+        let baseline = y + ((h - (m.ascent + m.descent)) / 2.0).round() + m.ascent;
+        let mut quads = Vec::new();
+        let w = glyphs.ui_text(&mut quads, self.x0 as f32 + x, self.y0 as f32 + baseline, text, color, max);
+        for q in quads {
+            self.push_glyph(q);
+        }
+        w
+    }
+
+    /// An icon `size` pixels square at (x, y) from the origin.
+    pub fn icon(&mut self, glyphs: &mut Glyphs, icon: Icon, x: f32, y: f32, size: u32, color: u32) {
+        let r = glyphs.icon(icon, size);
+        self.push_glyph(Quad { x: self.x0 + x as u32, y: self.y0 + y as u32, w: r.w, h: r.h, u: r.u, v: r.v, color });
     }
 
     fn cursor(&mut self, col: usize, row: usize) {
         if col < self.cols && row < self.rows {
-            let q = self.at(col, row, 1, SOLID, cursor_color());
-            self.glyph.push(q);
+            let (x, y) = self.cell_px(col, row);
+            self.push_glyph(Quad::solid(x, y, self.cell.0, self.cell.1, cursor_color()));
         }
     }
 

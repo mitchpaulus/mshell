@@ -127,7 +127,7 @@ fn ready(app: &App) -> bool {
 
 pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols: u16, rows: u16) -> Result<(), String> {
     let steps = parse(script)?;
-    let glyphs = Glyphs::new(std::mem::take(&mut app.font), app.font_size);
+    let glyphs = Glyphs::new(std::mem::take(&mut app.font), std::mem::take(&mut app.ui_font), app.font_size);
     let (cw, ch) = (glyphs.cell.w, glyphs.cell.h);
     app.glyphs = Some(glyphs);
     app.resize(cols as u32 * cw, rows as u32 * ch);
@@ -174,6 +174,10 @@ pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols
         }
     }
     app.compose();
+    if app.glyphs.as_ref().is_some_and(|g| g.reset) {
+        app.glyphs.as_mut().unwrap().reset = false;
+        app.compose();
+    }
     let glyphs = app.glyphs.as_ref().unwrap();
     let (w, h, px) = draw_cpu(glyphs, &app.quads, app.width as u32, app.height as u32, BG);
     let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();

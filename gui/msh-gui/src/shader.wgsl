@@ -1,12 +1,10 @@
 // Instanced quads in pixels: a solid rectangle (backgrounds, borders, the
-// cursor) or a glyph from the atlas, a grid of cell-sized slots.
+// cursor), or an atlas region as large as the quad (a glyph, an icon),
+// whose alpha masks the colour.
 
 struct Globals {
     screen: vec2<f32>,     // surface size in pixels
-    cell: vec2<f32>,       // cell size in pixels
     atlas_size: vec2<f32>, // atlas size in pixels
-    atlas_cols: u32,       // slots per atlas row
-    _pad: u32,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -26,18 +24,18 @@ struct VsOut {
 fn vs_main(
     @builtin(vertex_index) vi: u32,
     @location(0) rect: vec4<u32>, // x, y, width and height in pixels
-    @location(1) glyph: u32,
+    @location(1) uv: vec2<u32>,   // the atlas region's corner, or SOLID
     @location(2) color: u32,
 ) -> VsOut {
     let corner = vec2<f32>(f32(vi & 1u), f32(vi >> 1u));
-    let pixel = vec2<f32>(rect.xy) + corner * vec2<f32>(rect.zw);
+    let size = vec2<f32>(rect.zw);
+    let pixel = vec2<f32>(rect.xy) + corner * size;
     let ndc = pixel / g.screen * 2.0 - 1.0;
     var out: VsOut;
     out.pos = vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);
     out.color = unpack4x8unorm(color);
-    out.solid = select(0u, 1u, glyph == SOLID);
-    let slot = vec2<f32>(f32(glyph % g.atlas_cols), f32(glyph / g.atlas_cols));
-    out.uv = (slot + corner) * g.cell / g.atlas_size;
+    out.solid = select(0u, 1u, uv.x == SOLID);
+    out.uv = (vec2<f32>(uv) + corner * size) / g.atlas_size;
     return out;
 }
 
