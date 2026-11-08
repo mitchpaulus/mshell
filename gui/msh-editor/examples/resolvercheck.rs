@@ -152,7 +152,7 @@ fn main() {
                 action: if is_func { Action::Func(id) } else { Action::Ops(ops(&b["ops"])) },
             });
         }
-        let cfg = Config { keymap: Keymap::new(bindings), abbrs };
+        let cfg = Config { keymap: Keymap::new(bindings), abbrs, names: Default::default() };
         let mut ed = Editor::new(case["line"].as_str().unwrap(), case["cursor"].as_u64().unwrap() as usize);
         let base = 1_000_000_000_000_000_000i64;
         let mut case_bad = false;

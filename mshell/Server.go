@@ -461,6 +461,7 @@ func runServer() int {
 	}
 	state.stdLibDefs = stdLibDefs
 	state.checker = &replChecker{session: state.evalState.StartupSession}
+	state.loadHistory()
 	state.printStartupErrors()
 	state.evalState.printAbbrWarnings()
 	// The frontend's editor waits for the first config: the bindings
@@ -521,6 +522,9 @@ func (s *server) runBlock(state *TermState, run serverRun) (int, bool) {
 	} else {
 		source := strings.TrimSpace(run.source)
 		state.lineRan = source != ""
+		if source != "" {
+			s.recordHistory(state, source)
+		}
 		exit, code = state.runLine(source)
 		if state.lineRan {
 			state.recordLine()

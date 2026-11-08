@@ -18,6 +18,11 @@ for program output, the prompt and file previews;
   its time and exit code, then its output, which alone runs in its own libghostty-vt terminal),
   and the prompt is a box of its own at the bottom.
 - The prompt is yours: the engine runs `setPrompt`'s quotation (or the built-in prompt) and sends it with its colours.
+- The line is coloured as terminal msh colours it: strings, paths, variables, booleans, dates,
+  and on a command line the program and the builtins and definitions underlined.
+  The history suggestion shows after it, dimmed: Ctrl-F at the end of the line or Ctrl-Y takes it.
+  Up and Down, Ctrl-P and Ctrl-N (prefix search) and Alt-. (last argument) run in the engine, on msh's history;
+  each line run is saved to it at once.
 - Tab completes as terminal msh does, run by the engine; the candidates show in a menu above the prompt box,
   and Tab, Shift-Tab and the arrows move through them.
 - The prompt is edited by the Rust port of msh's editor (`gui/msh-editor`):
@@ -54,6 +59,6 @@ runs the app headless from a script of keys and writes the frame it would draw (
 
 ## Not yet
 
-History, selection and copy, mouse reporting, the mouse in the file manager, image previews,
+Selection and copy, mouse reporting, the mouse in the file manager, image previews,
 resizing finished blocks, fallback fonts, wide characters and bold.
 A cell shows its first code point, one cell wide.

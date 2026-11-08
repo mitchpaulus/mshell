@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"slices"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -372,6 +373,7 @@ func TestServerExit(t *testing.T) {
 type testConfig struct {
 	bindings []testBinding
 	abbrs    []testAbbr
+	names    []string
 }
 
 type testBinding struct {
@@ -447,6 +449,9 @@ func decodeTestConfig(t *testing.T, b []byte) testConfig {
 		}
 		str()
 		c.abbrs = append(c.abbrs, ta)
+	}
+	for range u32() {
+		c.names = append(c.names, str())
 	}
 	if len(b) != 0 {
 		t.Fatalf("%d bytes after the config", len(b))
@@ -763,5 +768,46 @@ func TestServerFileManagerGUI(t *testing.T) {
 	}
 	if _, code := c.rest(1); code != 0 {
 		t.Fatalf("file manager block: exit %d", code)
+	}
+}
+
+func TestServerHistory(t *testing.T) {
+	c := startServer(t)
+	le := binary.LittleEndian
+	c.run(1, "echo one-two")
+	if out, code := c.block(1); out != "one-two\r\n" || code != 0 {
+		t.Fatalf("echo: %q, %d", out, code)
+	}
+	// The names highlighting underlines: builtins and definitions.
+	config := decodeTestConfig(t, c.config.data)
+	if !slices.Contains(config.names, "wl") || !slices.Contains(config.names, "map") {
+		t.Fatalf("config names: %d, without wl or map", len(config.names))
+	}
+	// The line is history now: suggested for its start.
+	r := c.call(serverMsgLineKind, 1, []byte("echo o"))
+	if r.status != callYes || string(r.data) != "ne-two" {
+		t.Fatalf("line_info: status %d, suggestion %q", r.status, r.data)
+	}
+	edit := func(request uint32, op editOpKind, line string, cursor int) (string, int) {
+		t.Helper()
+		p := append([]byte{byte(op)}, le.AppendUint32(nil, uint32(cursor))...)
+		r := c.call(serverMsgEdit, request, append(p, line...))
+		if r.status != callYes {
+			t.Fatalf("edit %d: status %d, %q", op, r.status, r.data)
+		}
+		b := r.data
+		n := int(le.Uint16(b[10:]))
+		b = b[12:]
+		for range n {
+			b = b[4+le.Uint32(b):]
+		}
+		return string(b), int(le.Uint32(r.data))
+	}
+	// Up brings it back; Ctrl-F at the end of a line takes the suggestion.
+	if line, cur := edit(2, opHistoryPrev, "", 0); line != "echo one-two" || cur != len(line) {
+		t.Fatalf("history prev: %q at %d", line, cur)
+	}
+	if line, _ := edit(3, opForward, "echo o", 6); line != "echo one-two" {
+		t.Fatalf("forward: %q", line)
 	}
 }

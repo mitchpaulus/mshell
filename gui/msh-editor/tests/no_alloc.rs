@@ -64,7 +64,7 @@ fn keystroke_path_does_not_allocate() {
             marker: "%".into(),
         },
     ];
-    let cfg = Config { abbrs, keymap: Keymap::new(vec![
+    let cfg = Config { abbrs, names: Default::default(), keymap: Keymap::new(vec![
         // A chord, a pure multi-key binding, and moves and deletes.
         bind(0, &[c('j'), c('k')], 200, vec![EditOp::Backspace, EditOp::Insert("→".into())]),
         bind(1, &[c('w').with(MOD_CTRL)], 0, vec![EditOp::DeleteWordLeft]),

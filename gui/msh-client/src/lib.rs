@@ -112,10 +112,11 @@ pub fn decode_config(b: &[u8]) -> Result<Config, String> {
         let matcher = if regex { AbbrMatch::Regex(word) } else { AbbrMatch::Word(word) };
         abbrs.push(Abbr { id, matcher, position, expansion, marker });
     }
+    let names = (0..r.u32()?).map(|_| r.str()).collect::<Result<_, _>>()?;
     if !r.b.is_empty() {
         return Err(format!("{} bytes after the config", r.b.len()));
     }
-    Ok(Config { keymap: Keymap::new(bindings), abbrs })
+    Ok(Config { keymap: Keymap::new(bindings), abbrs, names })
 }
 
 /// The EditOp members in the engine's order (Bindings.go's editOpKind).
@@ -370,8 +371,10 @@ impl Engine {
         })
     }
 
-    /// Runs a completion op (`EditOp::Complete` and the rest) on the line in
-    /// the engine, which keeps the completion cycle between requests.
+    /// Runs an op the engine does on the line: completion (`EditOp::Complete`
+    /// and the rest, the engine keeping the cycle between requests), and
+    /// history (`EditOp::HistoryPrev` and the rest, `Forward`,
+    /// `AcceptSuggestion`, `LastArg`).
     pub fn edit(&mut self, op: &EditOp, line: &str, cursor: usize) -> io::Result<Edited> {
         let member = op_member(op).ok_or_else(|| bad(format!("{op:?} is not an op the engine edits")))?;
         let kind = EDIT_OP_MEMBERS.iter().position(|m| *m == member).unwrap() as u8;
@@ -393,9 +396,11 @@ impl Engine {
     }
 
     /// Whether a line runs as a command line (the simple CLI parser) rather
-    /// than as mshell, by the rule the engine runs lines with.
-    pub fn is_command_line(&mut self, line: &str) -> io::Result<bool> {
-        Ok(self.call(MSG_LINE_KIND, line.as_bytes())?.status == CALL_YES)
+    /// than as mshell, by the rule the engine runs lines with; and the
+    /// history suggestion's text after it.
+    pub fn line_info(&mut self, line: &str) -> io::Result<(bool, String)> {
+        let r = self.call(MSG_LINE_KIND, line.as_bytes())?;
+        Ok((r.status == CALL_YES, String::from_utf8_lossy(&r.data).into_owned()))
     }
 
     pub fn is_program(&mut self, word: &str) -> io::Result<bool> {
@@ -594,6 +599,13 @@ fn op_member(op: &EditOp) -> Option<&'static str> {
         EditOp::CompleteLeft => "editCompleteLeft",
         EditOp::CompleteRight => "editCompleteRight",
         EditOp::CompleteAccept => "editCompleteAccept",
+        EditOp::HistoryPrev => "editHistoryPrev",
+        EditOp::HistoryNext => "editHistoryNext",
+        EditOp::HistorySearchBack => "editHistorySearchBack",
+        EditOp::HistorySearchForward => "editHistorySearchForward",
+        EditOp::Forward => "editForward",
+        EditOp::AcceptSuggestion => "editAcceptSuggestion",
+        EditOp::LastArg => "editLastArg",
         _ => return None,
     })
 }

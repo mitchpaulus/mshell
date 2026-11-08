@@ -513,6 +513,15 @@ func (p *stylePainter) appendText(dst []byte, offset ByteOffset, text string) []
 	return dst
 }
 
+// suggestionText is the history suggestion's text after the current
+// command, whether or not suggestions are shown: for msh server.
+func (state *TermState) suggestionText() SourceText {
+	if len(state.historyComplete) <= len(state.currentCommand) || state.historyComplete[:len(state.currentCommand)] != state.currentCommand {
+		return ""
+	}
+	return state.historyComplete[len(state.currentCommand):]
+}
+
 // suggestionSuffix is the history ghost text after the current command, or
 // empty when suggestions are hidden or the completion no longer matches.
 func (state *TermState) suggestionSuffix() SourceText {

@@ -112,13 +112,21 @@ fn effect(log: &RefCell<Effects>, engine: &mut Engine, op: &EditOp, line: &mut L
             e.run = Some((*q, true));
             false
         }
+        // Completion and history run in the engine, on the line.
         EditOp::Complete
         | EditOp::CompleteBack
         | EditOp::CompleteNext
         | EditOp::CompletePrev
         | EditOp::CompleteLeft
         | EditOp::CompleteRight
-        | EditOp::CompleteAccept => {
+        | EditOp::CompleteAccept
+        | EditOp::HistoryPrev
+        | EditOp::HistoryNext
+        | EditOp::HistorySearchBack
+        | EditOp::HistorySearchForward
+        | EditOp::Forward
+        | EditOp::AcceptSuggestion
+        | EditOp::LastArg => {
             if let Ok(r) = engine.edit(op, &line.text, line.cursor) {
                 line.text = r.line;
                 line.cursor = r.cursor;
@@ -126,7 +134,6 @@ fn effect(log: &RefCell<Effects>, engine: &mut Engine, op: &EditOp, line: &mut L
             }
             false
         }
-        // Not yet: history.
         _ => false,
     }
 }
@@ -163,12 +170,12 @@ pub struct Pane {
     pub fm: Option<FmView>,
     fm_size: (u16, u16),
     /// How the line would run: Some(true) as a command line, Some(false) as
-    /// mshell, None for an empty line. The engine's answers are kept by
-    /// the line's first word until the next block, which can change PATH
-    /// or the definitions.
+    /// mshell, None for an empty line; and the history suggestion after it.
+    /// The engine answers both, for each change to the line.
     line_kind: Option<bool>,
-    kinds: HashMap<String, bool>,
+    suggestion: String,
     lexer: Lexer,
+    tokens: Vec<msh_editor::lexer::Token>,
     key_bytes: Vec<u8>,
 }
 
@@ -197,8 +204,9 @@ impl Pane {
             fm: None,
             fm_size: (0, 0),
             line_kind: None,
-            kinds: HashMap::new(),
+            suggestion: String::new(),
             lexer: Lexer::editor(),
+            tokens: Vec::new(),
             key_bytes: Vec::new(),
         }
     }
@@ -327,7 +335,6 @@ impl Pane {
             }
             Event::BlockFinished { id, exit_code, duration_ns } => {
                 self.fm = None;
-                self.kinds.clear();
                 if let Some(b) = self.blocks.iter_mut().find(|b| b.id == id) {
                     b.finished = Some((exit_code, duration_ns));
                 }
@@ -383,29 +390,16 @@ impl Pane {
         self.after(log.into_inner(), problem, None)
     }
 
-    /// Works out how the line would run, for the prompt box's indicator.
+    /// Asks the engine how the line would run (the indicator, and which
+    /// word is the program), and for its history suggestion.
     fn update_line_kind(&mut self) {
-        let mut tokens = Vec::new();
         let text = &self.editor.line.text;
-        self.lexer.tokenize_into(text, &mut tokens);
-        let first = tokens.iter().find(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::LineComment));
-        self.line_kind = match first {
-            None => None,
-            Some(t) if t.kind == TokenKind::Eof => None,
-            // Only a word can name a program.
-            Some(t) if t.kind != TokenKind::Literal => Some(false),
-            Some(t) => {
-                let word = t.text(text);
-                match self.kinds.get(word) {
-                    Some(&k) => Some(k),
-                    None => {
-                        let k = self.engine.is_command_line(word).unwrap_or(false);
-                        self.kinds.insert(word.to_string(), k);
-                        Some(k)
-                    }
-                }
-            }
-        };
+        if text.trim().is_empty() {
+            (self.line_kind, self.suggestion) = (None, String::new());
+            return;
+        }
+        let (command, suggestion) = self.engine.line_info(text).unwrap_or_default();
+        (self.line_kind, self.suggestion) = (Some(command), suggestion);
     }
 
     /// Carries out what the effects asked for; returns whether the pane
@@ -512,7 +506,12 @@ impl Pane {
         });
         let line_cells = clusters(&line.text).count();
         let cursor_cells = clusters(&line.text[..line.cursor]).count();
-        let text_rows = if self.running.is_some() { 1 } else { prompt_y + (prompt_x + line_cells + 1).div_ceil(prompt_cols) };
+        let suggestion_cells = clusters(&self.suggestion).count();
+        let text_rows = if self.running.is_some() {
+            1
+        } else {
+            prompt_y + (prompt_x + line_cells + suggestion_cells + 1).div_ceil(prompt_cols)
+        };
         let box_rows = 2 + text_rows + self.message.is_some() as usize;
         let box_top = rows.saturating_sub(box_rows);
         let menu = &self.menu;
@@ -628,9 +627,29 @@ impl Pane {
             p.visit(0, prompt_y + 1, |r, c, cell| cv.cell(glyphs, PROMPT_INSET + c, text_top + r, cell, box_bg));
         }
         let at = |cell: usize| (PROMPT_INSET + (prompt_x + cell) % prompt_cols, text_top + prompt_y + (prompt_x + cell) / prompt_cols);
+        // The line, coloured as terminal msh colours it.
+        let errored = self.lexer.tokenize_into(&line.text, &mut self.tokens);
+        let names = self.cfg.as_ref().map(|c| &c.names);
+        let styles = if errored { Vec::new() } else { line_styles(&line.text, &self.tokens, self.line_kind == Some(true), names) };
+        let mut si = 0;
         for (i, (s, _)) in clusters(&line.text).enumerate() {
+            while si < styles.len() && styles[si].1 <= s {
+                si += 1;
+            }
+            let (fg, underline) = match styles.get(si).filter(|st| st.0 <= s) {
+                Some(&(_, _, fg, u)) => (fg.unwrap_or(FG), u),
+                None => (FG, false),
+            };
             let (x, row) = at(i);
-            cv.put(glyphs, x, row, line.text[s..].chars().next().unwrap_or(' '), color(FG));
+            cv.put(glyphs, x, row, line.text[s..].chars().next().unwrap_or(' '), color(fg));
+            if underline {
+                cv.underline(x, row, color(fg));
+            }
+        }
+        // The history suggestion, quiet, after the line.
+        for (i, (s, _)) in clusters(&self.suggestion).enumerate() {
+            let (x, row) = at(line_cells + i);
+            cv.put(glyphs, x, row, self.suggestion[s..].chars().next().unwrap_or(' '), color(SUGGESTION));
         }
         if focused {
             let (cx, cy) = at(cursor_cells);
@@ -786,6 +805,48 @@ impl Pane {
     }
 }
 
+/// How terminal msh colours a command line's tokens (CommandPaint.go,
+/// commandStyleSpansInto), as byte ranges with a colour and whether they
+/// are underlined. On a command line the program is underlined in blue,
+/// and builtins and definitions are underlined.
+fn line_styles(
+    text: &str,
+    tokens: &[msh_editor::lexer::Token],
+    command_line: bool,
+    names: Option<&std::collections::HashSet<String>>,
+) -> Vec<(usize, usize, Option<[u8; 3]>, bool)> {
+    use TokenKind::*;
+    let program = if command_line {
+        tokens.iter().position(|t| !matches!(t.kind, Whitespace | LineComment))
+    } else {
+        None
+    };
+    let mut out = Vec::new();
+    for (i, t) in tokens.iter().enumerate() {
+        let style = match t.kind {
+            String | SingleQuoteString | FormatString | FormatStringStart | FormatStringMid | FormatStringEnd | Rune => {
+                Some((Some(ANSI[1]), false))
+            }
+            UnfinishedString | UnfinishedFormatString | UnfinishedSingleQuoteString | UnfinishedRune => {
+                Some((Some(ANSI[9]), false))
+            }
+            UnfinishedPath => Some((Some(ANSI[13]), false)),
+            Path => Some((Some(ANSI[5]), false)),
+            DateTime => Some((Some(ANSI[6]), false)),
+            True | False => Some((Some(ANSI[4]), false)),
+            VarStore | EnvStore => Some((Some(ANSI[2]), false)),
+            VarRetrieve | EnvRetrieve | EnvCheck => Some((Some(ANSI[3]), false)),
+            _ if Some(i) == program => Some((Some(ANSI[4]), true)),
+            Literal if command_line && names.is_some_and(|n| n.contains(t.text(text))) => Some((None, true)),
+            _ => None,
+        };
+        if let Some((fg, underline)) = style {
+            out.push((t.byte_start as usize, t.byte_end as usize, fg, underline));
+        }
+    }
+    out
+}
+
 /// A line's text split at its SGR sequences, each piece with the
 /// foreground colour set before it (None: the default). Other attributes
 /// are dropped.
@@ -859,6 +920,8 @@ const FM_BG: [u8; 3] = [0x16, 0x15, 0x1b];
 const FM_INSET: f32 = 14.0;
 /// The indicator's colour for a command line.
 const KIND_COMMAND: [u8; 3] = [0x7e, 0xc6, 0x99];
+/// The history suggestion after the line.
+const SUGGESTION: [u8; 3] = [0x5c, 0x5c, 0x68];
 const FOLDER: [u8; 3] = [0x6a, 0xa8, 0xe8];
 const FOLDER_BACK: [u8; 3] = [0x3f, 0x6f, 0xa8];
 const FILE_ICON: [u8; 3] = [0x8c, 0x8c, 0x98];
@@ -956,6 +1019,15 @@ impl Canvas<'_> {
     pub fn icon(&mut self, glyphs: &mut Glyphs, icon: Icon, x: f32, y: f32, size: u32, color: u32) {
         let r = glyphs.icon(icon, size);
         self.push_glyph(Quad { x: self.x0 + x as u32, y: self.y0 + y as u32, w: r.w, h: r.h, u: r.u, v: r.v, color });
+    }
+
+    /// A line under a cell, as an underline.
+    fn underline(&mut self, col: usize, row: usize, color: u32) {
+        if col < self.cols && row < self.rows {
+            let (x, y) = self.cell_px(col, row);
+            let thick = (self.cell.1 / 16).max(1);
+            self.push_glyph(Quad::solid(x, y + self.cell.1 - 2 * thick, self.cell.0, thick, color));
+        }
     }
 
     fn cursor(&mut self, col: usize, row: usize) {

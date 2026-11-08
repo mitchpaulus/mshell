@@ -22,8 +22,10 @@ package main
 //	                   str word, str command, line (rest)
 //	0x06 regex_match   u32 request, u32 version, u32 abbr, word (rest)
 //	0x07 is_program    u32 request, word (rest)
-//	0x0B line_kind     u32 request, line (rest): 1 when the line runs as a
-//	                   command line (simple CLI parser), 0 as mshell
+//	0x0B line_info     u32 request, line (rest): status 1 when the line runs
+//	                   as a command line (simple CLI parser), 0 as mshell;
+//	                   the data is the history suggestion's text after the
+//	                   line, or empty
 //
 // Engine to frontend:
 //
@@ -46,6 +48,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -74,6 +77,26 @@ type serverEditor struct {
 	sent    []byte
 	quotes  []*MShellQuotation
 	abbrs   []*abbrEntry
+	// The line and cursor the last edit gave the frontend.
+	lastLine   string
+	lastCursor int
+}
+
+// recordHistory adds a line to the history, and saves it at once: an
+// engine can be closed with its pane at any time.
+func (s *server) recordHistory(state *TermState, line string) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	item := HistoryItem{UnixTimeUtc: time.Now().Unix(), Directory: cwd, Command: line}
+	history = append(history, line)
+	historyToSave = append(historyToSave, item)
+	state.saveHistory()
+	// Saving empties historyToSave, where suggestions look for this
+	// session's lines; they are the newest of what was read.
+	state.previousHistory = append(state.previousHistory, item)
+	state.historyIndex = 0
 }
 
 // encodeEditorConfig writes the bindings in force and the abbreviations
@@ -86,7 +109,10 @@ type serverEditor struct {
 //	u32 abbreviation count, then each: u8 regex, str word, u8 position
 //	  (0 command, 1 anywhere, 2 argOf: u16 count, strs), u8 expansion
 //	  (0 text: str; 1 abbrFunc: u32 quote), str cursor marker
-func encodeEditorConfig(ev *EvalState) ([]byte, []*MShellQuotation, []*abbrEntry) {
+//	u32 name count, strs: the builtins and definitions, which highlighting
+//	  underlines on a command line
+func encodeEditorConfig(state *TermState) ([]byte, []*MShellQuotation, []*abbrEntry) {
+	ev := &state.evalState
 	var quotes []*MShellQuotation
 	quoteID := func(q *MShellQuotation) uint32 {
 		quotes = append(quotes, q)
@@ -150,6 +176,19 @@ func encodeEditorConfig(ev *EvalState) ([]byte, []*MShellQuotation, []*abbrEntry
 		}
 		b = appendStr(b, e.marker)
 	}
+	names := make([]string, 0, len(BuiltInList))
+	for name := range BuiltInList {
+		names = append(names, name)
+	}
+	for _, d := range state.stdLibDefs {
+		names = append(names, d.Name)
+	}
+	slices.Sort(names)
+	names = slices.Compact(names)
+	b = le.AppendUint32(b, uint32(len(names)))
+	for _, n := range names {
+		b = appendStr(b, n)
+	}
 	return b, quotes, abbrs
 }
 
@@ -170,7 +209,7 @@ func appendEditOp(b []byte, op editOp, quoteID func(*MShellQuotation) uint32) []
 // sendConfigIfChanged sends the editor config when it differs from what the
 // frontend has.
 func (s *server) sendConfigIfChanged(state *TermState) {
-	config, quotes, abbrs := encodeEditorConfig(&state.evalState)
+	config, quotes, abbrs := encodeEditorConfig(state)
 	if s.editor.sent != nil && bytes.Equal(config, s.editor.sent) {
 		return
 	}
@@ -290,9 +329,13 @@ func (s *server) handleCall(state *TermState, call serverCall) {
 	case serverMsgEdit:
 		status, result = s.handleEdit(state, request, r)
 	case serverMsgLineKind:
-		if state.isCommandLine(r.rest()) {
+		line := r.rest()
+		if state.isCommandLine(line) {
 			status = callYes
 		}
+		state.currentCommand = SourceText(line)
+		state.updateHistoryCompletion()
+		result = []byte(state.suggestionText())
 	case serverMsgIsProgram:
 		word := r.rest()
 		if r.bad {
@@ -326,7 +369,10 @@ func (s *server) handleCall(state *TermState, call serverCall) {
 //
 //	0x08 edit    u32 request, u8 EditOp member (editComplete, editCompleteBack,
 //	             editCompleteNext, editCompletePrev, editCompleteLeft,
-//	             editCompleteRight, editCompleteAccept), u32 cursor, line (rest).
+//	             editCompleteRight, editCompleteAccept; editHistoryPrev,
+//	             editHistoryNext, editHistorySearchBack,
+//	             editHistorySearchForward, editForward, editAcceptSuggestion,
+//	             editLastArg), u32 cursor, line (rest).
 //	             The reply (call_result 1): u32 cursor, u8 cycling, i32 the
 //	             candidate selected (-1: none), u8 bell, u16 candidate count,
 //	             strs, then the line (rest). The engine keeps the completion
@@ -383,10 +429,41 @@ func (s *server) handleEdit(state *TermState, request uint32, r *serverReader) (
 	if r.bad {
 		s.protocolError("malformed edit")
 	}
+	// An edit the frontend made since the engine last gave it the line ends
+	// a history search, as an edit does in terminal msh; any op but
+	// editLastArg ends the last-argument cycle.
+	if line != s.editor.lastLine || int(cursor) != s.editor.lastCursor {
+		state.resetHistorySearch()
+	}
+	if op != opLastArg {
+		state.resetLastArgCycle()
+	}
 	state.currentCommand = SourceText(line)
 	state.index = graphemeCeil(state.currentCommand, ByteOffset(min(int(cursor), len(line))))
 	state.bellToReply, state.bellRang = true, false
+	state.updateHistoryCompletion()
+	defer func() {
+		s.editor.lastLine, s.editor.lastCursor = string(state.currentCommand), int(state.index)
+	}()
 	switch op {
+	case opHistoryPrev:
+		state.historyPrev()
+	case opHistoryNext:
+		state.historyNext()
+	case opHistorySearchBack:
+		state.historySearch(-1)
+	case opHistorySearchForward:
+		state.historySearch(1)
+	case opForward:
+		if state.index == state.commandEnd() {
+			state.acceptHistoryCompletion()
+		} else {
+			state.index = graphemeNext(state.currentCommand, state.index)
+		}
+	case opAcceptSuggestion:
+		state.acceptHistoryCompletion()
+	case opLastArg:
+		state.cycleLastArgument()
 	case opComplete, opCompleteBack:
 		direction := 1
 		if op == opCompleteBack {
@@ -410,7 +487,7 @@ func (s *server) handleEdit(state *TermState, request uint32, r *serverReader) (
 		state.tabCompletions0 = state.tabCompletions0[:0]
 		state.tabCompletions1 = state.tabCompletions1[:0]
 	default:
-		return callFailed, []byte(fmt.Sprintf("edit: %d is not a completion op", op))
+		return callFailed, []byte(fmt.Sprintf("edit: %d is not an op the engine edits", op))
 	}
 	le := binary.LittleEndian
 	b := le.AppendUint32(nil, uint32(state.index))

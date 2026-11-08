@@ -3681,6 +3681,27 @@ func (state *TermState) printStartupErrors() {
 	}
 }
 
+// loadHistory reads the history file, for history navigation and
+// suggestions.
+func (state *TermState) loadHistory() {
+	history = make([]string, 0)
+	state.historyIndex = 0
+	historyDir, err := GetHistoryDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting history directory: %s\n", err)
+		return
+	}
+	state.previousHistory, err = ReadHistory(historyDir)
+	if err == nil {
+		for _, item := range state.previousHistory {
+			history = append(history, item.Command)
+		}
+	} else if !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Error reading history: %s\n", err)
+	}
+	state.Logf("%d items loaded from history file %s\n", len(state.previousHistory), filepath.Join(historyDir, "msh_history"))
+}
+
 func (state *TermState) InteractiveMode() error {
 	// FUTURE: Maybe Check for CSI u?
 	stdInState := &StdinReaderState{
@@ -3752,27 +3773,7 @@ func (state *TermState) InteractiveMode() error {
 		}
 	}
 
-	history = make([]string, 0)
-	state.historyIndex = 0
-
-	// Fill history
-	historyDir, err := GetHistoryDir()
-	if err == nil {
-		state.previousHistory, err = ReadHistory(historyDir)
-		if err == nil {
-			for _, item := range state.previousHistory {
-				// Add to history
-				history = append(history, item.Command)
-			}
-		} else {
-			if !os.IsNotExist(err) {
-				fmt.Fprintf(os.Stderr, "Error reading history: %s\n", err)
-			}
-		}
-		state.Logf("%d items loaded from history file %s\n", len(state.previousHistory), filepath.Join(historyDir, "msh_history"))
-	} else {
-		fmt.Fprintf(os.Stderr, "Error getting history directory: %s\n", err)
-	}
+	state.loadHistory()
 
 	err = state.printPrompt()
 	if err != nil {

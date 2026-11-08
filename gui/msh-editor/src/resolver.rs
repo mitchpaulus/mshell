@@ -294,11 +294,14 @@ pub struct EditState<'a> {
     pub mode: Mode,
 }
 
-/// The editor config from the engine: the bindings in force and the
-/// abbreviations that can expand, newest last.
+/// The editor config from the engine: the bindings in force, the
+/// abbreviations that can expand (newest last), and the names of the
+/// builtins and definitions, which highlighting underlines on a command
+/// line.
 pub struct Config {
     pub keymap: Keymap,
     pub abbrs: Vec<Abbr>,
+    pub names: std::collections::HashSet<String>,
 }
 
 /// What the frontend provides: the engine's answers and the effects.
