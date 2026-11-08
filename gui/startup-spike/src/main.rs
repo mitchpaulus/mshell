@@ -4,8 +4,8 @@
 //! directly (no system font scan), an ASCII glyph atlas, and one frame of a
 //! cell grid drawn as instanced quads. Every stage is traced to stderr.
 //!
-//! The cell grid is filled from a text file for now. When libghostty-vt is
-//! available, `CellInstance`s are filled from its render state instead.
+//! The cell grid comes from a file's bytes fed through a libghostty-vt
+//! terminal (as if a program had printed it), read back from its render state.
 //!
 //! Options (each experiment is a switch, so they can be compared):
 //!   --serial                 do GPU setup and font work one after another on
@@ -36,7 +36,8 @@
 //!   --no-gpu                 never start the GPU: the CPU frame stays (to compare
 //!                            the two frames' pixels)
 //!   --present-mode M         mailbox (default if supported) or fifo
-//!   --file PATH              text to show (default: lib/std.msh)
+//!   --file PATH              bytes to show, escape sequences included (default: lib/std.msh)
+//!   --no-vt                  lay the file out directly instead of through libghostty-vt
 //!   --font PATH              font file (default: Noto Sans Mono)
 //!   --size PX                font size in logical pixels (default: 16)
 //!   --scale S                display scale to draw the first frame at (default:
@@ -61,6 +62,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy,
 use winit::window::{Window, WindowId};
 
 mod shm;
+mod vt;
 
 // ---------------------------------------------------------------- tracing
 
@@ -126,6 +128,7 @@ struct Opts {
     quiet_malloc: bool,
     atlas_cache: bool,
     no_gpu: bool,
+    no_vt: bool,
     gpu_after_first_frame: bool,
     cpu_first_frame: bool,
     present_mode: Option<wgpu::PresentMode>,
@@ -150,6 +153,7 @@ fn parse_opts() -> Opts {
         quiet_malloc: false,
         atlas_cache: false,
         no_gpu: false,
+        no_vt: false,
         gpu_after_first_frame: false,
         cpu_first_frame: false,
         present_mode: None,
@@ -182,6 +186,7 @@ fn parse_opts() -> Opts {
             "--quiet-malloc" => o.quiet_malloc = true,
             "--atlas-cache" => o.atlas_cache = true,
             "--no-gpu" => o.no_gpu = true,
+            "--no-vt" => o.no_vt = true,
             "--gpu-after-first-frame" => o.gpu_after_first_frame = true,
             "--cpu-first-frame" => o.cpu_first_frame = true,
             "--present-mode" => {
@@ -441,10 +446,29 @@ fn load_font(path: &str, px: f32) -> (Vec<u8>, CellMetrics) {
     (data, cell)
 }
 
-fn load_cells(path: &str, cols: u32, rows: u32) -> Vec<CellInstance> {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-    let cells = grid_from_text(&text, cols, rows);
-    trace("text file read, grid built");
+fn load_cells(path: &str, cols: u32, rows: u32, no_vt: bool) -> Vec<CellInstance> {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
+    if no_vt {
+        let cells = grid_from_text(&String::from_utf8_lossy(&bytes), cols, rows);
+        trace("text file read, grid built");
+        return cells;
+    }
+    trace("file read");
+    let mut term = vt::Vt::new(cols as u16, rows as u16);
+    trace("terminal created");
+    // Only the first screenful, as a program's first output would be.
+    let lines: Vec<&[u8]> = bytes.split_inclusive(|&b| b == b'\n').take(rows as usize).collect();
+    let mut head = vt::as_tty_output(&lines.concat());
+    if head.ends_with(b"\r\n") {
+        head.truncate(head.len() - 2); // don't scroll the first line off
+    }
+    term.write(&head);
+    trace("bytes written to terminal");
+    let mut cells = Vec::with_capacity((cols * rows) as usize);
+    term.cells(FG, &mut cells);
+    // The real frontend keeps the terminal; the spike never needs it again,
+    // and freeing it isn't part of startup.
+    std::mem::forget(term);
     cells
 }
 
@@ -488,6 +512,19 @@ fn draw_cpu(buf: &mut [u32], width: u32, height: u32, atlas: &Atlas, cells: &[Ce
             }
         }
     }
+}
+
+/// Write the CPU frame as a binary PPM and exit, to check the picture without a window.
+fn dump_frame(path: &std::ffi::OsStr, (w, h): (u32, u32), atlas: &Atlas, cells: &[CellInstance]) {
+    let mut px = vec![0u32; (w * h) as usize];
+    draw_cpu(&mut px, w, h, atlas, cells);
+    let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+    for p in px {
+        out.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8]);
+    }
+    std::fs::write(path, out).expect("SPIKE_DUMP_FRAME");
+    // Checking the picture needs no window.
+    std::process::exit(0);
 }
 
 // ---------------------------------------------------------------- GPU
@@ -1013,7 +1050,7 @@ impl ApplicationHandler<UserEvent> for App {
             configure(&surface, &device, &config);
             let data = self.font_data.take().unwrap();
             let atlas = build_atlas(&data, self.opts.size * geo.scale as f32, cell);
-            self.cells = load_cells(&self.opts.file, self.opts.cols, self.opts.rows);
+            self.cells = load_cells(&self.opts.file, self.opts.cols, self.opts.rows, self.opts.no_vt);
             let gpu = Gpu { _instance: instance, _adapter: adapter, device, queue };
             self.renderer = Some(Renderer::new(window, gpu, surface, config, None, &atlas, &self.cells));
             self.first_gpu_frame();
@@ -1163,7 +1200,7 @@ fn spike_main() {
         let (data, cell) = load_font(&opts.font, opts.size * scale as f32);
         (serial_font, serial_geo) = (Some(data), Some((cell, geometry(opts.cols, opts.rows, cell, scale))));
     } else {
-        let (font, file, cols, rows) = (opts.font.clone(), opts.file.clone(), opts.cols, opts.rows);
+        let (font, file, cols, rows, no_vt) = (opts.font.clone(), opts.file.clone(), opts.cols, opts.rows, opts.no_vt);
         let size = opts.size * scale as f32;
         let (send_gpu, atlas_cache) = (opts.early_pipeline, opts.atlas_cache);
         let frame_mem = opts.cpu_first_frame.then(shm::FrameMemory::new);
@@ -1193,7 +1230,10 @@ fn spike_main() {
             if send_gpu {
                 let _ = gpu_atlas_tx.send(atlas.clone());
             }
-            let cells = load_cells(&file, cols, rows);
+            let cells = load_cells(&file, cols, rows, no_vt);
+            if let Some(path) = std::env::var_os("SPIKE_DUMP_FRAME") {
+                dump_frame(&path, geo.physical, &atlas, &cells);
+            }
             let cpu = frame_mem.map(|mem| {
                 let (w, h) = geo.physical;
                 let frame = shm::prepare(mem, w, h, |px| draw_cpu(px, w, h, &atlas, &cells));

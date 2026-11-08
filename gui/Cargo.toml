@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["startup-spike"]
+members = ["startup-spike", "ghostty-vt-sys"]
 
 [profile.release]
 opt-level = 3

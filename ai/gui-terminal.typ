@@ -312,15 +312,24 @@ Anything the frontend wants to know about the output, it asks the terminal for.
 
 == Costs and gaps
 
-- *Zig to build it.* The sources disagree on the version (0.16 or 0.17); pin whatever `vt-1.0.0` needs.
-  It links statically, so one binary is still possible (@sec-startup).
+- *Zig to build it.* `vt-1.0.0` needs Zig 0.17.x exactly (`minimum_zig_version`; 0.16 and 0.18 are refused).
+  The signed release tarballs build offline in ~5 minutes on the FX-8350 (`gui/ghostty-vt-sys/fetch.sh`).
+  It links statically with no other libraries, so one binary is still possible (@sec-startup).
 - *Rust bindings are community-maintained.* `libghostty-rs` has a raw `-sys` crate and safe wrappers, but on 2026-11-07 it pinned a Ghostty commit 245 commits before `vt-1.0.0`.
   Now the ABI is stable, our own thin `-sys` crate generated with bindgen is a small, low-risk fallback.
 - *Threading is ours to arrange.* The render-state split and the search steps are documented as safe alongside writes; everything else on one terminal has to be serialized, e.g. one lock per terminal shared by the parser thread and the UI thread.
-- *Defaults to check.* A header comment gives the scrollback default as 10,000 bytes. Set the limits explicitly either way.
+- *Scrollback must be limited explicitly.* The default is 10,000 bytes, which is one ~400 KB page in practice.
+  Unlimited, history costs a full row of cells per line however short: 67 MB of short lines took 1.3 GB.
+  So each block gets a limit in bytes and lines, and finished blocks are compressed.
 - *No shaping.* It handles graphemes, not shaping or layout; that stays with the text library (@sec-recommendation).
 
-Things to measure in the startup spike: the cost of creating a terminal (one per block, @sec-targets), memory per idle finished block, and parsing throughput against Alacritty and Ghostty on vtebench.
+Measured in the startup spike (2026-11-08, `gui/startup-spike/README.md`):
+- Creating a terminal takes 12 µs warm (47–130 µs for the first in a process), and freeing one 12 µs. A terminal per block is cheap.
+- An idle 100 x 30 terminal holding one screen of output takes 34–38 KB, or 175 KB when every character has its own 24-bit colour.
+- Parsing runs at 75–214 MB/s with the default scrollback, depending on how much styling the output has, and 66–82 MB/s when every line is kept, where the time goes into new pages.
+- At startup it costs nothing measurable: under 1 ms on the frame thread, before the window exists.
+
+Still to compare: throughput against Alacritty and Ghostty on vtebench, which measures the whole terminal.
 
 = Beyond the terminal <sec-beyond>
 
