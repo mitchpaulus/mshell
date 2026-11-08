@@ -13,8 +13,10 @@
 //!   Alt-H/J/K/L      focus the pane left / below / above / right
 //!   Alt-;            split: a new pane in this tab
 //!   Alt-R            reorder: swap the pane with the first
-//!   Alt-Space        next layout: everything, columns, right halves,
+//!   Alt-'            next layout: everything, columns, right halves,
 //!                    right thirds
+//! A click on a tab shows it, on a pane focuses it; the wheel scrolls the
+//! pane under the pointer.
 //!
 //! Usage: msh-gui [MSH]   (MSH: the msh binary; default $MSH_BIN, then the
 //!                         repository's mshell/mshell, then msh on PATH)
@@ -30,17 +32,26 @@ mod vt;
 use layout::{Direction, Layout, Rect};
 use msh_client::{Engine, Event};
 use msh_editor::keys::{KeyCode, MOD_ALT};
-use pane::{color, Canvas, Pane, ACCENT, BG, DIM};
+use pane::{color, Canvas, Pane, ACCENT, DIM};
 use render::{Glyphs, Quad, Renderer};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{Window, WindowId};
+
+// Gaps around and between panes, as a tiling window manager's, and the
+// focused pane's border, in pixels.
+const GAP: usize = 8;
+const BORDER: u32 = 2;
+/// Behind the panes: what shows in the gaps.
+pub const BG: [u8; 3] = [0x0b, 0x0b, 0x0e];
+const PANE_BG: [u8; 3] = pane::BG;
+const TAB_SELECTED_BG: [u8; 3] = [0x2c, 0x22, 0x36];
 
 enum UserEvent {
     /// An event from the engine of the pane with this id.
@@ -85,8 +96,11 @@ struct App {
     glyphs: Option<Glyphs>,
     font: Vec<u8>,
     font_size: f32,
-    cols: usize,
-    rows: usize,
+    /// The window's size in pixels.
+    width: usize,
+    height: usize,
+    /// The pointer, in pixels.
+    pointer: (f64, f64),
     mods: ModifiersState,
     start: Instant,
     quads: Vec<Quad>,
@@ -131,40 +145,88 @@ impl App {
         tab.panes.get_mut(tab.focus)
     }
 
-    /// The panes' area: the window, below the tab bar when there are tabs.
+    fn cell(&self) -> (u32, u32) {
+        self.glyphs.as_ref().map_or((8, 16), |g| (g.cell.w, g.cell.h))
+    }
+
+    /// The tab bar's height in pixels: a row, when there are tabs.
+    fn bar_height(&self) -> usize {
+        if self.tabs.len() > 1 { self.cell().1 as usize } else { 0 }
+    }
+
+    /// The panes' area in pixels: the window, inside the outer gap, below
+    /// the tab bar.
     fn area(&self) -> Rect {
-        let bar = (self.tabs.len() > 1) as usize;
-        Rect { x: 0, y: bar, w: self.cols, h: self.rows.saturating_sub(bar) }
+        let top = self.bar_height();
+        Rect { x: GAP, y: top + GAP, w: self.width.saturating_sub(2 * GAP), h: self.height.saturating_sub(top + 2 * GAP) }
     }
 
     fn rects(&self) -> Vec<Option<Rect>> {
         let tab = &self.tabs[self.tab];
-        layout::rects(tab.layout, tab.panes.len(), tab.focus, self.area())
+        layout::rects(tab.layout, tab.panes.len(), tab.focus, self.area(), GAP)
     }
 
-    /// Gives each shown pane of the current tab its size.
+    /// Gives each shown pane of the current tab its size in cells.
     fn layout(&mut self) {
-        let Some(glyphs) = &self.glyphs else { return };
-        let cell = (glyphs.cell.w, glyphs.cell.h);
-        if self.tabs.is_empty() {
+        if self.glyphs.is_none() || self.tabs.is_empty() {
             return;
         }
+        let cell = self.cell();
         let rects = self.rects();
         for (p, r) in self.tabs[self.tab].panes.iter_mut().zip(rects) {
             if let Some(r) = r {
-                p.resize(r.w, r.h, cell);
+                p.resize((r.w / cell.0 as usize).max(1), (r.h / cell.1 as usize).max(1), cell);
             }
         }
     }
 
     fn resize(&mut self, width: u32, height: u32) {
-        let Some(glyphs) = &self.glyphs else { return };
-        self.cols = (width / glyphs.cell.w).max(1) as usize;
-        self.rows = (height / glyphs.cell.h).max(1) as usize;
+        (self.width, self.height) = (width as usize, height as usize);
         if let Some(r) = &mut self.renderer {
             r.resize(width, height);
         }
         self.layout();
+    }
+
+    /// Each tab's label in the tab bar, and where it starts, in cells.
+    fn tab_labels(&self) -> Vec<(usize, String)> {
+        let mut x = 0;
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| {
+                let title = tab.panes[tab.focus].title.clone().unwrap_or_else(|| format!("{}", i + 1));
+                let label = format!(" {}: {} ", i + 1, title);
+                let at = x;
+                x += label.chars().count() + 1;
+                (at, label)
+            })
+            .collect()
+    }
+
+    /// A click: on a tab, shows it; on a pane, focuses it.
+    fn click(&mut self) {
+        let (px, py) = (self.pointer.0 as usize, self.pointer.1 as usize);
+        if py < self.bar_height() {
+            let col = px / self.cell().0 as usize;
+            if let Some(i) = self.tab_labels().iter().position(|(at, l)| col >= *at && col < at + l.chars().count()) {
+                self.tab = i;
+                self.layout();
+            }
+            return;
+        }
+        if let Some(i) = self.pane_at(px, py) {
+            self.tabs[self.tab].focus = i;
+            self.layout();
+        }
+    }
+
+    /// The shown pane under a pixel.
+    fn pane_at(&self, x: usize, y: usize) -> Option<usize> {
+        if self.tabs.is_empty() {
+            return None;
+        }
+        self.rects().iter().position(|r| r.is_some_and(|r| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h))
     }
 
     /// An engine's event for its pane; returns whether the app ends.
@@ -225,7 +287,7 @@ impl App {
                     'k' => Direction::Up,
                     _ => Direction::Right,
                 };
-                let rects = layout::rects(tab.layout, n, tab.focus, self.area());
+                let rects = layout::rects(tab.layout, n, tab.focus, self.area(), GAP);
                 self.tabs[self.tab].focus = layout::neighbor(&rects, self.tabs[self.tab].focus, dir);
             }
             ';' => {
@@ -245,7 +307,7 @@ impl App {
                 tab.panes.swap(tab.focus, other);
                 tab.focus = other;
             }
-            ' ' => tab.layout = tab.layout.next(),
+            '\'' => tab.layout = tab.layout.next(),
             _ => return false,
         }
         self.layout();
@@ -308,38 +370,51 @@ impl App {
     fn compose(&mut self) {
         self.quads.clear();
         self.glyph_quads.clear();
-        if self.tabs.is_empty() {
+        if self.tabs.is_empty() || self.glyphs.is_none() {
             return;
         }
         let rects = self.rects();
+        let labels = self.tab_labels();
+        let cell = self.cell();
+        let cols = (self.width / cell.0 as usize).max(1);
         let Some(glyphs) = &mut self.glyphs else { return };
         // The tab bar, when there are tabs: each tab's title or number.
         if self.tabs.len() > 1 {
-            let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, x0: 0, y0: 0, cols: self.cols, rows: 1 };
-            let mut x = 0;
-            for (i, tab) in self.tabs.iter().enumerate() {
-                let pane = &tab.panes[tab.focus];
-                let title = pane.title.clone().unwrap_or_else(|| format!("{}", i + 1));
-                let label = format!(" {}: {} ", i + 1, title);
-                let w = label.chars().count();
+            let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, x0: 0, y0: 0, cols, rows: 1, cell };
+            for (i, (x, label)) in labels.iter().enumerate() {
                 if i == self.tab {
-                    cv.fill(x, 0, w, color([0x2c, 0x22, 0x36]));
+                    cv.fill(*x, 0, label.chars().count(), color(TAB_SELECTED_BG));
                 }
-                cv.text(glyphs, x, 0, &label, color(if i == self.tab { ACCENT } else { DIM }));
-                x += w + 1;
+                cv.text(glyphs, *x, 0, label, color(if i == self.tab { ACCENT } else { DIM }));
             }
             let layout = self.tabs[self.tab].layout.name();
-            cv.text(glyphs, self.cols.saturating_sub(layout.len() + 1), 0, layout, color(DIM));
+            cv.text(glyphs, cols.saturating_sub(layout.len() + 1), 0, layout, color(DIM));
         }
-        let tab = &mut self.tabs[self.tab];
-        let focus = tab.focus;
-        for (i, (pane, rect)) in tab.panes.iter_mut().zip(rects).enumerate() {
+        let focus = self.tabs[self.tab].focus;
+        let shown = tab_count_shown(&self.tabs[self.tab]);
+        for (i, rect) in rects.into_iter().enumerate() {
             let Some(r) = rect else { continue };
-            let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, x0: r.x, y0: r.y, cols: r.w, rows: r.h };
+            let (x, y, w, h) = (r.x as u32, r.y as u32, r.w as u32, r.h as u32);
+            // The pane's own background, and the focused one's border in
+            // the gap around it.
+            if i == focus && shown > 1 {
+                let b = BORDER;
+                for (bx, by, bw, bh) in [(x - b, y - b, w + 2 * b, b), (x - b, y + h, w + 2 * b, b), (x - b, y, b, h), (x + w, y, b, h)] {
+                    self.quads.push(Quad { x: bx, y: by, w: bw, h: bh, glyph: render::SOLID, color: color(ACCENT) });
+                }
+            }
+            self.quads.push(Quad { x, y, w, h, glyph: render::SOLID, color: color(PANE_BG) });
+            let pane = &mut self.tabs[self.tab].panes[i];
+            let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, x0: x, y0: y, cols: pane.cols, rows: pane.rows, cell };
             pane.compose(&mut cv, glyphs, i == focus);
         }
         self.quads.extend_from_slice(&self.glyph_quads);
     }
+}
+
+/// The panes a tab shows: its layout's, at most all of them.
+fn tab_count_shown(tab: &Tab) -> usize {
+    if tab.layout == Layout::Everything { 1 } else { tab.panes.len() }
 }
 
 impl ApplicationHandler<UserEvent> for App {
@@ -384,13 +459,21 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 self.redraw();
             }
+            WindowEvent::CursorMoved { position, .. } => self.pointer = (position.x, position.y),
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                self.click();
+                self.redraw();
+            }
             WindowEvent::MouseWheel { delta, .. } => {
-                let cell_h = self.glyphs.as_ref().map_or(16.0, |g| g.cell.h as f32);
+                let cell_h = self.cell().1 as f32;
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y * 3.0,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / cell_h,
                 };
-                if let Some(p) = self.focused() {
+                // The pane under the pointer scrolls.
+                let (px, py) = (self.pointer.0 as usize, self.pointer.1 as usize);
+                if let Some(i) = self.pane_at(px, py) {
+                    let p = &mut self.tabs[self.tab].panes[i];
                     p.scroll = (p.scroll as i64 + lines.round() as i64).max(0) as usize;
                 }
                 self.redraw();
@@ -450,8 +533,9 @@ fn main() {
         glyphs: None,
         font,
         font_size,
-        cols: 80,
-        rows: 24,
+        width: 800,
+        height: 600,
+        pointer: (0.0, 0.0),
         mods: ModifiersState::empty(),
         start: Instant::now(),
         quads: Vec::new(),

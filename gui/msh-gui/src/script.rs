@@ -5,12 +5,13 @@
 //!
 //! SCRIPT is typed at the prompt a key at a time: plain characters, and
 //!   <Enter> <Tab> <Esc> <BS> <Left> <Right> <Up> <Down> <Space>
-//!   <C-x> <A-x>     Ctrl or Alt and a key (<A-Enter>, <A-Space> too);
+//!   <C-x> <A-x>     Ctrl or Alt and a key (<A-Enter> too);
 //!                   the window's keys work as in the window
 //!   <wait>          until no block is running (then the output is drawn)
 //!   <idle N>        N ms more between this key and the next (for timings)
 //!   <input TEXT>    TEXT, raw, to the running program's PTY (\r, \n, \xHH)
 //!   <scroll N>      the view N rows up from the bottom
+//!   <click X Y>     a click at pixel X, Y
 //!   <sleep N>       N ms of real time, for the program to react
 
 use crate::render::{draw_cpu, Glyphs};
@@ -26,6 +27,7 @@ enum Step {
     Input(Vec<u8>),
     Sleep(u64),
     Scroll(usize),
+    Click(f64, f64),
 }
 
 /// TEXT with \r, \n and \xHH.
@@ -71,7 +73,6 @@ fn parse(script: &str) -> Result<Vec<Step>, String> {
             "Enter" => Step::Key(KeyCode::ENTER),
             "Space" => Step::Key(KeyCode::char(' ')),
             "A-Enter" => Step::Key(KeyCode::ENTER.with(MOD_ALT)),
-            "A-Space" => Step::Key(KeyCode::char(' ').with(MOD_ALT)),
             "Tab" => Step::Key(KeyCode::TAB),
             "Esc" => Step::Key(KeyCode::ESCAPE),
             "BS" => Step::Key(KeyCode::BACKSPACE),
@@ -84,6 +85,10 @@ fn parse(script: &str) -> Result<Vec<Step>, String> {
             "sleep" => Step::Sleep(arg.parse().map_err(|_| "<sleep N>")?),
             "input" => Step::Input(unescape(arg)?),
             "scroll" => Step::Scroll(arg.parse().map_err(|_| "<scroll N>")?),
+            "click" => {
+                let (x, y) = arg.split_once(' ').ok_or("<click X Y>")?;
+                Step::Click(x.parse().map_err(|_| "<click X Y>")?, y.parse().map_err(|_| "<click X Y>")?)
+            }
             _ if name.len() == 3 && (name.starts_with("C-") || name.starts_with("A-")) => {
                 let c = name.chars().nth(2).unwrap();
                 Step::Key(KeyCode::char(c).with(if name.starts_with('C') { MOD_CTRL } else { MOD_ALT }))
@@ -154,6 +159,10 @@ pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols
                     p.scroll = n;
                 }
             }
+            Step::Click(x, y) => {
+                app.pointer = (x, y);
+                app.click();
+            }
             Step::Sleep(ms) => {
                 let until = Instant::now() + Duration::from_millis(ms);
                 while let Some(left) = until.checked_duration_since(Instant::now()) {
@@ -166,7 +175,7 @@ pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols
     }
     app.compose();
     let glyphs = app.glyphs.as_ref().unwrap();
-    let (w, h, px) = draw_cpu(glyphs, &app.quads, app.cols as u32, app.rows as u32, BG);
+    let (w, h, px) = draw_cpu(glyphs, &app.quads, app.width as u32, app.height as u32, BG);
     let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
     out.extend_from_slice(&px);
     std::fs::write(dump, out).map_err(|e| format!("{dump}: {e}"))

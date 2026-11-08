@@ -6,14 +6,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use winit::window::Window;
 
-/// A quad: solid when `glyph` is SOLID.
+/// A quad, in pixels: solid when `glyph` is SOLID, else that atlas slot
+/// (a glyph quad is one cell in size).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Quad {
-    pub col: u32,
-    pub row: u32,
-    pub width: u32,
-    pub height: u32,
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
     pub glyph: u32,
     /// RGBA8, little-endian packed for unpack4x8unorm.
     pub color: u32,
@@ -135,21 +136,20 @@ impl Glyphs {
 
 /// Draws quads into an RGB image on the CPU, as the GPU does: for checking
 /// frames without a window (msh-gui --script).
-pub fn draw_cpu(glyphs: &Glyphs, quads: &[Quad], cols: u32, rows: u32, bg: [u8; 3]) -> (u32, u32, Vec<u8>) {
+pub fn draw_cpu(glyphs: &Glyphs, quads: &[Quad], w: u32, h: u32, bg: [u8; 3]) -> (u32, u32, Vec<u8>) {
     let (cw, ch) = (glyphs.cell.w, glyphs.cell.h);
-    let (w, h) = (cols * cw, rows * ch);
     let mut px = Vec::with_capacity((w * h * 3) as usize);
     for _ in 0..w * h {
         px.extend_from_slice(&bg);
     }
     for q in quads {
         let [r, g, b, a] = q.color.to_le_bytes();
-        for y in q.row * ch..((q.row + q.height) * ch).min(h) {
-            for x in q.col * cw..((q.col + q.width) * cw).min(w) {
+        for y in q.y..(q.y + q.h).min(h) {
+            for x in q.x..(q.x + q.w).min(w) {
                 let alpha = if q.glyph == SOLID {
                     a as u32
                 } else {
-                    let (sx, sy) = ((q.glyph % ATLAS_COLS) * cw + (x - q.col * cw), (q.glyph / ATLAS_COLS) * ch + (y - q.row * ch));
+                    let (sx, sy) = ((q.glyph % ATLAS_COLS) * cw + (x - q.x), (q.glyph / ATLAS_COLS) * ch + (y - q.y));
                     glyphs.pixels[(sy * glyphs.width + sx) as usize] as u32 * a as u32 / 255
                 };
                 let i = ((y * w + x) * 3) as usize;

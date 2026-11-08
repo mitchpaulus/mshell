@@ -16,8 +16,6 @@ impl Rect {
     }
 }
 
-/// Cells between panes.
-pub const GAP: usize = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layout {
@@ -53,24 +51,24 @@ impl Layout {
     }
 }
 
-/// `n` lengths that fill `total` with GAP between them.
-fn split(total: usize, n: usize) -> Vec<(usize, usize)> {
-    let free = total.saturating_sub(GAP * (n - 1));
+/// `n` lengths that fill `total` with `gap` between them.
+fn split(total: usize, n: usize, gap: usize) -> Vec<(usize, usize)> {
+    let free = total.saturating_sub(gap * (n - 1));
     let mut at = 0;
     (0..n)
         .map(|i| {
             let len = free / n + (i < free % n) as usize;
             let span = (at, len);
-            at += len + GAP;
+            at += len + gap;
             span
         })
         .collect()
 }
 
-/// Where each of `n` panes goes in `area`, or None for a pane the layout
-/// doesn't show (the others in Everything; those past the right side's
-/// slots).
-pub fn rects(layout: Layout, n: usize, focus: usize, area: Rect) -> Vec<Option<Rect>> {
+/// Where each of `n` panes goes in `area`, `gap` apart, or None for a pane
+/// the layout doesn't show (the others in Everything; those past the right
+/// side's slots).
+pub fn rects(layout: Layout, n: usize, focus: usize, area: Rect, gap: usize) -> Vec<Option<Rect>> {
     let mut out = vec![None; n];
     if n == 0 {
         return out;
@@ -79,16 +77,16 @@ pub fn rects(layout: Layout, n: usize, focus: usize, area: Rect) -> Vec<Option<R
         Layout::Everything => out[focus.min(n - 1)] = Some(area),
         _ if n == 1 => out[0] = Some(area),
         Layout::Columns => {
-            for (i, (x, w)) in split(area.w, n).into_iter().enumerate() {
+            for (i, (x, w)) in split(area.w, n, gap).into_iter().enumerate() {
                 out[i] = Some(Rect { x: area.x + x, w, ..area });
             }
         }
         Layout::RightHalves | Layout::RightThirds => {
             let slots = if layout == Layout::RightHalves { 2 } else { 3 };
-            let cols = split(area.w, 2);
+            let cols = split(area.w, 2, gap);
             out[0] = Some(Rect { x: area.x + cols[0].0, w: cols[0].1, ..area });
             let k = (n - 1).min(slots);
-            for (i, (y, h)) in split(area.h, k).into_iter().enumerate() {
+            for (i, (y, h)) in split(area.h, k, gap).into_iter().enumerate() {
                 out[1 + i] = Some(Rect { x: area.x + cols[1].0, y: area.y + y, w: cols[1].1, h });
             }
         }
@@ -145,31 +143,32 @@ mod tests {
     use super::*;
 
     const AREA: Rect = Rect { x: 0, y: 1, w: 101, h: 31 };
+    const GAP: usize = 1;
 
     #[test]
     fn layouts() {
-        assert_eq!(rects(Layout::Everything, 3, 1, AREA), [None, Some(AREA), None]);
-        let cols = rects(Layout::Columns, 3, 0, AREA);
+        assert_eq!(rects(Layout::Everything, 3, 1, AREA, GAP), [None, Some(AREA), None]);
+        let cols = rects(Layout::Columns, 3, 0, AREA, GAP);
         assert_eq!(cols.iter().map(|r| r.unwrap().w).sum::<usize>() + 2 * GAP, AREA.w);
-        let halves = rects(Layout::RightHalves, 4, 0, AREA);
+        let halves = rects(Layout::RightHalves, 4, 0, AREA, GAP);
         assert_eq!(halves[0], Some(Rect { x: 0, y: 1, w: 50, h: 31 }));
         assert_eq!(halves[1], Some(Rect { x: 51, y: 1, w: 50, h: 15 }));
         assert_eq!(halves[2], Some(Rect { x: 51, y: 17, w: 50, h: 15 }));
         assert_eq!(halves[3], None);
-        let thirds = rects(Layout::RightThirds, 4, 0, AREA);
+        let thirds = rects(Layout::RightThirds, 4, 0, AREA, GAP);
         assert_eq!(thirds.iter().skip(1).map(|r| r.unwrap().h).sum::<usize>() + 2 * GAP, AREA.h);
     }
 
     #[test]
     fn neighbors() {
-        let r = rects(Layout::RightHalves, 3, 0, AREA);
+        let r = rects(Layout::RightHalves, 3, 0, AREA, GAP);
         assert_eq!(neighbor(&r, 0, Direction::Right), 1);
         assert_eq!(neighbor(&r, 1, Direction::Down), 2);
         assert_eq!(neighbor(&r, 2, Direction::Up), 1);
         assert_eq!(neighbor(&r, 2, Direction::Left), 0);
         // Nothing to the left of the first: the previous pane.
         assert_eq!(neighbor(&r, 0, Direction::Left), 2);
-        let e = rects(Layout::Everything, 3, 1, AREA);
+        let e = rects(Layout::Everything, 3, 1, AREA, GAP);
         assert_eq!(neighbor(&e, 1, Direction::Right), 2);
     }
 }

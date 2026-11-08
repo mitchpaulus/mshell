@@ -1,5 +1,5 @@
-// One instanced quad per cell: a solid rectangle (backgrounds, the cursor)
-// or a glyph from the atlas, a grid of cell-sized slots.
+// Instanced quads in pixels: a solid rectangle (backgrounds, borders, the
+// cursor) or a glyph from the atlas, a grid of cell-sized slots.
 
 struct Globals {
     screen: vec2<f32>,     // surface size in pixels
@@ -25,12 +25,12 @@ struct VsOut {
 @vertex
 fn vs_main(
     @builtin(vertex_index) vi: u32,
-    @location(0) rect: vec4<u32>, // col, row, width and height in cells
+    @location(0) rect: vec4<u32>, // x, y, width and height in pixels
     @location(1) glyph: u32,
     @location(2) color: u32,
 ) -> VsOut {
     let corner = vec2<f32>(f32(vi & 1u), f32(vi >> 1u));
-    let pixel = (vec2<f32>(rect.xy) + corner * vec2<f32>(rect.zw)) * g.cell;
+    let pixel = vec2<f32>(rect.xy) + corner * vec2<f32>(rect.zw);
     let ndc = pixel / g.screen * 2.0 - 1.0;
     var out: VsOut;
     out.pos = vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);

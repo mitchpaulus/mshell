@@ -532,22 +532,30 @@ impl Pane {
 }
 
 /// Quads for part of the window: solid ones (backgrounds) first, then
-/// glyphs and cursors over them. Positions are relative to the origin, and
-/// clipped to the size.
+/// glyphs and cursors over them. Positions are cells from the origin, a
+/// pixel position, clipped to the size in cells.
 pub struct Canvas<'a> {
     pub solid: &'a mut Vec<Quad>,
     pub glyph: &'a mut Vec<Quad>,
-    pub x0: usize,
-    pub y0: usize,
+    pub x0: u32,
+    pub y0: u32,
     pub cols: usize,
     pub rows: usize,
+    /// The cell's size in pixels.
+    pub cell: (u32, u32),
 }
 
 impl Canvas<'_> {
+    fn at(&self, col: usize, row: usize, width: usize, glyph: u32, color: u32) -> Quad {
+        let (cw, ch) = self.cell;
+        Quad { x: self.x0 + col as u32 * cw, y: self.y0 + row as u32 * ch, w: width as u32 * cw, h: ch, glyph, color }
+    }
+
     pub fn put(&mut self, glyphs: &mut Glyphs, col: usize, row: usize, c: char, fg: u32) {
         if c != ' ' && col < self.cols && row < self.rows {
             let slot = glyphs.slot(c);
-            self.glyph.push(Quad { col: (self.x0 + col) as u32, row: (self.y0 + row) as u32, width: 1, height: 1, glyph: slot, color: fg });
+            let q = self.at(col, row, 1, slot, fg);
+            self.glyph.push(q);
         }
     }
 
@@ -559,14 +567,15 @@ impl Canvas<'_> {
 
     pub fn fill(&mut self, col: usize, row: usize, width: usize, bg: u32) {
         if row < self.rows && col < self.cols {
-            let width = width.min(self.cols - col);
-            self.solid.push(Quad { col: (self.x0 + col) as u32, row: (self.y0 + row) as u32, width: width as u32, height: 1, glyph: SOLID, color: bg });
+            let q = self.at(col, row, width.min(self.cols - col), SOLID, bg);
+            self.solid.push(q);
         }
     }
 
     fn cursor(&mut self, col: usize, row: usize) {
         if col < self.cols && row < self.rows {
-            self.glyph.push(Quad { col: (self.x0 + col) as u32, row: (self.y0 + row) as u32, width: 1, height: 1, glyph: SOLID, color: cursor_color() });
+            let q = self.at(col, row, 1, SOLID, cursor_color());
+            self.glyph.push(q);
         }
     }
 
