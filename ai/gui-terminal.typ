@@ -835,14 +835,15 @@ Have the current interactive `msh` emit:
 - *OSC 133* (semantic prompt marks: prompt start, command start, output start, command end with exit status),
 - *OSC 7* (current directory).
 
-It doesn't emit either today.
-Ghostty, kitty, WezTerm and iTerm2 would then support jumping between prompts and selecting a command's output right away.
+*Done* (2026-11-08). OSC 7 was already there; OSC 133 is new (`mshell/SemanticPrompt.go`).
+Ghostty, kitty, WezTerm, iTerm2 and tmux can now jump between prompts and select a command's output (checked in tmux).
 It also works as the first draft of the block boundaries the protocol needs.
+The prompt start carries `redraw=0`: `msh` redraws its prompt after a resize only when the next key arrives, so the terminal must not clear it.
 
 = Suggested order of work
 
-+ OSC 133 / OSC 7 in the existing interactive mode (@sec-osc).
-+ Startup spike for the renderer (@sec-recommendation), including the measurement tools (@sec-measuring).
++ OSC 133 / OSC 7 in the existing interactive mode (@sec-osc). *Done.*
++ Startup spike for the renderer (@sec-recommendation), including the measurement tools (@sec-measuring). *Done* (`gui/startup-spike`), with libghostty-vt.
 + `msh --server` with the minimal protocol: run, PTY output, input, resize, block start and finish.
 + The Rust lexer, key resolver and fixed edit operations, with the comparison tests against `msh --lex` and the resolver cases built first (@sec-port).
 + Frontend: one pane, prompt editor with the editor config and binding calls (@sec-editor), blocks with embedded emulators, alternate-screen handling.
