@@ -49,19 +49,29 @@ type serverClient struct {
 	events chan serverEvent
 	cmd    *exec.Cmd
 	// The last editor config, and the version of each config seen in
-	// order.
+	// order; the last prompt.
 	config   serverEvent
 	versions []uint32
+	prompt   string
+	title    string
+	// The directory blocks start in.
+	cwd string
 }
 
-// note keeps an editor config.
+// note keeps an editor config or a prompt.
 func (c *serverClient) note(e serverEvent) bool {
-	if e.kind != serverMsgEditorConfig {
-		return false
+	switch e.kind {
+	case serverMsgEditorConfig:
+		c.config = e
+		c.versions = append(c.versions, e.version)
+		return true
+	case serverMsgPrompt:
+		n := binary.LittleEndian.Uint32(e.data[1:])
+		c.title = string(e.data[5 : 5+n])
+		c.prompt = string(e.data[5+n:])
+		return true
 	}
-	c.config = e
-	c.versions = append(c.versions, e.version)
-	return true
+	return false
 }
 
 func startServer(t *testing.T) *serverClient {
@@ -90,7 +100,8 @@ func startServer(t *testing.T) *serverClient {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	c := &serverClient{t: t, in: in, events: make(chan serverEvent, 1024), cmd: cmd}
+	cwd, _ := os.Getwd()
+	c := &serverClient{t: t, in: in, events: make(chan serverEvent, 1024), cmd: cmd, cwd: cwd}
 	go c.read(out)
 	t.Cleanup(func() {
 		in.Close()
@@ -136,6 +147,8 @@ func (c *serverClient) read(out io.Reader) {
 			e.version, e.data = le.Uint32(p), append([]byte(nil), p[4:]...)
 		case serverMsgCallResult:
 			e.request, e.status, e.data = le.Uint32(p), p[4], append([]byte(nil), p[5:]...)
+		case serverMsgPrompt:
+			e.data = append([]byte(nil), p...)
 		}
 		c.events <- e
 	}
@@ -195,8 +208,7 @@ func (c *serverClient) started(id uint64) {
 	if e.kind != serverMsgBlockStarted || e.id != id {
 		c.t.Fatalf("got %+v, want block_started %d", e, id)
 	}
-	cwd, _ := os.Getwd()
-	if string(e.data) != cwd || time.Since(time.Unix(0, e.unixNs)) > time.Minute {
+	if string(e.data) != c.cwd || time.Since(time.Unix(0, e.unixNs)) > time.Minute {
 		c.t.Fatalf("block_started cwd %q at %d", e.data, e.unixNs)
 	}
 }
@@ -540,5 +552,68 @@ func TestServerEditorConfigAndCalls(t *testing.T) {
 		if r := c.call(serverMsgIsProgram, uint32(30+i), []byte(tc.word)); r.status != tc.want {
 			t.Fatalf("is_program %q: status %d", tc.word, r.status)
 		}
+	}
+}
+
+func TestServerPromptAndCompletion(t *testing.T) {
+	c := startServer(t)
+	le := binary.LittleEndian
+	dir := t.TempDir()
+	for _, f := range []string{"alpha.txt", "beta-one.txt", "beta-two.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The built-in prompt arrives at startup; setPrompt's after the line
+	// that sets it, before its block_finished.
+	c.run(1, "'"+dir+"' cd")
+	if _, code := c.block(1); code != 0 || !strings.Contains(c.prompt, filepath.Base(dir)) {
+		t.Fatalf("built-in prompt %q, exit %d", c.prompt, code)
+	}
+	c.cwd = dir
+	c.run(2, `(drop ['title' setWindowTitle baseRed baseNormal setFgColorBase16 'my prompt> ' promptText resetStyle]) setPrompt`)
+	out, code := c.block(2)
+	if code != 0 {
+		t.Fatalf("setPrompt: %q, exit %d", out, code)
+	}
+	if !strings.Contains(c.prompt, "my prompt> ") || !strings.Contains(c.prompt, "\x1b[") || c.title != "title" {
+		t.Fatalf("prompt after setPrompt: %q, title %q", c.prompt, c.title)
+	}
+
+	edit := func(request uint32, op editOpKind, line string, cursor int) (string, int, bool, []string) {
+		t.Helper()
+		p := append([]byte{byte(op)}, le.AppendUint32(nil, uint32(cursor))...)
+		r := c.call(serverMsgEdit, request, append(p, line...))
+		if r.status != callYes {
+			t.Fatalf("edit %d: status %d, %q", op, r.status, r.data)
+		}
+		b := r.data
+		cur, cycling := int(le.Uint32(b)), b[4] == 1
+		n := int(le.Uint16(b[10:]))
+		b = b[12:]
+		var matches []string
+		for range n {
+			l := int(le.Uint32(b))
+			matches = append(matches, string(b[4:4+l]))
+			b = b[4+l:]
+		}
+		return string(b), cur, cycling, matches
+	}
+	// A unique prefix completes.
+	if line, cur, cycling, _ := edit(10, opComplete, "cat al", 6); line != "cat alpha.txt" || cur != len(line) || cycling {
+		t.Fatalf("complete al: %q at %d, cycling %v", line, cur, cycling)
+	}
+	// An ambiguous one inserts what they share and starts a cycle, which
+	// Tab then steps through.
+	line, cur, cycling, matches := edit(11, opComplete, "cat be", 6)
+	if line != "cat beta-" || !cycling || len(matches) != 2 {
+		t.Fatalf("complete be: %q at %d, cycling %v, %q", line, cur, cycling, matches)
+	}
+	if line, _, _, _ = edit(12, opComplete, line, cur); line != "cat beta-one.txt" {
+		t.Fatalf("cycle: %q", line)
+	}
+	if _, _, cycling, _ = edit(13, opCompleteAccept, line, len(line)); cycling {
+		t.Fatal("accept left the cycle on")
 	}
 }

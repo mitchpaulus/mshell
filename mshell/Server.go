@@ -312,7 +312,7 @@ func (s *server) readProtocol(in io.Reader, runs chan<- any) {
 				s.protocolError("run with block id 0")
 			}
 			runs <- serverRun{id: id, source: string(payload[8:])}
-		case serverMsgBindingCall, serverMsgAbbrCall, serverMsgRegexMatch, serverMsgIsProgram:
+		case serverMsgBindingCall, serverMsgAbbrCall, serverMsgRegexMatch, serverMsgIsProgram, serverMsgEdit:
 			// The editor's requests run in order with the blocks, on the
 			// main loop, which owns the evaluator.
 			runs <- serverCall{kind: kind, payload: append([]byte(nil), payload...)}
@@ -448,6 +448,7 @@ func runServer() int {
 	// The frontend's editor waits for the first config: the bindings
 	// init.msh added.
 	s.sendConfigIfChanged(&state)
+	s.sendPrompt(&state)
 
 	for request := range runs {
 		switch request := request.(type) {
@@ -476,7 +477,11 @@ func (s *server) runBlock(state *TermState, run serverRun) (int, bool) {
 	state.leaveRawMode()
 	os.Stdout.Write(s.marks.marker('S', run.id))
 	source := strings.TrimSpace(run.source)
+	state.lineRan = source != ""
 	exit, code := state.runLine(source)
+	if state.lineRan {
+		state.recordLine()
+	}
 	if !exit {
 		code = 0
 		if source != "" {
@@ -484,8 +489,13 @@ func (s *server) runBlock(state *TermState, run serverRun) (int, bool) {
 		}
 	}
 	// A line can add bindings or abbreviations: the new config goes before
-	// block_finished, which the end marker becomes.
+	// block_finished, which the end marker becomes, as does the prompt for
+	// the next line (what the prompt's quotation prints is part of the
+	// block).
 	s.sendConfigIfChanged(state)
+	if !exit {
+		s.sendPrompt(state)
+	}
 	// Back to the cooked state before the end marker, so the marker passes
 	// through whatever the program left the terminal in.
 	state.leaveRawMode()

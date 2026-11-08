@@ -12,8 +12,12 @@ It starts `msh server` (from `$MSH_BIN`, else the repository's `mshell/mshell`, 
 with your `init.msh`, so your bindings and abbreviations work at the prompt.
 `MSH_GUI_FONT` and `MSH_GUI_FONT_SIZE` pick the font (default Noto Sans Mono, 15 px).
 
-- Each command is a block: a header with the command, a status dot, its time and exit code,
-  then its output in its own libghostty-vt terminal, with colours.
+- Not a terminal emulator: each command is a card (a header with the command, a status dot,
+  its time and exit code, then its output, which alone runs in its own libghostty-vt terminal),
+  and the prompt is a box of its own at the bottom.
+- The prompt is yours: the engine runs `setPrompt`'s quotation (or the built-in prompt) and sends it with its colours.
+- Tab completes as terminal msh does, run by the engine; the candidates show in a menu above the prompt box,
+  and Tab, Shift-Tab and the arrows move through them.
 - The prompt is edited by the Rust port of msh's editor (`gui/msh-editor`):
   bindings, chords with their timings, abbreviations, `bindingFunc`s and `abbrFunc`s run by the engine.
 - While a block runs, keys go to its program, encoded by libghostty from the terminal's modes.
@@ -30,6 +34,6 @@ runs the app headless from a script of keys and writes the frame it would draw (
 
 ## Not yet
 
-History, completion, selection and copy, mouse reporting, `editRun`, the user's prompt (`setPrompt`),
+History, selection and copy, mouse reporting, `editRun`,
 resizing finished blocks, fallback fonts, wide characters and bold.
 A cell shows its first code point, one cell wide.

@@ -25,6 +25,7 @@ const MSG_BINDING_CALL: u8 = 0x04;
 const MSG_ABBR_CALL: u8 = 0x05;
 const MSG_REGEX_MATCH: u8 = 0x06;
 const MSG_IS_PROGRAM: u8 = 0x07;
+const MSG_EDIT: u8 = 0x08;
 
 // Engine to frontend.
 const MSG_HELLO: u8 = 0x81;
@@ -34,6 +35,7 @@ const MSG_BLOCK_FINISHED: u8 = 0x84;
 const MSG_EXIT: u8 = 0x85;
 const MSG_EDITOR_CONFIG: u8 = 0x86;
 const MSG_CALL_RESULT: u8 = 0x87;
+const MSG_PROMPT: u8 = 0x88;
 
 const CALL_NO: u8 = 0;
 const CALL_YES: u8 = 1;
@@ -51,6 +53,9 @@ pub enum Event {
     BlockFinished { id: u64, exit_code: i32, duration_ns: u64 },
     /// A new editor config arrived; `Engine::take_config` has it.
     EditorConfig { version: u32 },
+    /// The prompt for the next line: text with SGR and OSC 8 escapes and
+    /// \r\n line breaks, and the window title it sets, if any.
+    Prompt { title: Option<String>, text: Vec<u8> },
     /// The engine ran `exit`; it exits after this.
     Exit { code: i32 },
     /// The protocol closed or broke.
@@ -317,6 +322,28 @@ impl Engine {
         })
     }
 
+    /// Runs a completion op (`EditOp::Complete` and the rest) on the line in
+    /// the engine, which keeps the completion cycle between requests.
+    pub fn edit(&mut self, op: &EditOp, line: &str, cursor: usize) -> io::Result<Edited> {
+        let member = op_member(op).ok_or_else(|| bad(format!("{op:?} is not an op the engine edits")))?;
+        let kind = EDIT_OP_MEMBERS.iter().position(|m| *m == member).unwrap() as u8;
+        let mut p = vec![kind];
+        p.extend_from_slice(&(cursor as u32).to_le_bytes());
+        p.extend_from_slice(line.as_bytes());
+        let r = self.call(MSG_EDIT, &p)?;
+        if r.status != CALL_YES {
+            return Err(bad(String::from_utf8_lossy(&r.data).into_owned()));
+        }
+        let mut rd = Reader { b: &r.data };
+        let cursor = rd.u32().map_err(bad)? as usize;
+        let cycling = rd.u8().map_err(bad)? == 1;
+        let selected = rd.u32().map_err(bad)? as i32;
+        let bell = rd.u8().map_err(bad)? == 1;
+        let candidates = (0..rd.u16().map_err(bad)?).map(|_| rd.str()).collect::<Result<_, _>>().map_err(bad)?;
+        let line = String::from_utf8_lossy(rd.rest()).into_owned();
+        Ok(Edited { line, cursor, cycling, selected: (selected >= 0).then_some(selected as usize), bell, candidates })
+    }
+
     pub fn is_program(&mut self, word: &str) -> io::Result<bool> {
         Ok(self.call(MSG_IS_PROGRAM, word.as_bytes())?.status == CALL_YES)
     }
@@ -423,6 +450,11 @@ fn decode_event(kind: u8, r: &mut Reader) -> Result<Frame, String> {
         MSG_PTY_OUTPUT => Event::PtyOutput { id: r.u64()?, bytes: r.rest().to_vec() },
         MSG_BLOCK_FINISHED => Event::BlockFinished { id: r.u64()?, exit_code: r.u32()? as i32, duration_ns: r.u64()? },
         MSG_EXIT => Event::Exit { code: r.u32()? as i32 },
+        MSG_PROMPT => {
+            let has_title = r.u8()? == 1;
+            let title = r.str()?;
+            Event::Prompt { title: has_title.then_some(title), text: r.rest().to_vec() }
+        }
         MSG_EDITOR_CONFIG => {
             let version = r.u32()?;
             return Ok(Frame::Config(version, decode_config(r.rest())?));
@@ -438,15 +470,16 @@ fn decode_event(kind: u8, r: &mut Reader) -> Result<Frame, String> {
 }
 
 /// The editor's host backed by the engine: bindingFuncs, abbrFuncs, regex
-/// abbreviations and program words go to the engine; effects to `effect`.
-pub struct EngineHost<'a, F: FnMut(&EditOp, &mut Line) -> bool> {
+/// abbreviations and program words go to the engine; effects to `effect`,
+/// which is given the engine too (completion runs there).
+pub struct EngineHost<'a, F: FnMut(&mut Engine, &EditOp, &mut Line) -> bool> {
     pub engine: &'a mut Engine,
     pub effect: F,
     /// The message of the last quotation that failed, to show.
     pub problem: Option<String>,
 }
 
-impl<F: FnMut(&EditOp, &mut Line) -> bool> Host for EngineHost<'_, F> {
+impl<F: FnMut(&mut Engine, &EditOp, &mut Line) -> bool> Host for EngineHost<'_, F> {
     fn call(&mut self, binding: &Binding, state: &EditState) -> Option<Vec<EditOp>> {
         let Action::Func(quote) = binding.action else { return None };
         match self.engine.binding_call(quote, state) {
@@ -459,7 +492,7 @@ impl<F: FnMut(&EditOp, &mut Line) -> bool> Host for EngineHost<'_, F> {
         }
     }
     fn effect(&mut self, op: &EditOp, line: &mut Line) -> bool {
-        (self.effect)(op, line)
+        (self.effect)(self.engine, op, line)
     }
     fn is_program(&mut self, word: &str) -> bool {
         self.engine.is_program(word).unwrap_or(false)
@@ -478,4 +511,30 @@ impl<F: FnMut(&EditOp, &mut Line) -> bool> Host for EngineHost<'_, F> {
             Err(_) => AbbrAnswer::Fail,
         }
     }
+}
+
+/// The line after a completion op in the engine.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Edited {
+    pub line: String,
+    pub cursor: usize,
+    /// A completion cycle is on: the editor is in complete mode.
+    pub cycling: bool,
+    pub selected: Option<usize>,
+    pub bell: bool,
+    pub candidates: Vec<String>,
+}
+
+/// The member name of a completion op.
+fn op_member(op: &EditOp) -> Option<&'static str> {
+    Some(match op {
+        EditOp::Complete => "editComplete",
+        EditOp::CompleteBack => "editCompleteBack",
+        EditOp::CompleteNext => "editCompleteNext",
+        EditOp::CompletePrev => "editCompletePrev",
+        EditOp::CompleteLeft => "editCompleteLeft",
+        EditOp::CompleteRight => "editCompleteRight",
+        EditOp::CompleteAccept => "editCompleteAccept",
+        _ => return None,
+    })
 }

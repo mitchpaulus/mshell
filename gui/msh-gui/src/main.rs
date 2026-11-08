@@ -1,14 +1,16 @@
-//! The mshell GUI (ai/gui-terminal.typ): one pane of blocks, each command's
-//! output in its own terminal emulator, and the prompt edited locally by the
-//! Rust port of msh's editor, with the engine (`msh server`) running the
-//! lines and answering what only it can.
+//! The mshell GUI (ai/gui-terminal.typ). Not a terminal emulator: each
+//! command is a card with its output, which alone runs in a terminal
+//! emulator of its own, and the prompt is a box of its own at the bottom,
+//! edited locally by the Rust port of msh's editor. The engine (`msh
+//! server`) runs the lines, renders the prompt, completes, and answers what
+//! only it can.
 //!
 //! Usage: msh-gui [MSH]   (MSH: the msh binary; default $MSH_BIN, then the
 //!                         repository's mshell/mshell, then msh on PATH)
 //! MSH_GUI_FONT and MSH_GUI_FONT_SIZE choose the font.
 //!
-//! First version: no history, completion, selection or mouse reporting; a
-//! cell shows its first code point, one cell wide.
+//! Not yet: history, selection, mouse reporting; a cell shows its first code
+//! point, one cell wide.
 
 mod keys;
 mod render;
@@ -19,7 +21,7 @@ use msh_client::{Engine, EngineHost, Event};
 use msh_editor::edit::{EditOp, Line};
 use msh_editor::graphemes::clusters;
 use msh_editor::keys::KeyCode;
-use msh_editor::resolver::{Config, Editor};
+use msh_editor::resolver::{Config, Editor, Mode};
 use render::{rgba, Glyphs, Quad, Renderer, SOLID};
 use std::cell::{Cell as Flag, RefCell};
 use std::sync::Arc;
@@ -36,24 +38,39 @@ enum UserEvent {
 }
 
 // The theme.
-const BG: [u8; 3] = [0x12, 0x12, 0x14];
+const BG: [u8; 3] = [0x10, 0x10, 0x13];
+const CARD_BG: [u8; 3] = [0x17, 0x17, 0x1b];
+const HEADER_BG: [u8; 3] = [0x1e, 0x1e, 0x24];
+const PROMPT_BG: [u8; 3] = [0x22, 0x1e, 0x2a];
+const MENU_BG: [u8; 3] = [0x26, 0x26, 0x2e];
+const SELECTED_BG: [u8; 3] = [0x4a, 0x30, 0x5a];
 const FG: [u8; 3] = [0xd8, 0xd8, 0xd8];
-const DIM: [u8; 3] = [0x70, 0x70, 0x7a];
-const ACCENT: [u8; 3] = [0xc6, 0x78, 0xdd];
+const DIM: [u8; 3] = [0x78, 0x78, 0x84];
 const COMMAND: [u8; 3] = [0x8a, 0xb4, 0xf8];
 const OK: [u8; 3] = [0x7e, 0xc6, 0x99];
 const FAILED: [u8; 3] = [0xe0, 0x6c, 0x75];
-const HEADER_BG: [u8; 3] = [0x1a, 0x1a, 0x1e];
+
+/// Columns between a card's edge and its output; rows between cards.
+const MARGIN: usize = 1;
+const GAP: usize = 1;
+/// The prompt box's inner left edge.
+const PROMPT_INSET: usize = 2;
+/// The most rows the completion menu shows.
+const MENU_ROWS: usize = 8;
 
 fn color([r, g, b]: [u8; 3]) -> u32 {
     rgba(r, g, b, 0xff)
+}
+
+fn cursor_color() -> u32 {
+    rgba(FG[0], FG[1], FG[2], 0x90)
 }
 
 /// A command and its output.
 struct Block {
     id: u64,
     /// The line as it ran; empty for output outside any block (startup
-    /// messages), which has no header.
+    /// messages).
     command: String,
     term: vt::Term,
     /// Exit code and duration, once finished.
@@ -61,13 +78,17 @@ struct Block {
 }
 
 impl Block {
-    fn header_rows(&self) -> usize {
-        !self.command.is_empty() as usize
-    }
-
+    /// Rows on screen: the header, the output, and the gap after it.
     fn rows(&self) -> usize {
-        self.header_rows() + self.term.content_rows()
+        1 + self.term.content_rows() + GAP
     }
+}
+
+/// Completion candidates while a cycle is on.
+#[derive(Default)]
+struct Menu {
+    candidates: Vec<String>,
+    selected: Option<usize>,
 }
 
 struct App {
@@ -86,7 +107,11 @@ struct App {
     next_block: u64,
     cols: u16,
     rows: u16,
-    /// Rows scrolled up from the bottom.
+    /// The prompt as the engine rendered it, in an emulator of its own.
+    prompt: Option<vt::Term>,
+    prompt_text: Vec<u8>,
+    menu: Menu,
+    /// Rows scrolled up from the newest output.
     scroll: usize,
     mods: ModifiersState,
     start: Instant,
@@ -107,8 +132,18 @@ impl App {
         }
     }
 
-    /// The pane's grid for the window's size, given to the engine's PTY and
-    /// the running block's emulator.
+    /// Columns a card's output has: the PTY's width.
+    fn output_cols(&self) -> u16 {
+        (self.cols as usize).saturating_sub(2 * MARGIN).max(10) as u16
+    }
+
+    /// Columns the prompt box's text has.
+    fn prompt_cols(&self) -> u16 {
+        (self.cols as usize).saturating_sub(2 * PROMPT_INSET).max(10) as u16
+    }
+
+    /// The grid for the window's size. Programs get the cards' width and
+    /// the window's height (a program on the alternate screen has it all).
     fn resize(&mut self, width: u32, height: u32) {
         let Some(glyphs) = &self.glyphs else { return };
         let (cw, ch) = (glyphs.cell.w, glyphs.cell.h);
@@ -117,10 +152,22 @@ impl App {
         if let Some(r) = &mut self.renderer {
             r.resize(width, height);
         }
-        let _ = self.engine.resize(self.cols, self.rows, width as u16, height as u16);
+        let (oc, rows) = (self.output_cols(), self.rows);
+        let _ = self.engine.resize(oc, rows, oc as u16 * cw as u16, rows * ch as u16);
         if let Some(i) = self.running {
-            self.blocks[i].term.resize(self.cols, self.rows, cw, ch);
+            self.blocks[i].term.resize(oc, rows, cw, ch);
         }
+        self.set_prompt();
+    }
+
+    /// Lays out the prompt text in its emulator, at the box's width.
+    fn set_prompt(&mut self) {
+        if self.prompt_text.is_empty() {
+            return;
+        }
+        let mut t = vt::Term::new(self.prompt_cols(), 16);
+        t.write(&self.prompt_text);
+        self.prompt = Some(t);
     }
 
     /// Handles an event from the engine; returns whether the app should end.
@@ -136,6 +183,13 @@ impl App {
                     }
                 }
             }
+            Event::Prompt { title, text } => {
+                self.prompt_text = text;
+                self.set_prompt();
+                if let (Some(t), Some(w)) = (title, &self.window) {
+                    w.set_title(&t);
+                }
+            }
             Event::PtyOutput { id, bytes } => {
                 let i = match self.blocks.iter().position(|b| b.id == id) {
                     Some(i) => i,
@@ -144,7 +198,7 @@ impl App {
                         self.blocks.push(Block {
                             id,
                             command: String::new(),
-                            term: vt::Term::new(self.cols, self.rows),
+                            term: vt::Term::new(self.output_cols(), self.rows),
                             finished: Some((0, 0)),
                         });
                         self.blocks.len() - 1
@@ -180,7 +234,9 @@ impl App {
         };
         let (accept, exit, clear) = (Flag::new(false), Flag::new(false), Flag::new(false));
         let message = RefCell::new(None);
-        let effect = |op: &EditOp, _: &mut Line| match op {
+        // A completion op's result: whether the cycle is on, and the menu.
+        let completed: RefCell<Option<(bool, Menu)>> = RefCell::new(None);
+        let effect = |engine: &mut Engine, op: &EditOp, line: &mut Line| match op {
             EditOp::Accept => {
                 accept.set(true);
                 true
@@ -197,7 +253,22 @@ impl App {
                 clear.set(true);
                 false
             }
-            // Not in the first version: history, completion, editRun.
+            EditOp::Complete
+            | EditOp::CompleteBack
+            | EditOp::CompleteNext
+            | EditOp::CompletePrev
+            | EditOp::CompleteLeft
+            | EditOp::CompleteRight
+            | EditOp::CompleteAccept => {
+                if let Ok(e) = engine.edit(op, &line.text, line.cursor) {
+                    line.text = e.line;
+                    line.cursor = e.cursor;
+                    let menu = Menu { candidates: e.candidates, selected: e.selected };
+                    *completed.borrow_mut() = Some((e.cycling, menu));
+                }
+                false
+            }
+            // Not yet: history, editRun.
             _ => false,
         };
         let mut host = EngineHost { engine: &mut self.engine, effect, problem: None };
@@ -206,7 +277,19 @@ impl App {
             self.editor.expand_on_enter(cfg, &mut host);
         }
         let problem = host.problem.take();
+        drop(host);
         self.message = message.into_inner().or(problem);
+        // The editor leaves complete mode on a key complete mode doesn't
+        // bind; the engine ends its cycle too.
+        if self.editor.left_complete {
+            let line = &self.editor.line;
+            let _ = self.engine.edit(&EditOp::CompleteAccept, &line.text.clone(), line.cursor);
+            self.menu = Menu::default();
+        }
+        if let Some((cycling, menu)) = completed.into_inner() {
+            self.editor.mode = if cycling { Mode::Complete } else { Mode::Insert };
+            self.menu = if cycling { menu } else { Menu::default() };
+        }
         if let Some(cfg) = self.engine.take_config() {
             self.cfg = Some(cfg);
         }
@@ -226,12 +309,15 @@ impl App {
     fn run_line(&mut self) {
         let line = std::mem::take(&mut self.editor.line.text);
         self.editor.line.cursor = 0;
+        self.editor.mode = Mode::Insert;
+        self.menu = Menu::default();
         if line.trim().is_empty() {
             return;
         }
         let id = self.next_block;
         self.next_block += 1;
-        self.blocks.push(Block { id, command: line.clone(), term: vt::Term::new(self.cols, self.rows), finished: None });
+        let term = vt::Term::new(self.output_cols(), self.rows);
+        self.blocks.push(Block { id, command: line.clone(), term, finished: None });
         self.running = Some(self.blocks.len() - 1);
         let _ = self.engine.run(id, &line);
     }
@@ -262,55 +348,57 @@ impl App {
     /// Lays out the frame as quads in `self.quads`: solid ones first, then
     /// glyphs.
     fn compose(&mut self) {
+        let prompt_cols = self.prompt_cols() as usize;
         let Some(glyphs) = &mut self.glyphs else { return };
         let (cols, rows) = (self.cols as usize, self.rows as usize);
         self.quads.clear();
         self.glyph_quads.clear();
         let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, cols, rows };
-        let cell_color = |rgb: vt::Rgb, default: [u8; 3]| color(rgb.unwrap_or(default));
 
-        // A program on the alternate screen has the whole pane.
+        // A program on the alternate screen has the whole window.
         if let Some(i) = self.running.filter(|&i| self.blocks[i].term.alternate_screen()) {
             let term = &mut self.blocks[i].term;
             term.scroll_to_bottom();
-            let cursor = term.visit(0, rows, |r, c, cell| {
-                let (fg, bg) = if cell.inverse_default && cell.fg.is_none() && cell.bg.is_none() {
-                    (color(BG), Some(color(FG)))
-                } else {
-                    (cell_color(cell.fg, FG), cell.bg.map(|b| color(b)))
-                };
-                if let Some(bg) = bg {
-                    cv.fill(c, r, 1, bg);
-                }
-                cv.put(glyphs, c, r, cell.ch, fg);
-            });
+            let cursor = term.visit(0, rows, |r, c, cell| cv.cell(glyphs, MARGIN + c, r, cell, BG));
             if let Some((x, y)) = cursor {
-                cv.glyph.push(Quad { col: x as u32, row: y as u32, width: 1, height: 1, glyph: SOLID, color: rgba(FG[0], FG[1], FG[2], 0x90) });
+                cv.glyph.push(Quad::solid(MARGIN + x as usize, y as usize, 1, cursor_color()));
             }
             cv.solid.extend_from_slice(cv.glyph);
             return;
         }
 
-        // The prompt: "> " and the line, wrapped; nothing while a block runs.
+        // The prompt box, at the bottom: the rendered prompt, then the line.
+        // While a command runs, it says so; keys go to the program.
         let line = &self.editor.line;
+        let (prompt_x, prompt_y) = self.prompt.as_ref().map_or((0, 0), |p| {
+            let (x, y) = p.cursor();
+            (x as usize, y as usize)
+        });
         let line_cells = clusters(&line.text).count();
         let cursor_cells = clusters(&line.text[..line.cursor]).count();
-        let prompt_rows =
-            if self.running.is_some() { 0 } else { (2 + line_cells + 1).div_ceil(cols) + self.message.is_some() as usize };
-        let total: usize = self.blocks.iter().map(Block::rows).sum::<usize>() + prompt_rows;
-        let max_scroll = total.saturating_sub(rows);
-        self.scroll = self.scroll.min(max_scroll);
-        let top = total.saturating_sub(rows + self.scroll);
+        let text_rows = if self.running.is_some() { 1 } else { prompt_y + (prompt_x + line_cells + 1).div_ceil(prompt_cols) };
+        let box_rows = 2 + text_rows + self.message.is_some() as usize;
+        let box_top = rows.saturating_sub(box_rows);
+        let menu = &self.menu;
+        let menu_width = menu.candidates.iter().map(|c| c.chars().count()).max().unwrap_or(0) + 2;
+        let menu_cols = (prompt_cols / menu_width.max(1)).max(1);
+        let menu_rows = menu.candidates.len().div_ceil(menu_cols).min(MENU_ROWS);
+        let area = box_top.saturating_sub(menu_rows);
 
-        // Blocks, from the top.
+        // The cards, newest at the bottom of the area above the prompt.
+        let total: usize = self.blocks.iter().map(Block::rows).sum();
+        self.scroll = self.scroll.min(total.saturating_sub(area));
+        let top = total.saturating_sub(area + self.scroll);
         let mut y = 0usize;
         for (bi, b) in self.blocks.iter_mut().enumerate() {
             let height = b.rows();
-            if y + height <= top || y >= top + rows {
+            if y + height <= top || y >= top + area {
                 y += height;
                 continue;
             }
-            if b.header_rows() == 1 && y >= top {
+            let shown = |row: usize| row >= top && row < top + area;
+            // The header: status, command, time.
+            if shown(y) {
                 let wy = y - top;
                 cv.fill(0, wy, cols, color(HEADER_BG));
                 let (mark, mark_color) = match b.finished {
@@ -318,51 +406,42 @@ impl App {
                     Some((0, _)) => ('●', OK),
                     Some(_) => ('●', FAILED),
                 };
-                cv.put(glyphs, 0, wy, mark, color(mark_color));
-                for (i, c) in b.command.chars().filter(|c| *c != '\n').take(cols.saturating_sub(2)).enumerate() {
-                    cv.put(glyphs, 2 + i, wy, c, color(COMMAND));
+                if b.command.is_empty() {
+                    cv.text(glyphs, MARGIN, wy, "startup", color(DIM));
+                } else {
+                    cv.put(glyphs, MARGIN, wy, mark, color(mark_color));
+                    let command: String = b.command.chars().filter(|c| *c != '\n').take(cols.saturating_sub(4)).collect();
+                    cv.text(glyphs, MARGIN + 2, wy, &command, color(COMMAND));
                 }
-                if let Some((code, ns)) = b.finished {
-                    let status = if code == 0 { format!("{:.1} s", ns as f64 / 1e9) } else { format!("exit {code}  {:.1} s", ns as f64 / 1e9) };
-                    let x = cols.saturating_sub(status.chars().count() + 1);
-                    for (i, c) in status.chars().enumerate() {
-                        cv.put(glyphs, x + i, wy, c, color(if code == 0 { DIM } else { FAILED }));
-                    }
+                if let Some((code, ns)) = b.finished.filter(|_| !b.command.is_empty()) {
+                    let secs = ns as f64 / 1e9;
+                    let status = if code == 0 { format!("{secs:.1} s") } else { format!("exit {code}  {secs:.1} s") };
+                    let x = cols.saturating_sub(status.chars().count() + MARGIN);
+                    cv.text(glyphs, x, wy, &status, color(if code == 0 { DIM } else { FAILED }));
                 }
             }
-            let content_y = y + b.header_rows();
+            // The output, inset, on the card's background.
+            let content_y = y + 1;
             let content = b.term.content_rows();
+            for row in content_y..content_y + content {
+                if shown(row) {
+                    cv.fill(0, row - top, cols, color(CARD_BG));
+                }
+            }
             let from = top.max(content_y) - content_y;
-            let to = (top + rows).min(content_y + content).saturating_sub(content_y);
+            let to = (top + area).min(content_y + content).saturating_sub(content_y);
             if from < to {
                 let off = b.term.scroll_to(from);
                 let base = content_y + from;
                 let cursor = b.term.visit(off, off + (to - from), |r, c, cell| {
-                    let wy = base + (r - off) - top;
-                    let (fg, bg) = if cell.inverse_default && cell.fg.is_none() && cell.bg.is_none() {
-                        (color(BG), Some(color(FG)))
-                    } else {
-                        (cell_color(cell.fg, FG), cell.bg.map(|b| color(b)))
-                    };
-                    if let Some(bg) = bg {
-                        cv.fill(c, wy, 1, bg);
-                    }
-                    cv.put(glyphs, c, wy, cell.ch, fg);
+                    cv.cell(glyphs, MARGIN + c, base + (r - off) - top, cell, CARD_BG);
                 });
                 b.term.scroll_to_bottom();
-                // The running program's cursor.
                 if Some(bi) == self.running {
                     if let Some((x, vy)) = cursor {
                         let row = content_y + (from - off) + vy as usize;
-                        if row >= top && row < top + rows {
-                            cv.glyph.push(Quad {
-                                col: x as u32,
-                                row: (row - top) as u32,
-                                width: 1,
-                                height: 1,
-                                glyph: SOLID,
-                                color: rgba(FG[0], FG[1], FG[2], 0x90),
-                            });
+                        if shown(row) {
+                            cv.glyph.push(Quad::solid(MARGIN + x as usize, row - top, 1, cursor_color()));
                         }
                     }
                 }
@@ -370,42 +449,58 @@ impl App {
             y += height;
         }
 
-        // The prompt and the line being edited.
-        if self.running.is_none() {
-            let py = total - prompt_rows;
-            let at = |cell: usize| (cell % cols, py + cell / cols);
-            let put_at = |cv: &mut Canvas, glyphs: &mut Glyphs, cell: usize, c: char, fg: u32| {
-                let (x, row) = at(cell);
-                if row >= top {
-                    cv.put(glyphs, x, row - top, c, fg);
+        // The completion menu, just above the prompt box.
+        if menu_rows > 0 {
+            let first_row = menu.selected.map_or(0, |s| (s % menu.candidates.len().div_ceil(menu_cols)).saturating_sub(menu_rows - 1));
+            let all_rows = menu.candidates.len().div_ceil(menu_cols);
+            for r in 0..menu_rows {
+                cv.fill(0, area + r, cols, color(MENU_BG));
+            }
+            for (i, c) in menu.candidates.iter().enumerate() {
+                let (col, row) = (i / all_rows, i % all_rows);
+                if row < first_row || row >= first_row + menu_rows {
+                    continue;
                 }
-            };
-            put_at(&mut cv, glyphs, 0, '>', color(ACCENT));
+                let (x, wy) = (PROMPT_INSET + col * menu_width, area + row - first_row);
+                if Some(i) == menu.selected {
+                    cv.fill(x.saturating_sub(1), wy, menu_width, color(SELECTED_BG));
+                }
+                cv.text(glyphs, x, wy, c, color(FG));
+            }
+        }
+
+        // The prompt box.
+        for r in box_top..rows {
+            cv.fill(0, r, cols, color(PROMPT_BG));
+        }
+        let text_top = box_top + 1;
+        if let Some(i) = self.running {
+            cv.text(glyphs, PROMPT_INSET, text_top, "running:", color(DIM));
+            let command: String = self.blocks[i].command.chars().filter(|c| *c != '\n').collect();
+            cv.text(glyphs, PROMPT_INSET + 9, text_top, &command, color(COMMAND));
+        } else {
+            if let Some(p) = &mut self.prompt {
+                p.visit(0, prompt_y + 1, |r, c, cell| cv.cell(glyphs, PROMPT_INSET + c, text_top + r, cell, PROMPT_BG));
+            }
+            let at = |cell: usize| (PROMPT_INSET + (prompt_x + cell) % prompt_cols, text_top + prompt_y + (prompt_x + cell) / prompt_cols);
             for (i, (s, _)) in clusters(&line.text).enumerate() {
-                let c = line.text[s..].chars().next().unwrap_or(' ');
-                put_at(&mut cv, glyphs, 2 + i, c, color(FG));
+                let (x, row) = at(i);
+                cv.put(glyphs, x, row, line.text[s..].chars().next().unwrap_or(' '), color(FG));
             }
-            let (cx, cy) = at(2 + cursor_cells);
-            if cy >= top && cy < top + rows {
-                cv.glyph.push(Quad {
-                    col: cx as u32,
-                    row: (cy - top) as u32,
-                    width: 1,
-                    height: 1,
-                    glyph: SOLID,
-                    color: rgba(FG[0], FG[1], FG[2], 0x90),
-                });
-            }
+            let (cx, cy) = at(cursor_cells);
+            cv.glyph.push(Quad::solid(cx, cy, 1, cursor_color()));
             if let Some(m) = &self.message {
-                let my = py + (2 + line_cells + 1).div_ceil(cols);
-                if my >= top && my < top + rows {
-                    for (i, c) in m.trim_end().chars().filter(|c| *c != '\n').take(cols).enumerate() {
-                        cv.put(glyphs, i, my - top, c, color(DIM));
-                    }
-                }
+                let text: String = m.trim_end().chars().filter(|c| *c != '\n').collect();
+                cv.text(glyphs, PROMPT_INSET, text_top + text_rows, &text, color(DIM));
             }
         }
         cv.solid.extend_from_slice(cv.glyph);
+    }
+}
+
+impl Quad {
+    fn solid(col: usize, row: usize, width: usize, color: u32) -> Quad {
+        Quad { col: col as u32, row: row as u32, width: width as u32, height: 1, glyph: SOLID, color }
     }
 }
 
@@ -426,10 +521,30 @@ impl Canvas<'_> {
         }
     }
 
+    fn text(&mut self, glyphs: &mut Glyphs, col: usize, row: usize, s: &str, fg: u32) {
+        for (i, c) in s.chars().enumerate() {
+            self.put(glyphs, col + i, row, c, fg);
+        }
+    }
+
     fn fill(&mut self, col: usize, row: usize, width: usize, bg: u32) {
         if row < self.rows {
-            self.solid.push(Quad { col: col as u32, row: row as u32, width: width as u32, height: 1, glyph: SOLID, color: bg });
+            self.solid.push(Quad::solid(col, row, width, bg));
         }
+    }
+
+    /// A cell of an emulator, over `bg` where it has no background of its
+    /// own.
+    fn cell(&mut self, glyphs: &mut Glyphs, col: usize, row: usize, cell: &vt::Cell, bg: [u8; 3]) {
+        let (fg, cell_bg) = if cell.inverse_default && cell.fg.is_none() && cell.bg.is_none() {
+            (color(bg), Some(color(FG)))
+        } else {
+            (color(cell.fg.unwrap_or(FG)), cell.bg.map(color))
+        };
+        if let Some(b) = cell_bg {
+            self.fill(col, row, 1, b);
+        }
+        self.put(glyphs, col, row, cell.ch, fg);
     }
 }
 
@@ -550,6 +665,9 @@ fn main() {
         next_block: 1,
         cols: 80,
         rows: 24,
+        prompt: None,
+        prompt_text: Vec::new(),
+        menu: Menu::default(),
         scroll: 0,
         mods: ModifiersState::empty(),
         start: Instant::now(),

@@ -1039,6 +1039,8 @@ type TermState struct {
 	promptRow      int // Row where the prompt ends, 1-based
 	numPromptLines int // Number of lines the prompt takes up
 	promptText     SourceText // Text of the prompt on screen, repainted after a resize.
+	// For msh server: the bell is noted in bellRang instead of written.
+	bellToReply, bellRang bool
 	promptStyles   []promptStyle // Escape sequences within promptText.
 	// promptProblem is the last error the prompt quote gave, printed once.
 	promptProblem string
@@ -1855,7 +1857,7 @@ func formatStringSource(command string, tokens []Token, end int) (string, bool) 
 
 func (state *TermState) cycleLastArgument() {
 	if len(history) == 0 {
-		fmt.Fprintf(os.Stdout, "\a")
+		state.ringBell()
 		return
 	}
 
@@ -1880,7 +1882,7 @@ func (state *TermState) cycleLastArgument() {
 		return
 	}
 
-	fmt.Fprintf(os.Stdout, "\a")
+	state.ringBell()
 }
 
 type completionLayout struct {
@@ -2298,7 +2300,7 @@ func (state *TermState) cycleTabCompletionColumn(direction int) {
 
 func (state *TermState) historySearch(direction int) {
 	if len(history) == 0 {
-		fmt.Fprintf(os.Stdout, "\a")
+		state.ringBell()
 		return
 	}
 
@@ -2352,7 +2354,7 @@ func (state *TermState) historySearch(direction int) {
 		return
 	}
 
-	fmt.Fprintf(os.Stdout, "\a")
+	state.ringBell()
 }
 
 func (s *TermState) commandLiteralTokenIndex(tokens []Token) int {
@@ -4217,10 +4219,16 @@ func (state *TermState) finishLine() {
 	if !state.lineRan {
 		return
 	}
+	state.recordLine()
+	fmt.Fprint(os.Stdout, osc133CommandEnd(lineExitStatus(state.lastLineOk, state.lastLineExit, state.lastLineExitSet)))
+}
+
+// recordLine records how the line that just ran ended, for the prompt's
+// PromptInfo.
+func (state *TermState) recordLine() {
 	state.lineRan = false
 	state.lastLineDuration = time.Since(state.lineStart)
 	state.lastLineExit, state.lastLineExitSet = state.evalState.lastExitCode, state.evalState.ranProcess
-	fmt.Fprint(os.Stdout, osc133CommandEnd(lineExitStatus(state.lastLineOk, state.lastLineExit, state.lastLineExitSet)))
 }
 
 func (state *TermState) printPrompt() error {
@@ -4582,6 +4590,16 @@ func (state *TermState) historyNext() {
 // completeAtCursor completes the token before the cursor: one match
 // replaces it, several replace it with their longest common prefix and
 // start tab cycling.
+// ringBell rings the terminal's bell, or for the server (which has no
+// terminal of the user's) notes it for the reply.
+func (state *TermState) ringBell() {
+	if state.bellToReply {
+		state.bellRang = true
+		return
+	}
+	fmt.Fprintf(os.Stdout, "\a")
+}
+
 func (state *TermState) completeAtCursor() {
 	// Get all files in the current directory
 
@@ -4687,7 +4705,7 @@ func (state *TermState) completeAtCursor() {
 	}
 
 	if len(matches) == 0 {
-		fmt.Fprintf(os.Stdout, "\a")
+		state.ringBell()
 	} else if len(matches) == 1 {
 		// Lex the match and check if we have to quote around it
 		insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE, quotesWords(matches[0].TabMatchType))
@@ -4706,7 +4724,7 @@ func (state *TermState) completeAtCursor() {
 
 		if len(longestCommonPrefix) <= len(prefix) {
 			// Print bell
-			fmt.Fprintf(os.Stdout, "\a")
+			state.ringBell()
 		} else {
 			allQuoteWords := true
 			for _, m := range matches {

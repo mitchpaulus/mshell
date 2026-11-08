@@ -43,6 +43,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -288,6 +290,8 @@ func (s *server) handleCall(state *TermState, call serverCall) {
 		if s.editor.abbrs[abbr].matches(word) {
 			status = callYes
 		}
+	case serverMsgEdit:
+		status, result = s.handleEdit(state, request, r)
 	case serverMsgIsProgram:
 		word := r.rest()
 		if r.bad {
@@ -315,4 +319,118 @@ func (s *server) handleCall(state *TermState, call serverCall) {
 	}
 	fixed := binary.LittleEndian.AppendUint32(nil, request)
 	s.out.send(serverMsgCallResult, append(fixed, status), result)
+}
+
+// The prompt, and the edits only the engine can make (completion).
+//
+//	0x08 edit    u32 request, u8 EditOp member (editComplete, editCompleteBack,
+//	             editCompleteNext, editCompletePrev, editCompleteLeft,
+//	             editCompleteRight, editCompleteAccept), u32 cursor, line (rest).
+//	             The reply (call_result 1): u32 cursor, u8 cycling, i32 the
+//	             candidate selected (-1: none), u8 bell, u16 candidate count,
+//	             strs, then the line (rest). The engine keeps the completion
+//	             cycle between requests, as terminal msh does.
+//	0x88 prompt  u8 has title, str title, then the prompt as text with SGR
+//	             and OSC 8 escapes and \r\n line breaks (rest): what setPrompt's
+//	             quotation gave, or the built-in prompt. Sent at startup and
+//	             before each block_finished.
+
+const (
+	serverMsgEdit   = 0x07 + 1
+	serverMsgPrompt = 0x88
+)
+
+// sendPrompt runs the prompt as terminal msh does before it reads a line,
+// and sends it.
+func (s *server) sendPrompt(state *TermState) {
+	render, user := state.userPrompt()
+	if !user {
+		cwd, err := os.Getwd()
+		if len(state.homeDir) > 0 && strings.HasPrefix(cwd, state.homeDir) {
+			cwd = "~" + cwd[len(state.homeDir):]
+		}
+		render = defaultPrompt(cwd, err == nil, len(state.stack))
+	}
+	var text strings.Builder
+	next := 0
+	for i := 0; i <= len(render.Text); i++ {
+		for ; next < len(render.Styles) && int(render.Styles[next].Offset) <= i; next++ {
+			text.WriteString(render.Styles[next].Seq)
+		}
+		if i == len(render.Text) {
+			break
+		}
+		if render.Text[i] == '\n' {
+			text.WriteString("\r")
+		}
+		text.WriteByte(render.Text[i])
+	}
+	text.WriteString("\x1b[0m")
+	fixed := []byte{0}
+	if render.HasTitle {
+		fixed[0] = 1
+	}
+	fixed = appendStr(fixed, render.Title)
+	s.out.send(serverMsgPrompt, fixed, []byte(text.String()))
+}
+
+// handleEdit runs a completion op on the frontend's line, in the session's
+// completion state.
+func (s *server) handleEdit(state *TermState, request uint32, r *serverReader) (byte, []byte) {
+	op, cursor := editOpKind(r.u8()), r.u32()
+	line := r.rest()
+	if r.bad {
+		s.protocolError("malformed edit")
+	}
+	state.currentCommand = SourceText(line)
+	state.index = graphemeCeil(state.currentCommand, ByteOffset(min(int(cursor), len(line))))
+	state.bellToReply, state.bellRang = true, false
+	switch op {
+	case opComplete, opCompleteBack:
+		direction := 1
+		if op == opCompleteBack {
+			direction = -1
+		}
+		if state.tabCycleActive && len(state.tabCycleMatches) > 0 {
+			state.cycleTabCompletion(direction)
+		} else {
+			state.completeAtCursor()
+		}
+	case opCompleteNext:
+		state.cycleTabCompletion(1)
+	case opCompletePrev:
+		state.cycleTabCompletion(-1)
+	case opCompleteLeft:
+		state.cycleTabCompletionColumn(-1)
+	case opCompleteRight:
+		state.cycleTabCompletionColumn(1)
+	case opCompleteAccept:
+		state.resetTabCycle()
+		state.tabCompletions0 = state.tabCompletions0[:0]
+		state.tabCompletions1 = state.tabCompletions1[:0]
+	default:
+		return callFailed, []byte(fmt.Sprintf("edit: %d is not a completion op", op))
+	}
+	le := binary.LittleEndian
+	b := le.AppendUint32(nil, uint32(state.index))
+	cycling := byte(0)
+	if state.tabCycleActive && len(state.tabCycleMatches) > 0 {
+		cycling = 1
+	}
+	b = append(b, cycling)
+	b = le.AppendUint32(b, uint32(int32(state.tabCycleIndex)))
+	bell := byte(0)
+	if state.bellRang {
+		bell = 1
+	}
+	b = append(b, bell)
+	matches := state.tabCycleMatches
+	if cycling == 0 {
+		matches = nil
+	}
+	b = le.AppendUint16(b, uint16(len(matches)))
+	for _, m := range matches {
+		b = appendStr(b, m)
+	}
+	return callYes, append(b, state.currentCommand...)
 }

@@ -80,7 +80,7 @@ fn editor_with_engine() {
             now += 100_000_000;
             let mut host = EngineHost {
                 engine: &mut *engine,
-                effect: |op: &EditOp, _: &mut Line| {
+                effect: |_: &mut Engine, op: &EditOp, _: &mut Line| {
                     if *op == EditOp::Accept {
                         *accepted = true;
                     }
