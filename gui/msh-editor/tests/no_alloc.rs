@@ -1,10 +1,11 @@
 //! The keystroke path allocates nothing once warm (the Go editor's rule,
 //! kept in the port): lexing the line, resolving keys, running pure ops.
 
+use msh_editor::abbr::{Abbr, AbbrExpansion, AbbrMatch, AbbrPosition};
 use msh_editor::edit::{EditOp, Line};
 use msh_editor::keys::{KeyCode, MOD_CTRL};
 use msh_editor::lexer::Lexer;
-use msh_editor::resolver::{Action, Binding, EditState, Editor, Host, Keymap, Mode};
+use msh_editor::resolver::{Action, Binding, Config, EditState, Editor, Host, Keymap, Mode};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -45,18 +46,36 @@ fn bind(id: u32, keys: &[KeyCode], within_ms: i64, ops: Vec<EditOp>) -> Binding 
 #[test]
 fn keystroke_path_does_not_allocate() {
     let c = KeyCode::char;
-    let km = Keymap::new(vec![
+    // gs expands in command position, and ls's -l anywhere after it, with a
+    // cursor marker.
+    let abbrs = vec![
+        Abbr {
+            id: 0,
+            matcher: AbbrMatch::Word("gs".into()),
+            position: AbbrPosition::Command,
+            expansion: AbbrExpansion::Text("git status".into()),
+            marker: String::new(),
+        },
+        Abbr {
+            id: 1,
+            matcher: AbbrMatch::Word("-l".into()),
+            position: AbbrPosition::Anywhere,
+            expansion: AbbrExpansion::Text("-la %".into()),
+            marker: "%".into(),
+        },
+    ];
+    let cfg = Config { abbrs, keymap: Keymap::new(vec![
         // A chord, a pure multi-key binding, and moves and deletes.
         bind(0, &[c('j'), c('k')], 200, vec![EditOp::Backspace, EditOp::Insert("→".into())]),
         bind(1, &[c('w').with(MOD_CTRL)], 0, vec![EditOp::DeleteWordLeft]),
         bind(2, &[KeyCode::LEFT], 0, vec![EditOp::Left]),
         bind(3, &[c('a').with(MOD_CTRL)], 0, vec![EditOp::LineStart, EditOp::WordRight]),
-        bind(4, &[c(' ')], 0, vec![EditOp::SelfInsert]),
-    ]);
+        bind(4, &[c(' ')], 0, vec![EditOp::ExpandAbbr, EditOp::SelfInsert]),
+    ]) };
     let mut ed = Editor::new("", 0);
     let mut lexer = Lexer::editor();
     let mut tokens = Vec::new();
-    let keys: Vec<KeyCode> = "echo $\"a{@x}b\" 'é世' jk |  ls -la jj kk 👍"
+    let keys: Vec<KeyCode> = "gs ; echo $\"a{@x}b\" 'é世' jk |  ls -l jj kk 👍 "
         .chars()
         .map(c)
         .chain([KeyCode::LEFT, c('w').with(MOD_CTRL), c('a').with(MOD_CTRL)])
@@ -64,7 +83,7 @@ fn keystroke_path_does_not_allocate() {
     let mut type_all = |ed: &mut Editor, now: &mut i64| {
         for &k in &keys {
             *now += 50_000_000;
-            ed.key(&km, k, None, *now, &mut NoEngine);
+            ed.key(&cfg, k, None, *now, &mut NoEngine);
             lexer.tokenize_into(&ed.line.text, &mut tokens);
         }
     };
@@ -81,5 +100,7 @@ fn keystroke_path_does_not_allocate() {
     type_all(&mut ed, &mut now);
     let allocs = ALLOCS.load(Ordering::Relaxed) - before;
     assert!(ed.line.text.contains('→'), "the chord fired: {:?}", ed.line.text);
+    assert!(ed.line.text.contains("git status"), "gs expanded: {:?}", ed.line.text);
+    assert!(ed.line.text.contains("-la "), "-l expanded: {:?}", ed.line.text);
     assert_eq!(allocs, 0, "allocations on the keystroke path");
 }

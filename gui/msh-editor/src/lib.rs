@@ -2,6 +2,7 @@
 //! (ai/gui-terminal.typ, "The Rust port"). The Go code is the reference;
 //! the tools in `tools/` check this port against it.
 
+pub mod abbr;
 pub mod edit;
 pub mod graphemes;
 pub mod keys;

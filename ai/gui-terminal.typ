@@ -872,8 +872,9 @@ The prompt start carries `redraw=0`: `msh` redraws its prompt after a resize onl
 + Startup spike for the renderer (@sec-recommendation), including the measurement tools (@sec-measuring). *Done* (`gui/startup-spike`), with libghostty-vt.
 + `msh server` with the minimal protocol: run, PTY output, input, resize, block start and finish. *Done* (@sec-protocol).
 + The Rust lexer, key resolver and fixed edit operations, with the comparison tests against `msh --lex` and the resolver cases built first (@sec-port).
-  *Mostly done* (`gui/msh-editor`): the lexer, grapheme clusters, the resolver and the line-only ops match Go on every case generated.
-  Abbreviation positions are next.
+  *Done* (`gui/msh-editor`): the lexer, grapheme clusters, the resolver, the line-only ops and abbreviation expansion match Go on every case generated (over 3 million key events), and the keystroke path doesn't allocate.
+  Open: whether a word names a program (`isProgramWord`) depends on the engine's `PATH`, and it decides command position after `|` and which command a word is an argument of.
+  The port asks through a callback; the frontend needs an answer without a round trip on Space, probably a set of program names sent with the editor config.
 + Frontend: one pane, prompt editor with the editor config and binding calls (@sec-editor), blocks with embedded emulators, alternate-screen handling.
 + Live stack panel with structured values.
 + Output search.

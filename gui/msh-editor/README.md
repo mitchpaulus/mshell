@@ -19,9 +19,15 @@ cargo test --release                        # unit tests, and no allocation on t
 | Grapheme clusters | `rivo/uniseg` v0.4.7 (Unicode 15.0) | `src/graphemes.rs`, tables by `tools/gengraphemes.py` | random strings drawn from every property range |
 | Key resolver, `resolveKey` | `KeyResolver.go`, `Bindings.go` | `src/resolver.rs` | `msh --resolver-cases`: random keymaps and key sequences, with times on both sides of each `within` and `idleBefore`, ESC+key, pastes and `bindingFunc`s that decline |
 | Edit ops | `CommandEditing.go`, `replaceText` | `src/edit.rs` | through the resolver cases |
+| Abbreviations | `Abbr.go` (`abbrWordAt`, `findAbbrSite`, `expandAbbr`) | `src/abbr.rs`, `Editor::expand_abbr` | half the resolver cases type words and separators against random abbreviation tables (word and regex, each position, cursor markers, `abbrFunc`s that return, decline or fail), and Enter |
 
 The hidden `msh` options that produce the reference: `--lex --lex-editor`, `--lex-cases`,
 `--lex-graphemes` (`mshell/LexDump.go`) and `--resolver-cases SEED COUNT` (`mshell/ResolverCases.go`).
 
-Not ported yet: abbreviation positions (`editExpandAbbr`), and the file manager's keymap.
+What only the engine can decide goes through `resolver::Host`: a `bindingFunc` or `abbrFunc`'s result,
+whether a regex abbreviation matches (Go's and Rust's regex syntax differ),
+and whether a word names a program (msh's rule, which depends on the engine's `PATH`).
+The resolver cases record Go's answers, and the replay fails if Rust asks anything Go didn't.
+
+Not ported yet: the file manager's keymap.
 On the FX-8350, lexing a typical 33-byte line takes about 340 ns (`cargo run --release --example lexbench CASES`).

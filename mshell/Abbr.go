@@ -96,10 +96,23 @@ func (e *abbrEntry) describe() string {
 // matches reports whether the entry's abbr matches word.
 func (e *abbrEntry) matches(word string) bool {
 	if e.isRegex {
-		return e.re.MatchString(word)
+		matched := e.re.MatchString(word)
+		if abbrRegexHook != nil {
+			abbrRegexHook(e, word, matched)
+		}
+		return matched
 	}
 	return e.word == word
 }
+
+// abbrRegexHook and abbrProgramHook, when set, are told the answers the
+// GUI frontend would ask the engine for: whether a regex matched a word,
+// and whether a word names a program. The resolver cases record them
+// (ResolverCases.go).
+var (
+	abbrRegexHook   func(e *abbrEntry, word string, matched bool)
+	abbrProgramHook func(word string, program bool)
+)
 
 // appliesAt reports whether the entry's position allows the word at site.
 func (e *abbrEntry) appliesAt(site abbrSite) bool {
@@ -576,7 +589,15 @@ func (state *TermState) expandAbbr(toWordEnd bool) (abbrExpansion, bool) {
 	if !state.evalState.abbrMayMatch(word) {
 		return abbrExpansion{}, false
 	}
-	site, ok := findAbbrSite(&state.lineTokens, line, start, end, state.isProgramWord)
+	isProgram := state.isProgramWord
+	if abbrProgramHook != nil {
+		isProgram = func(word string) bool {
+			program := state.isProgramWord(word)
+			abbrProgramHook(word, program)
+			return program
+		}
+	}
+	site, ok := findAbbrSite(&state.lineTokens, line, start, end, isProgram)
 	if !ok {
 		return abbrExpansion{}, false
 	}
