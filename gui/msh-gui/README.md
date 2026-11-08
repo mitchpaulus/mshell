@@ -31,6 +31,10 @@ for program output, the prompt and file previews;
   bindings, chords with their timings, abbreviations, `bindingFunc`s and `abbrFunc`s run by the engine.
 - While a block runs, keys go to its program, encoded by libghostty from the terminal's modes.
   A program on the alternate screen (`less`, `vim`, `htop`) gets the whole pane.
+- Output is flow-controlled, as a terminal's is: a program writing without end (`cat /dev/random`) goes only as fast as
+  the GUI draws it, memory stays bounded, frames keep coming, and Ctrl-C reaches it.
+  A program that stops reading its input can't stall the engine or the GUI;
+  input it leaves unread is discarded when its block ends.
 - The mouse wheel scrolls back through the blocks, including long output kept in a block's scrollback.
   Clearing the screen (Ctrl-L) puts the cards so far above the view, as a terminal does; scrolling up shows them.
 - `editRun` and `editRunOps` bindings run their quotation as a card (named by the binding's keys); the line stays.

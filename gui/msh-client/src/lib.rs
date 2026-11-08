@@ -4,16 +4,23 @@
 //!
 //! A reader thread turns the engine's frames into `Event`s for the
 //! frontend, and routes each `call_result` to the request waiting for it.
+//! The events wait in a bounded inbox for the frontend's thread to take
+//! (`Engine::next_event`): past `INBOX_BYTES` of output not yet taken, the
+//! reader stops reading, so the engine stops reading its PTY and the
+//! program waits to write, as a terminal's flow control does. A program
+//! that writes without end (cat /dev/random) runs only as fast as the
+//! frontend takes its output.
 
 use msh_editor::abbr::{Abbr, AbbrAnswer, AbbrExpansion, AbbrMatch, AbbrPosition};
 use msh_editor::edit::{EditOp, Line};
 use msh_editor::keys::KeyCode;
 use msh_editor::resolver::{Action, Binding, Config, EditState, Host, Keymap, Mode};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -194,10 +201,84 @@ type Pending = Arc<Mutex<HashMap<u32, Sender<CallResult>>>>;
 /// before the reply to the request that changed it.
 type LatestConfig = Arc<Mutex<Option<(u32, Config)>>>;
 
+/// PTY output not yet taken past which the reader waits.
+pub const INBOX_BYTES: usize = 1 << 20;
+/// A block's consecutive output joins into one event up to this size.
+const MERGE_BYTES: usize = 64 << 10;
+
+#[derive(Default)]
+struct InboxState {
+    events: VecDeque<Event>,
+    /// The PTY output in `events`, in bytes.
+    bytes: usize,
+    /// The frontend was woken and hasn't yet found the inbox empty.
+    woken: bool,
+    /// A request waits for its reply, which may be behind output the
+    /// frontend takes only after the reply: the bound is off till then.
+    calling: bool,
+    /// The Engine is gone: nothing will take the events.
+    closed: bool,
+}
+
+/// Events from the reader thread, in order, for the frontend's thread.
+#[derive(Default)]
+struct Inbox {
+    state: Mutex<InboxState>,
+    /// Signalled when an event arrives, output is taken, a call starts, or
+    /// the Engine is dropped.
+    changed: Condvar,
+}
+
+impl Inbox {
+    /// Queues an event, first waiting for room if it is output; returns
+    /// whether to wake the frontend.
+    fn push(&self, event: Event) -> bool {
+        let mut s = self.state.lock().unwrap();
+        if let Event::PtyOutput { id, bytes } = event {
+            while s.bytes >= INBOX_BYTES && !s.calling && !s.closed {
+                s = self.changed.wait(s).unwrap();
+            }
+            s.bytes += bytes.len();
+            match s.events.back_mut() {
+                Some(Event::PtyOutput { id: last, bytes: held }) if *last == id && held.len() + bytes.len() <= MERGE_BYTES => {
+                    held.extend_from_slice(&bytes);
+                }
+                _ => s.events.push_back(Event::PtyOutput { id, bytes }),
+            }
+        } else {
+            s.events.push_back(event);
+        }
+        self.changed.notify_all();
+        !std::mem::replace(&mut s.woken, true)
+    }
+
+    fn pop(&self) -> Option<Event> {
+        let mut s = self.state.lock().unwrap();
+        let event = s.events.pop_front();
+        match &event {
+            Some(Event::PtyOutput { bytes, .. }) => {
+                s.bytes -= bytes.len();
+                self.changed.notify_all();
+            }
+            Some(_) => {}
+            // Found empty: the next event wakes the frontend.
+            None => s.woken = false,
+        }
+        event
+    }
+
+    fn set(&self, f: impl FnOnce(&mut InboxState)) {
+        f(&mut self.state.lock().unwrap());
+        self.changed.notify_all();
+    }
+}
+
 /// The engine process and the frontend's half of the protocol.
 pub struct Engine {
     child: Child,
-    out: BufWriter<ChildStdin>,
+    /// None once closed.
+    out: Option<BufWriter<ChildStdin>>,
+    inbox: Arc<Inbox>,
     pending: Pending,
     latest: LatestConfig,
     next_request: u32,
@@ -207,24 +288,53 @@ pub struct Engine {
 
 impl Engine {
     /// Starts `msh server` (`program` is the msh binary) and the reader
-    /// thread, which gives each event to `on_event`, from that thread.
-    pub fn spawn(program: &str, on_event: impl FnMut(Event) + Send + 'static) -> io::Result<Engine> {
+    /// thread. The reader calls `wake`, from its thread, when an event
+    /// arrives and the frontend has since found the inbox empty: the
+    /// frontend then takes events with `next_event` till it returns None.
+    pub fn spawn(program: &str, wake: impl Fn() + Send + 'static) -> io::Result<Engine> {
         let mut cmd = Command::new(program);
         cmd.arg("server");
-        Engine::spawn_command(cmd, on_event)
+        Engine::spawn_command(cmd, wake)
     }
 
     /// As `spawn`, with a command set up by the caller (`msh server` with
     /// its environment); its stdin and stdout become the protocol.
-    pub fn spawn_command(mut cmd: Command, on_event: impl FnMut(Event) + Send + 'static) -> io::Result<Engine> {
+    pub fn spawn_command(mut cmd: Command, wake: impl Fn() + Send + 'static) -> io::Result<Engine> {
         let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let pending: Pending = Arc::default();
         let latest: LatestConfig = Arc::default();
-        let (routes, slot) = (pending.clone(), latest.clone());
+        let inbox: Arc<Inbox> = Arc::default();
+        let (routes, slot, queue) = (pending.clone(), latest.clone(), inbox.clone());
+        let on_event = move |e| {
+            if queue.push(e) {
+                wake();
+            }
+        };
         std::thread::Builder::new().name("engine".into()).spawn(move || read_events(stdout, routes, slot, on_event))?;
-        Ok(Engine { child, out: BufWriter::new(stdin), pending, latest, next_request: 1, config_version: 0 })
+        Ok(Engine { child, out: Some(BufWriter::new(stdin)), inbox, pending, latest, next_request: 1, config_version: 0 })
+    }
+
+    /// The next event, if one has arrived. Once this returns None, the next
+    /// event to arrive wakes the frontend.
+    pub fn next_event(&mut self) -> Option<Event> {
+        self.inbox.pop()
+    }
+
+    /// The next event, waiting up to `timeout` for one (for tests).
+    pub fn wait_event(&mut self, timeout: Duration) -> Option<Event> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(e) = self.inbox.pop() {
+                return Some(e);
+            }
+            let s = self.inbox.state.lock().unwrap();
+            let left = deadline.checked_duration_since(Instant::now())?;
+            if s.events.is_empty() {
+                drop(self.inbox.changed.wait_timeout(s, left).unwrap());
+            }
+        }
     }
 
     /// A newer editor config than the one in use, if one has arrived. The
@@ -240,11 +350,12 @@ impl Engine {
 
     fn send(&mut self, kind: u8, fixed: &[u8], tail: &[u8]) -> io::Result<()> {
         let len = (1 + fixed.len() + tail.len()) as u32;
-        self.out.write_all(&len.to_le_bytes())?;
-        self.out.write_all(&[kind])?;
-        self.out.write_all(fixed)?;
-        self.out.write_all(tail)?;
-        self.out.flush()
+        let out = self.out.as_mut().ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "closed"))?;
+        out.write_all(&len.to_le_bytes())?;
+        out.write_all(&[kind])?;
+        out.write_all(fixed)?;
+        out.write_all(tail)?;
+        out.flush()
     }
 
     pub fn run(&mut self, block: u64, source: &str) -> io::Result<()> {
@@ -309,8 +420,12 @@ impl Engine {
         self.next_request += 1;
         let (tx, rx): (Sender<CallResult>, Receiver<CallResult>) = mpsc::channel();
         self.pending.lock().unwrap().insert(request, tx);
-        self.send(kind, &request.to_le_bytes(), payload)?;
-        rx.recv().map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "the engine closed the protocol"))
+        self.inbox.set(|s| s.calling = true);
+        let result = self
+            .send(kind, &request.to_le_bytes(), payload)
+            .and_then(|_| rx.recv().map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "the engine closed the protocol")));
+        self.inbox.set(|s| s.calling = false);
+        result
     }
 
     /// Runs a bindingFunc: its ops, or None when it declined. A failure's
@@ -409,8 +524,17 @@ impl Engine {
 
     /// Closes the protocol; the engine exits, hanging up its PTY.
     pub fn close(mut self) -> io::Result<std::process::ExitStatus> {
-        drop(self.out);
+        self.inbox.set(|s| s.closed = true);
+        drop(self.out.take());
         self.child.wait()
+    }
+}
+
+impl Drop for Engine {
+    /// The reader stops waiting for room: it reads on till the engine,
+    /// its stdin closed, exits.
+    fn drop(&mut self) {
+        self.inbox.set(|s| s.closed = true);
     }
 }
 

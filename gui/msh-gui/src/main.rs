@@ -55,8 +55,8 @@ const TAB_SELECTED_BG: [u8; 3] = [0x2c, 0x22, 0x36];
 const TAB_PAD: f32 = 10.0;
 
 enum UserEvent {
-    /// An event from the engine of the pane with this id.
-    Engine(u32, Event),
+    /// An engine has events waiting (Engine::next_event).
+    Wake,
 }
 
 /// Where engines' events go: the window's event loop, or the script's
@@ -109,7 +109,15 @@ struct App {
     quads: Vec<Quad>,
     glyph_quads: Vec<Quad>,
     top_quads: Vec<Quad>,
+    /// Engines' events were left waiting when the last drain's time ran
+    /// out: the next frame drains more, once it is drawn.
+    backlog: bool,
 }
+
+/// How long a drain handles engines' events before the frame is drawn: a
+/// flood of output (cat /dev/random) shows as it comes, and keys still
+/// reach the program.
+const DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_millis(10);
 
 impl App {
     fn now(&self) -> i64 {
@@ -131,7 +139,7 @@ impl App {
         // from a desktop menu, the GUI may have no TERM of its own.
         let mut cmd = std::process::Command::new(&self.msh);
         cmd.arg("server").env("TERM", "xterm-256color").env("COLORTERM", "truecolor").env("TERM_PROGRAM", "msh-gui");
-        let engine = Engine::spawn_command(cmd, move |e| sink.send(UserEvent::Engine(id, e)))
+        let engine = Engine::spawn_command(cmd, move || sink.send(UserEvent::Wake))
             .unwrap_or_else(|e| panic!("starting {} server: {e}", self.msh));
         Pane::new(id, engine)
     }
@@ -241,6 +249,31 @@ impl App {
             return None;
         }
         self.rects().iter().position(|r| r.is_some_and(|r| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h))
+    }
+
+    /// Handles the engines' waiting events, each pane's in order, for up to
+    /// `budget`; sets `backlog` when some are left. Returns whether the app
+    /// ends.
+    fn drain(&mut self, budget: std::time::Duration) -> bool {
+        let start = Instant::now();
+        self.backlog = false;
+        let ids: Vec<u32> = self.tabs.iter().flat_map(|t| t.panes.iter().map(|p| p.id)).collect();
+        for id in ids {
+            loop {
+                if start.elapsed() >= budget {
+                    // The frame drawn next drains more.
+                    self.backlog = true;
+                    self.redraw();
+                    return false;
+                }
+                let Some(pane) = self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut()).find(|p| p.id == id) else { break };
+                let Some(event) = pane.engine.next_event() else { break };
+                if self.engine_event(id, event) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// An engine's event for its pane; returns whether the app ends.
@@ -474,8 +507,8 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn user_event(&mut self, el: &ActiveEventLoop, event: UserEvent) {
-        let UserEvent::Engine(id, e) = event;
-        if self.engine_event(id, e) {
+        let UserEvent::Wake = event;
+        if self.drain(DRAIN_BUDGET) {
             el.exit();
         }
         let title = self.focused().and_then(|p| p.title.clone());
@@ -517,7 +550,13 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 self.redraw();
             }
-            WindowEvent::RedrawRequested => self.frame(),
+            WindowEvent::RedrawRequested => {
+                self.frame();
+                // Output left waiting: more of it, then the next frame.
+                if self.backlog && self.drain(DRAIN_BUDGET) {
+                    el.exit();
+                }
+            }
             _ => {}
         }
     }
@@ -583,6 +622,7 @@ fn main() {
         quads: Vec::new(),
         glyph_quads: Vec::new(),
         top_quads: Vec::new(),
+        backlog: false,
     };
     // The first pane's engine starts first: it loads init.msh while the
     // window opens.

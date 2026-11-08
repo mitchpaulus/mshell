@@ -7,3 +7,9 @@ import "golang.org/x/sys/unix"
 func dupTo(oldFd int, newFd int) error {
 	return unix.Dup3(oldFd, newFd, 0)
 }
+
+// flushInput discards the input a terminal has received and not yet been
+// read.
+func flushInput(fd int) error {
+	return unix.IoctlSetInt(fd, unix.TCFLSH, unix.TCIFLUSH)
+}

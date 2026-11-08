@@ -15,7 +15,7 @@
 //!   <sleep N>       N ms of real time, for the program to react
 
 use crate::render::{draw_cpu, Glyphs};
-use crate::{App, UserEvent, BG};
+use crate::{App, UserEvent, BG, DRAIN_BUDGET};
 use msh_editor::keys::{KeyCode, MOD_ALT, MOD_CTRL};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -104,20 +104,27 @@ fn pump(app: &mut App, rx: &Receiver<UserEvent>, done: impl Fn(&App) -> bool) ->
     let deadline = Instant::now() + Duration::from_secs(20);
     while !done(app) {
         let left = deadline.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(left) {
-            Ok(e) => handle(app, e)?,
-            Err(_) => return Err("timed out waiting for the engine".into()),
+        if left.is_zero() || !events(app, rx, left)? {
+            return Err("timed out waiting for the engine".into());
         }
     }
     Ok(())
 }
 
-fn handle(app: &mut App, e: UserEvent) -> Result<(), String> {
-    let UserEvent::Engine(id, e) = e;
-    if app.engine_event(id, e) {
+/// One drain of the engines' events, a frame's budget, as the window takes
+/// them between frames: what was left waiting, or else what arrives within
+/// `timeout`. Returns whether there were any.
+fn events(app: &mut App, rx: &Receiver<UserEvent>, timeout: Duration) -> Result<bool, String> {
+    if !app.backlog {
+        match rx.recv_timeout(timeout) {
+            Ok(UserEvent::Wake) => {}
+            Err(_) => return Ok(false),
+        }
+    }
+    if app.drain(DRAIN_BUDGET) {
         return Err("the last pane closed".into());
     }
-    Ok(())
+    Ok(true)
 }
 
 /// The focused pane is ready for keys: its config is in, nothing runs.
@@ -134,10 +141,9 @@ pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols
     pump(&mut app, &rx, ready)?;
     let mut now = 0i64;
     for step in steps {
-        // Output that has arrived is handled before each step.
-        while let Ok(e) = rx.try_recv() {
-            handle(&mut app, e)?;
-        }
+        // Output that has arrived is handled before each step (a frame's
+        // worth, under a flood).
+        events(&mut app, &rx, Duration::ZERO)?;
         match step {
             Step::Key(code) => {
                 now += 50_000_000;
@@ -166,18 +172,15 @@ pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols
             Step::Sleep(ms) => {
                 let until = Instant::now() + Duration::from_millis(ms);
                 while let Some(left) = until.checked_duration_since(Instant::now()) {
-                    if let Ok(e) = rx.recv_timeout(left) {
-                        handle(&mut app, e)?;
-                    }
+                    events(&mut app, &rx, left)?;
                 }
             }
         }
     }
     // What is still arriving (a prompt, output) is drawn, as the window
     // would a moment later.
-    while let Ok(e) = rx.recv_timeout(Duration::from_millis(150)) {
-        handle(&mut app, e)?;
-    }
+    let until = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < until && events(&mut app, &rx, Duration::from_millis(150))? {}
     app.compose();
     if app.glyphs.as_ref().is_some_and(|g| g.reset) {
         app.glyphs.as_mut().unwrap().reset = false;

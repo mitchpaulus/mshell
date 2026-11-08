@@ -20,7 +20,10 @@ package main
 // Frontend to engine:
 //
 //	0x01 run        u64 block id (non-zero), source
-//	0x02 input      bytes for the PTY: keys for the running program; Ctrl-C is just 0x03
+//	0x02 input      bytes for the PTY: keys for the running program; Ctrl-C is just 0x03.
+//	                Dropped when no block is running or asked to run, and
+//	                past 1 MB the program hasn't read; what a block's
+//	                programs leave unread is discarded when it ends.
 //	0x03 resize     u16 cols, u16 rows, u16 width px, u16 height px
 //
 // Engine to frontend:
@@ -224,10 +227,139 @@ func partialPrefix(b []byte, prefix []byte) int {
 	return 0
 }
 
+// serverInput writes what the frontend sends the program (keys, pastes,
+// the terminal's replies) to the PTY on a goroutine of its own, so the
+// protocol reader never waits on the PTY. A program that doesn't read its
+// input (a hung raw-mode program, or one that exited with input left
+// unread) fills the PTY's input queue, and a write then waits till
+// something reads; were the protocol reader the one waiting, the frontend
+// would wait on it in turn. Past serverInputMax bytes not yet written, input
+// is dropped: the program isn't reading it.
+//
+// Input is for a block's programs. Outside a block, nothing reads the PTY,
+// so input then (replies the frontend's terminal made to output it was
+// still drawing, after the block ended) is dropped, and what a block's
+// programs leave unread is discarded when it ends.
+type serverInput struct {
+	mu    sync.Mutex
+	queue [][]byte
+	bytes int
+	// Blocks asked to run and not yet finished.
+	blocks int
+	// Counts blockDone calls: a write begun before one is stale.
+	gen uint64
+	// The writer is writing (or flushing after a stale write).
+	writing bool
+	ready chan struct{}
+	// The PTY's slave, whose input queue blockDone flushes; -1 for none.
+	tty int
+}
+
+const (
+	serverInputMax = 1 << 20
+	// Written at most this much at a time, so little more than this is
+	// written after discard.
+	serverInputChunk = 4096
+)
+
+func newServerInput(tty int) *serverInput {
+	return &serverInput{ready: make(chan struct{}, 1), tty: tty}
+}
+
+func (in *serverInput) flush() {
+	if in.tty >= 0 {
+		flushInput(in.tty)
+	}
+}
+
+// blockQueued notes a block asked to run: input is for it from now on. The
+// protocol reader calls it as it reads the request, so keys sent after the
+// request are kept.
+func (in *serverInput) blockQueued() {
+	in.mu.Lock()
+	in.blocks++
+	in.mu.Unlock()
+}
+
+// blockDone discards the input a block's programs left unread, queued or
+// in the PTY. The flush also frees the writer, should it wait on a full
+// queue; the rest of what it was writing it flushes itself, which blockDone
+// waits for (a moment at most), so the terminal is still in the program's
+// mode, likely not echoing, as it does.
+func (in *serverInput) blockDone() {
+	in.mu.Lock()
+	in.blocks = max(0, in.blocks-1)
+	in.queue, in.bytes = nil, 0
+	in.gen++
+	in.mu.Unlock()
+	in.flush()
+	for range 50 {
+		in.mu.Lock()
+		writing := in.writing
+		in.mu.Unlock()
+		if !writing {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// add queues input for the writer, or drops it: outside a block, or when
+// the queue is full.
+func (in *serverInput) add(b []byte) {
+	in.mu.Lock()
+	if in.blocks == 0 || in.bytes+len(b) > serverInputMax {
+		in.mu.Unlock()
+		return
+	}
+	in.queue = append(in.queue, append([]byte(nil), b...))
+	in.bytes += len(b)
+	in.mu.Unlock()
+	select {
+	case in.ready <- struct{}{}:
+	default:
+	}
+}
+
+// run writes the queued input to the PTY's master, in order.
+func (in *serverInput) run(master *os.File) {
+	for range in.ready {
+		for {
+			in.mu.Lock()
+			if len(in.queue) == 0 {
+				in.mu.Unlock()
+				break
+			}
+			b := in.queue[0]
+			chunk := b[:min(len(b), serverInputChunk)]
+			if len(chunk) == len(b) {
+				in.queue[0] = nil
+				in.queue = in.queue[1:]
+			} else {
+				in.queue[0] = b[len(chunk):]
+			}
+			in.bytes -= len(chunk)
+			gen := in.gen
+			in.writing = true
+			in.mu.Unlock()
+			if _, err := master.Write(chunk); err != nil {
+				fmt.Fprintf(os.Stderr, "msh server: writing input: %v\n", err)
+			}
+			in.mu.Lock()
+			if in.gen != gen {
+				in.flush()
+			}
+			in.writing = false
+			in.mu.Unlock()
+		}
+	}
+}
+
 type server struct {
 	out    serverFrameWriter
 	master *os.File
 	marks  *serverMarks
+	input  *serverInput
 
 	mu     sync.Mutex
 	blocks map[uint64]*serverBlock
@@ -315,17 +447,19 @@ func (s *server) readProtocol(in io.Reader, runs chan<- any) {
 			if id == 0 {
 				s.protocolError("run with block id 0")
 			}
+			s.input.blockQueued()
 			runs <- serverRun{id: id, source: string(payload[8:])}
 		case serverMsgBindingCall, serverMsgAbbrCall, serverMsgRegexMatch, serverMsgIsProgram, serverMsgEdit, serverMsgRunQuote, serverMsgLineKind:
 			// The editor's requests run in order with the blocks, on the
 			// main loop, which owns the evaluator.
+			if kind == serverMsgRunQuote {
+				s.input.blockQueued()
+			}
 			runs <- serverCall{kind: kind, payload: append([]byte(nil), payload...)}
 		case serverMsgFmInput:
 			s.fmInput(payload)
 		case serverMsgInput:
-			if _, err := s.master.Write(payload); err != nil {
-				fmt.Fprintf(os.Stderr, "msh server: writing input: %v\n", err)
-			}
+			s.input.add(payload)
 		case serverMsgResize:
 			if len(payload) < 8 {
 				s.protocolError("short resize message")
@@ -404,6 +538,7 @@ func runServer() int {
 		out:      serverFrameWriter{w: os.NewFile(uintptr(protoOut), "protocol out")},
 		master:   master,
 		marks:    marks,
+		input:    newServerInput(0),
 		blocks:   map[uint64]*serverBlock{},
 		started:  make(chan uint64, 1),
 		finished: make(chan uint64, 1),
@@ -440,6 +575,7 @@ func runServer() int {
 		send:  func(view []byte) { s.out.send(serverMsgFmView, view, nil) },
 	}
 	go s.readPTY()
+	go s.input.run(master)
 	runs := make(chan any, 64)
 	go s.readProtocol(os.NewFile(uintptr(protoIn), "protocol in"), runs)
 
@@ -544,6 +680,10 @@ func (s *server) runBlock(state *TermState, run serverRun) (int, bool) {
 	if !exit {
 		s.sendPrompt(state)
 	}
+	// Input the block's programs left unread isn't for the next block;
+	// discarded in the mode they left the terminal in, which is likely not
+	// to echo it.
+	s.input.blockDone()
 	// Back to the cooked state before the end marker, so the marker passes
 	// through whatever the program left the terminal in.
 	state.leaveRawMode()

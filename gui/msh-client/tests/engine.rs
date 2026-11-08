@@ -8,10 +8,9 @@ use msh_editor::keys::{KeyCode, MOD_CTRL};
 use msh_editor::resolver::Editor;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::mpsc;
 use std::time::Duration;
 
-fn engine() -> (Engine, mpsc::Receiver<Event>, PathBuf) {
+fn engine() -> (Engine, PathBuf) {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let msh = std::env::var("MSH_BIN").map(PathBuf::from).unwrap_or_else(|_| repo.join("mshell/mshell"));
     let tmp = std::env::temp_dir().join(format!("msh-client-test-{}", std::process::id()));
@@ -22,23 +21,19 @@ fn engine() -> (Engine, mpsc::Receiver<Event>, PathBuf) {
         .env("MSHSTDLIB", repo.join("lib/std.msh"))
         .env("MSHINIT", tmp.join("init.msh"))
         .env("XDG_DATA_HOME", &tmp);
-    let (tx, rx) = mpsc::channel();
-    let engine = Engine::spawn_command(cmd, move |e| {
-        let _ = tx.send(e);
-    })
-    .expect("start msh server; build mshell/mshell or set MSH_BIN");
-    (engine, rx, tmp)
+    let engine = Engine::spawn_command(cmd, || {}).expect("start msh server; build mshell/mshell or set MSH_BIN");
+    (engine, tmp)
 }
 
-fn next(rx: &mpsc::Receiver<Event>) -> Event {
-    rx.recv_timeout(Duration::from_secs(20)).expect("no event from the engine")
+fn next(engine: &mut Engine) -> Event {
+    engine.wait_event(Duration::from_secs(20)).expect("no event from the engine")
 }
 
 /// Waits for a block to finish, collecting its output.
-fn block(rx: &mpsc::Receiver<Event>, id: u64) -> (String, i32) {
+fn block(engine: &mut Engine, id: u64) -> (String, i32) {
     let mut out = Vec::new();
     loop {
-        match next(rx) {
+        match next(engine) {
             Event::PtyOutput { id: i, bytes } if i == id => out.extend(bytes),
             Event::BlockFinished { id: i, exit_code, .. } if i == id => {
                 return (String::from_utf8_lossy(&out).into_owned(), exit_code);
@@ -51,9 +46,9 @@ fn block(rx: &mpsc::Receiver<Event>, id: u64) -> (String, i32) {
 
 #[test]
 fn editor_with_engine() {
-    let (mut engine, rx, tmp) = engine();
-    assert!(matches!(next(&rx), Event::Hello { version: 1, .. }));
-    assert!(matches!(next(&rx), Event::EditorConfig { version: 1 }));
+    let (mut engine, tmp) = engine();
+    assert!(matches!(next(&mut engine), Event::Hello { version: 1, .. }));
+    assert!(matches!(next(&mut engine), Event::EditorConfig { version: 1 }));
     let defaults = engine.take_config().expect("first config");
     assert!(defaults.keymap.bindings().len() > 30, "{} default bindings", defaults.keymap.bindings().len());
 
@@ -67,7 +62,7 @@ fn editor_with_engine() {
              {abbr: 'll' abbrWord, expansion: 'ls -la %' abbrText, cursorMarker: '%'} abbrAdd",
         )
         .unwrap();
-    let (out, code) = block(&rx, 1);
+    let (out, code) = block(&mut engine, 1);
     assert_eq!((out.as_str(), code), ("", 0));
     let cfg = engine.take_config().expect("the config the line changed");
     assert_eq!(cfg.abbrs.len(), 2);
@@ -109,7 +104,7 @@ fn editor_with_engine() {
     type_keys(&mut ed, &mut engine, &[KeyCode::ENTER], &mut accepted);
     assert!(accepted);
     engine.run(2, "echo done").unwrap();
-    assert_eq!(block(&rx, 2), ("done\r\n".to_string(), 0));
+    assert_eq!(block(&mut engine, 2), ("done\r\n".to_string(), 0));
 
     engine.close().unwrap();
     std::fs::remove_dir_all(tmp).unwrap();

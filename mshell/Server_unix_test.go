@@ -811,3 +811,42 @@ func TestServerHistory(t *testing.T) {
 		t.Fatalf("forward: %q", line)
 	}
 }
+
+// Input is kept only for a block, up to serverInputMax not yet written, and
+// what is queued when the block ends is discarded.
+func TestServerInputBounds(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	in := newServerInput(-1)
+	in.add([]byte("outside a block"))
+	in.blockQueued()
+	in.add(bytes.Repeat([]byte("a"), serverInputMax-4))
+	in.add([]byte("over the bound"))
+	in.add([]byte("fits"))
+	// Not running yet: the queue is full, and the block ends.
+	queuedThenDone := newServerInput(-1)
+	queuedThenDone.blockQueued()
+	queuedThenDone.add([]byte("left unread"))
+	queuedThenDone.blockDone()
+	queuedThenDone.add([]byte("after the block"))
+	if queuedThenDone.bytes != 0 || len(queuedThenDone.queue) != 0 {
+		t.Fatalf("after the block: %d bytes queued", queuedThenDone.bytes)
+	}
+
+	go in.run(w)
+	got := make([]byte, serverInputMax)
+	if _, err := io.ReadFull(r, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got[:serverInputMax-4], bytes.Repeat([]byte("a"), serverInputMax-4)) || string(got[serverInputMax-4:]) != "fits" {
+		t.Fatalf("written: ... %q", got[serverInputMax-20:])
+	}
+	r.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if n, err := r.Read(make([]byte, 64)); n != 0 || !os.IsTimeout(err) {
+		t.Fatalf("more written: %d bytes, %v", n, err)
+	}
+}
