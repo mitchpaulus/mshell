@@ -127,7 +127,11 @@ impl App {
         let id = self.next_pane;
         self.next_pane += 1;
         let sink = self.sink.clone();
-        let engine = Engine::spawn(&self.msh, move |e| sink.send(UserEvent::Engine(id, e)))
+        // Programs see a terminal like xterm, with 24-bit colour; started
+        // from a desktop menu, the GUI may have no TERM of its own.
+        let mut cmd = std::process::Command::new(&self.msh);
+        cmd.arg("server").env("TERM", "xterm-256color").env("COLORTERM", "truecolor").env("TERM_PROGRAM", "msh-gui");
+        let engine = Engine::spawn_command(cmd, move |e| sink.send(UserEvent::Engine(id, e)))
             .unwrap_or_else(|e| panic!("starting {} server: {e}", self.msh));
         Pane::new(id, engine)
     }

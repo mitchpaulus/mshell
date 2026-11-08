@@ -25,7 +25,40 @@ pub struct Cell {
 
 const STYLE_FLAG_INVERSE: u16 = 1 << 4;
 
+/// What the terminal's callbacks use, at a fixed address (their userdata).
+struct Shared {
+    /// Replies to the program's queries (device attributes, status
+    /// reports, colours), in order, for the frontend to send to its PTY.
+    replies: Vec<u8>,
+    size: g::GhosttySizeReportSize,
+}
+
+unsafe extern "C" fn write_pty(_: g::GhosttyTerminal, userdata: *mut std::ffi::c_void, data: *const u8, len: usize) {
+    // SAFETY: userdata is the Term's Shared, and data holds len bytes.
+    unsafe { (*(userdata as *mut Shared)).replies.extend_from_slice(std::slice::from_raw_parts(data, len)) }
+}
+
+unsafe extern "C" fn report_size(_: g::GhosttyTerminal, userdata: *mut std::ffi::c_void, out: *mut g::GhosttySizeReportSize) -> bool {
+    // SAFETY: userdata is the Term's Shared; out is valid.
+    unsafe { *out = (*(userdata as *mut Shared)).size };
+    true
+}
+
+unsafe extern "C" fn color_scheme(_: g::GhosttyTerminal, _: *mut std::ffi::c_void, out: *mut g::GhosttyColorScheme) -> bool {
+    // SAFETY: out is valid. The GUI is dark.
+    unsafe { *out = g::GHOSTTY_COLOR_SCHEME_DARK };
+    true
+}
+
+/// The colours a program is told when it asks (OSC 10, 11, 12): the GUI's.
+pub struct Colors {
+    pub fg: [u8; 3],
+    pub bg: [u8; 3],
+    pub cursor: [u8; 3],
+}
+
 pub struct Term {
+    shared: Box<Shared>,
     term: g::GhosttyTerminal,
     state: g::GhosttyRenderState,
     rows: g::GhosttyRenderStateRowIterator,
@@ -38,8 +71,9 @@ pub struct Term {
 unsafe impl Send for Term {}
 
 impl Term {
-    pub fn new(cols: u16, rows: u16) -> Term {
+    pub fn new(cols: u16, rows: u16, colors: &Colors) -> Term {
         let mut t = Term {
+            shared: Box::new(Shared { replies: Vec::new(), size: g::GhosttySizeReportSize { rows, columns: cols, cell_width: 0, cell_height: 0 } }),
             term: ptr::null_mut(),
             state: ptr::null_mut(),
             rows: ptr::null_mut(),
@@ -62,8 +96,30 @@ impl Term {
                 g::ghostty_terminal_set(t.term, g::GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, (&mut limit as *mut usize).cast()),
                 "scrollback limit",
             );
+            // Answers to the program's queries: without them a program
+            // waits for each (Neovim: E1568, and a second's wait to quit).
+            let shared: *mut Shared = &mut *t.shared;
+            let set = |opt, value: *const std::ffi::c_void| ok(g::ghostty_terminal_set(t.term, opt, value), "terminal option");
+            set(g::GHOSTTY_TERMINAL_OPT_USERDATA, shared as *const std::ffi::c_void);
+            set(g::GHOSTTY_TERMINAL_OPT_WRITE_PTY, write_pty as *const std::ffi::c_void);
+            set(g::GHOSTTY_TERMINAL_OPT_SIZE, report_size as *const std::ffi::c_void);
+            set(g::GHOSTTY_TERMINAL_OPT_COLOR_SCHEME, color_scheme as *const std::ffi::c_void);
+            for (opt, [r, g_, b]) in [
+                (g::GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, colors.fg),
+                (g::GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, colors.bg),
+                (g::GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, colors.cursor),
+            ] {
+                let rgb = g::GhosttyColorRgb { r, g: g_, b };
+                set(opt, (&rgb as *const g::GhosttyColorRgb).cast());
+            }
         }
         t
+    }
+
+    /// Replies the terminal made to the program since the last call, to
+    /// write to its PTY.
+    pub fn take_replies(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.shared.replies)
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
@@ -72,6 +128,7 @@ impl Term {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16, cell_w: u32, cell_h: u32) {
+        self.shared.size = g::GhosttySizeReportSize { rows, columns: cols, cell_width: cell_w, cell_height: cell_h };
         // SAFETY: the terminal is live.
         unsafe { ok(g::ghostty_terminal_resize(self.term, cols, rows, cell_w, cell_h), "resize") }
     }

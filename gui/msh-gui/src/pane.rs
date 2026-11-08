@@ -27,6 +27,9 @@ const COMMAND: [u8; 3] = [0x8a, 0xb4, 0xf8];
 const OK: [u8; 3] = [0x7e, 0xc6, 0x99];
 const FAILED: [u8; 3] = [0xe0, 0x6c, 0x75];
 
+/// The colours programs are told: the cards' background, the text's colour.
+const COLORS: vt::Colors = vt::Colors { fg: FG, bg: CARD_BG, cursor: FG };
+
 /// Columns between a card's edge and its output; rows between cards.
 const MARGIN: usize = 1;
 const CARD_GAP: usize = 1;
@@ -189,6 +192,14 @@ impl Pane {
         }
     }
 
+    /// A block's emulator, at the PTY's size, knowing the cell's size for
+    /// programs that ask.
+    fn new_term(&self) -> vt::Term {
+        let mut t = vt::Term::new(self.output_cols(), self.rows as u16, &COLORS);
+        t.resize(self.output_cols(), self.rows as u16, self.cell.0, self.cell.1);
+        t
+    }
+
     /// Columns a card's output has: the PTY's width.
     fn output_cols(&self) -> u16 {
         self.cols.saturating_sub(2 * MARGIN).max(10) as u16
@@ -245,7 +256,7 @@ impl Pane {
         if self.prompt_text.is_empty() {
             return;
         }
-        let mut t = vt::Term::new(self.prompt_cols() as u16, 16);
+        let mut t = vt::Term::new(self.prompt_cols() as u16, 16, &COLORS);
         t.write(&self.prompt_text);
         self.prompt = Some(t);
     }
@@ -275,12 +286,19 @@ impl Pane {
                     Some(i) => i,
                     None => {
                         // Output outside any block: startup messages.
-                        let term = vt::Term::new(self.output_cols(), self.rows as u16);
+                        let term = self.new_term();
                         self.blocks.push(Block { id, command: String::new(), term, finished: Some((0, 0)) });
                         self.blocks.len() - 1
                     }
                 };
-                self.blocks[i].term.write(&bytes);
+                let term = &mut self.blocks[i].term;
+                term.write(&bytes);
+                // What it answered the program's queries goes back to it,
+                // after the output that asked.
+                let replies = term.take_replies();
+                if !replies.is_empty() {
+                    let _ = self.engine.input(&replies);
+                }
             }
             Event::FileManager(view) => {
                 if view.shown {
@@ -390,7 +408,7 @@ impl Pane {
     fn new_block(&mut self, command: String) -> u64 {
         let id = self.next_block;
         self.next_block += 1;
-        let term = vt::Term::new(self.output_cols(), self.rows as u16);
+        let term = self.new_term();
         self.blocks.push(Block { id, command, term, finished: None });
         self.running = Some(self.blocks.len() - 1);
         self.menu = Menu::default();
