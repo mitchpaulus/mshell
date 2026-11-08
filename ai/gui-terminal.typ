@@ -435,7 +435,7 @@ mshell is already partly there: list and grid operations replace `cut`, `sort`, 
 and there are builtins for JSON, TOML, Excel, HTTP, tar and zip.
 
 The replacements also travel with the engine.
-With `ssh host msh --server`, the remote side runs our static `msh` binary and its builtins,
+With `ssh host msh server`, the remote side runs our static `msh` binary and its builtins,
 not whatever GNU or BSD tools are installed there.
 
 *What it doesn't change:*
@@ -475,7 +475,7 @@ A large share of shell use is now agents, which drive a shell by scraping bytes 
 - *For us, and probably stronger:* typed values with documented signatures are much easier for an agent than parsing the columns of `ls -la`.
   The engine protocol (@sec-protocol), with blocks, exit status, typed values and stack types, is a better interface for an agent than a PTY.
 
-So an agent could talk to `msh --server` directly, and the same protocol would serve the GUI and agents.
+So an agent could talk to `msh server` directly, and the same protocol would serve the GUI and agents.
 Nothing in the protocol should assume a human at a screen.
 
 == Not pursued: UI generated at runtime
@@ -492,7 +492,7 @@ It is not a library linked into the GUI.
 
 ```
 +-------------------+   protocol (pipe / socket / ssh)    +----------------------+
-| Frontend (GUI)    | <---------------------------------> | Engine (msh --server)|
+| Frontend (GUI)    | <---------------------------------> | Engine (msh server)  |
 | - rendering       |   input, resize, requests  -->      | - evaluator, stack   |
 | - VT emulators    |   <-- events, PTY bytes, values     | - PTYs, job control  |
 | - editor, panes   |                                     | - history, LSP       |
@@ -504,7 +504,7 @@ The frontend only renders, runs the VT emulators over the PTY bytes it receives,
 
 What we get from this:
 
-- *Remote sessions almost for free:* `ssh host msh --server` gives the full GUI against a remote machine.
+- *Remote sessions almost for free:* `ssh host msh server` gives the full GUI against a remote machine.
 - A crash in one can't take down the other.
 - The frontend can be written in any language.
 - The protocol becomes the specification of the app, which fits the habit of specifying things formally before building them.
@@ -555,7 +555,33 @@ From the engine to the frontend:
 - `binding_result {version, result}`: the line and cursor after the quotation's operations, or that it declined
 - `history_append {entries}`: keeps the frontend's copy of history current
 
-Open questions: the exact encoding, flow control (@sec-output), and the paging scheme for large values.
+Open questions: flow control (@sec-output), and the paging scheme for large values.
+
+=== What exists (2026-11-08)
+
+`msh server` (`mshell/Server.go`) implements the minimal set: `run`, `input` and `resize` in; `hello`, `block_started`, `pty_output`, `block_finished` and `exit` out.
+Each frame is a `u32` length, a `u8` type and the payload, little-endian, with any variable-length bytes last; the layout of each message is in the file's header comment.
+Exit codes are as `msh` reports them: a program killed by signal N gives -(128 + N), so Ctrl-C gives -130.
+
+How it works:
+- At startup the engine keeps private copies of its stdin and stdout for the protocol.
+  It then makes the PTY's slave side its stdin, stdout, stderr and controlling terminal, after `setsid`.
+  Started from a shell it leads its process group and can't `setsid`, so it runs a copy of itself in a new session.
+  The evaluator, job control and every child see exactly what interactive `msh` sees on a terminal, and no evaluator code changed.
+  Lines run through the same function as the interactive editor's (`runLine`), so parsing, the type check and the stack behave the same.
+- *Block boundaries are marked in the PTY stream itself.*
+  The engine writes a private OSC marker, with a random per-engine nonce, into the PTY before and after each block.
+  Its PTY reader strips each marker and sends `block_started` or `block_finished` at that exact point.
+  The kernel hands PTY output to the reader asynchronously, so "the line has finished" can't be matched to "the output read so far" any other way.
+  Output outside any block (startup messages, background jobs) has block id 0.
+- Before each line, and before the end marker, the terminal goes back to the cooked state saved at startup, as interactive `msh` does.
+  A program that leaves the terminal raw doesn't affect the next block, and the end marker always passes through unchanged.
+- Ctrl-C, Ctrl-\ and Ctrl-Z while the engine itself is in the foreground are caught and ignored, rather than signal-ignored, so children get the default actions back.
+  So pure mshell code can't be interrupted yet; that needs the `signal` message, or the engine acting on its own SIGINT.
+- Closing the protocol exits the engine; the PTY hangs up and the foreground job gets SIGHUP, as when a terminal window closes.
+
+Not yet: Windows (ConPTY), values and the stack as structured messages, the editor messages, and flow control beyond the pipe's own backpressure.
+Tests: `mshell/Server_unix_test.go` runs blocks, input, Ctrl-C, exit and the marker scanner, through a real engine process.
 
 = The line editor <sec-editor>
 
@@ -844,7 +870,7 @@ The prompt start carries `redraw=0`: `msh` redraws its prompt after a resize onl
 
 + OSC 133 / OSC 7 in the existing interactive mode (@sec-osc). *Done.*
 + Startup spike for the renderer (@sec-recommendation), including the measurement tools (@sec-measuring). *Done* (`gui/startup-spike`), with libghostty-vt.
-+ `msh --server` with the minimal protocol: run, PTY output, input, resize, block start and finish.
++ `msh server` with the minimal protocol: run, PTY output, input, resize, block start and finish. *Done* (@sec-protocol).
 + The Rust lexer, key resolver and fixed edit operations, with the comparison tests against `msh --lex` and the resolver cases built first (@sec-port).
 + Frontend: one pane, prompt editor with the editor config and binding calls (@sec-editor), blocks with embedded emulators, alternate-screen handling.
 + Live stack panel with structured values.

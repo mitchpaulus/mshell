@@ -587,6 +587,11 @@ func main() {
 		return
 	}
 
+	if len(os.Args) >= 2 && os.Args[1] == "server" {
+		os.Exit(runServer())
+		return
+	}
+
 	if len(os.Args) >= 2 && os.Args[1] == "bin" {
 		os.Exit(runBinCommand(os.Args[2:]))
 		return
@@ -666,6 +671,7 @@ func main() {
 			fmt.Println("Usage: msh edit <target>")
 			fmt.Println("Usage: msh completions <shell>")
 			fmt.Println("Usage: msh lsp")
+			fmt.Println("Usage: msh server")
 			fmt.Println("Usage: msh fm")
 			fmt.Println("Usage: msh keys")
 			fmt.Println("")
@@ -683,6 +689,7 @@ func main() {
 			fmt.Println("  edit         Edit common msh files")
 			fmt.Println("  completions  Print shell completion script")
 			fmt.Println("  fm           Open the built-in file manager")
+			fmt.Println("  server       Run the engine for a GUI frontend, speaking its protocol on stdin and stdout")
 			fmt.Println("  keys         Show each key pressed as a key binding writes it")
 			os.Exit(0)
 			return
@@ -774,52 +781,7 @@ func main() {
 			defer f.Close()
 		}
 
-		callStack := make(CallStack, 0, 10)
-
-		stdInFd := int(os.Stdin.Fd())
-		termState := TermState{
-			stdInFd:        stdInFd,
-			numRows:        numRows,
-			numCols:        numCols,
-			resizeReflow:   os.Getenv("MSHREFLOW") != "0",
-			currentCommand: "",
-			index:          0,
-			readBuffer:     make([]byte, 1024),
-			homeDir:        os.Getenv("HOME"),
-
-			tabCompletions0:    make([]string, 0, 10),
-			tabCompletions1:    make([]string, 0, 10),
-			currentTabComplete: 0,
-			tabCycleActive:     false,
-			tabCycleIndex:      -1,
-			tabCycleMatches:    make([]string, 0, 10),
-
-			stack: make(MShellStack, 0),
-			lastLineOk: true,
-
-			context: ExecuteContext{
-				StandardInput:  nil, // These should be nil as that represents using a "default", not os.Stdin/os.Stdout
-				StandardOutput: nil,
-				Variables:      map[string]MShellObject{},
-				Pbm:            NewPathBinManager(),
-			},
-
-			callStack: callStack,
-			f:         f,
-			logInstanceID: newLogInstanceID(),
-			evalState: EvalState{
-				PositionalArgs: make([]string, 0),
-				LoopDepth:      0,
-				StopOnError:    false,
-				CallStack:      callStack,
-			},
-			initCallStackItem: CallStackItem{
-				MShellParseItem: nil,
-				Name:            "main",
-				CallStackType:   CALLSTACKFILE,
-			},
-		}
-		termState.evalState.EnvironmentHistory()
+		termState := newSessionState(int(os.Stdin.Fd()), numCols, numRows, f)
 
 		PrebuildCoreBuiltins()
 		err = termState.InteractiveMode()
@@ -3599,6 +3561,76 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 	}
 }
 
+// newSessionState is the state of one interactive session on the terminal
+// at stdInFd: the interactive shell's, or the server's on its PTY.
+func newSessionState(stdInFd int, numCols int, numRows int, f *os.File) TermState {
+	callStack := make(CallStack, 0, 10)
+	termState := TermState{
+		stdInFd:        stdInFd,
+		numRows:        numRows,
+		numCols:        numCols,
+		resizeReflow:   os.Getenv("MSHREFLOW") != "0",
+		currentCommand: "",
+		index:          0,
+		readBuffer:     make([]byte, 1024),
+		homeDir:        os.Getenv("HOME"),
+
+		tabCompletions0:    make([]string, 0, 10),
+		tabCompletions1:    make([]string, 0, 10),
+		currentTabComplete: 0,
+		tabCycleActive:     false,
+		tabCycleIndex:      -1,
+		tabCycleMatches:    make([]string, 0, 10),
+
+		stack: make(MShellStack, 0),
+		lastLineOk: true,
+
+		context: ExecuteContext{
+			StandardInput:  nil, // These should be nil as that represents using a "default", not os.Stdin/os.Stdout
+			StandardOutput: nil,
+			Variables:      map[string]MShellObject{},
+			Pbm:            NewPathBinManager(),
+		},
+
+		callStack: callStack,
+		f:         f,
+		logInstanceID: newLogInstanceID(),
+		evalState: EvalState{
+			PositionalArgs: make([]string, 0),
+			LoopDepth:      0,
+			StopOnError:    false,
+			CallStack:      callStack,
+		},
+		initCallStackItem: CallStackItem{
+			MShellParseItem: nil,
+			Name:            "main",
+			CallStackType:   CALLSTACKFILE,
+		},
+	}
+	termState.evalState.EnvironmentHistory()
+	return termState
+}
+
+func (state *TermState) hasStartupErrors() bool {
+	return len(state.evalState.StartupBase.StartupErrors()) > 0 || len(state.evalState.StartupTypeErrors) > 0
+}
+
+// printStartupErrors reports type errors found in the startup files.
+func (state *TermState) printStartupErrors() {
+	if startupErrs := state.evalState.StartupBase.StartupErrors(); len(startupErrs) > 0 {
+		fmt.Fprintln(os.Stderr, "Type errors in the startup files; a line that calls a definition with one is refused:")
+		for _, e := range startupErrs {
+			fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
+		}
+	}
+	if topErrs := state.evalState.StartupTypeErrors; len(topErrs) > 0 {
+		fmt.Fprintln(os.Stderr, "Type errors in the startup files' top-level code, which was not run:")
+		for _, e := range topErrs {
+			fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
+		}
+	}
+}
+
 func (state *TermState) InteractiveMode() error {
 	// FUTURE: Maybe Check for CSI u?
 	stdInState := &StdinReaderState{
@@ -3655,22 +3687,9 @@ func (state *TermState) InteractiveMode() error {
 	// The lines continue the session the startup files' top-level code
 	// was checked in.
 	state.checker = &replChecker{session: state.evalState.StartupSession}
-	startupErrs := state.evalState.StartupBase.StartupErrors()
-	topErrs := state.evalState.StartupTypeErrors
-	if len(startupErrs) > 0 || len(topErrs) > 0 {
+	if state.hasStartupErrors() {
 		state.leaveRawMode()
-		if len(startupErrs) > 0 {
-			fmt.Fprintln(os.Stderr, "Type errors in the startup files; a line that calls a definition with one is refused:")
-			for _, e := range startupErrs {
-				fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
-			}
-		}
-		if len(topErrs) > 0 {
-			fmt.Fprintln(os.Stderr, "Type errors in the startup files' top-level code, which was not run:")
-			for _, e := range topErrs {
-				fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
-			}
-		}
+		state.printStartupErrors()
 		if err := state.enterRawMode(); err != nil {
 			return err
 		}
@@ -3979,18 +3998,38 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		state.abbrMessage = ""
 	}
 
-	p := state.p
-	l := state.l
-
-	state.Logf("Executing Command: '%s'\n", currentCommandStr)
-	state.l.resetInput(currentCommandStr)
-
 	// An empty line leaves what the prompt is told about the last line.
 	state.lineRan = len(currentCommandStr) > 0
 	if state.lineRan {
 		// Everything from here to the next prompt, errors included, is the
 		// line's output. An empty line has none: the next prompt follows.
 		fmt.Fprint(os.Stdout, osc133OutputStart)
+	}
+	if exit, code := state.runLine(currentCommandStr); exit {
+		return true, code
+	}
+
+	state.finishLine()
+	// Reset before printPrompt, which can queue keys while querying the terminal.
+	state.index = 0
+	if err := state.printPrompt(); err != nil {
+		fmt.Fprint(os.Stderr, err.Error())
+		return true, 1
+	}
+	return false, 0
+}
+
+// runLine parses, checks and runs one line in the session, printing any
+// error, and reports whether the line ended the session and with what code.
+// The interactive editor and the server (msh server) both run lines with it.
+func (state *TermState) runLine(currentCommandStr string) (exit bool, code int) {
+	p := state.p
+	l := state.l
+
+	state.Logf("Executing Command: '%s'\n", currentCommandStr)
+	state.l.resetInput(currentCommandStr)
+
+	if len(currentCommandStr) > 0 {
 		state.lineStart = time.Now()
 		state.lastLineOk = false
 		state.evalState.clearLastExitCode()
@@ -4018,8 +4057,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 			pipeline, parseErr := simpleCliParser.Parse()
 			if parseErr != nil {
 				fmt.Fprintf(os.Stderr, "%s\n", parseErr)
-				// Goto PromptPrint
-				goto PromptPrint
+				return false, 0
 
 				// // Reset lexer to original input for normal parsing to attempt
 				// l.resetInput(currentCommandStr)
@@ -4031,7 +4069,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 				if toMShellErr != nil {
 					fmt.Fprintf(os.Stderr, "\r\nError transforming simple CLI: %s\r\n", toMShellErr)
 					fmt.Fprintf(os.Stdout, "\033[1G")
-					goto PromptPrint
+					return false, 0
 				}
 				state.Logf("Command: %s\n", pipeline.ToMShellString())
 			} else {
@@ -4051,15 +4089,6 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 ParseError:
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing input: %s\n", terminalSafeText(err.Error(), true))
-		state.finishLine()
-		// Reset before printPrompt, which can queue keys while querying the terminal.
-		state.index = 0
-		err = state.printPrompt()
-		if err != nil {
-			fmt.Fprint(os.Stderr, err.Error())
-			return true, 1
-		}
-
 		return false, 0
 	}
 
@@ -4072,7 +4101,7 @@ ParseError:
 	// so the corrected line can be entered again.
 	if err := state.evalState.CheckDefinitionNames(state.stdLibDefs, parsed.Definitions); err != nil {
 		fmt.Fprint(os.Stderr, terminalSafeText(err.Error(), true))
-		goto PromptPrint
+		return false, 0
 	}
 	// The line runs only if it checks (plan stage 9).
 	if state.checker != nil {
@@ -4081,7 +4110,7 @@ ParseError:
 			fmt.Fprintln(os.Stderr, terminalSafeText(m, true))
 		}
 		if !ok {
-			goto PromptPrint
+			return false, 0
 		}
 	}
 	if err := state.evalState.RegisterDeclarations(parsed.Items, append(slices.Clone(state.stdLibDefs), parsed.Definitions...)); err != nil {
@@ -4089,7 +4118,7 @@ ParseError:
 			state.checker.abort()
 		}
 		fmt.Fprint(os.Stderr, terminalSafeText(err.Error(), true))
-		goto PromptPrint
+		return false, 0
 	}
 	if state.checker != nil {
 		state.checker.commit(state.stack)
@@ -4135,17 +4164,6 @@ ParseError:
 		state.stack = state.stack[:0]
 		state.checker.clearStack()
 	}
-
-PromptPrint:
-	state.finishLine()
-	// Reset before printPrompt, which can queue keys while querying the terminal.
-	state.index = 0
-	err = state.printPrompt()
-	if err != nil {
-		fmt.Fprint(os.Stderr, err.Error())
-		return true, 1
-	}
-
 
 	return false, 0
 }
@@ -4870,7 +4888,7 @@ _msh_completion() {
             COMPREPLY=( $(compgen -W "--html --lex --parse --type-check-only --version --help -h -c" -- "$cur") )
             return 0
         fi
-        COMPREPLY=( $(compgen -W "bin edit lsp completions keys fm" -- "$cur") )
+        COMPREPLY=( $(compgen -W "bin edit lsp completions keys fm server" -- "$cur") )
         return 0
     fi
 
@@ -4963,7 +4981,7 @@ function __msh_no_files
                 return 1
             end
             return 0
-        case edit completions lsp keys fm
+        case edit completions lsp keys fm server
             return 0
     end
     return 1
@@ -4984,6 +5002,7 @@ function __msh_register_completions --argument-names cmd
     complete -c $cmd -n __msh_words_match -a lsp -d 'Run the language server'
     complete -c $cmd -n __msh_words_match -a fm -d 'Open the built-in file manager'
     complete -c $cmd -n __msh_words_match -a keys -d 'Show each key pressed as a key binding writes it'
+    complete -c $cmd -n __msh_words_match -a server -d 'Run the engine for a GUI frontend'
 
     complete -c $cmd -f -n __msh_no_files
 
@@ -5013,7 +5032,7 @@ func nushellCompletionScript() string {
 }
 
 def "msh_commands" [] {
-  [bin edit lsp completions keys fm]
+  [bin edit lsp completions keys fm server]
 }
 
 def "msh_bin_subcommands" [] {
@@ -5083,7 +5102,7 @@ export extern "mshell completions" [
 func elvishCompletionScript() string {
 	return `fn _msh_complete { |@args|
   if (== (count $args) 0) {
-    put bin edit lsp completions keys fm --html --lex --parse --type-check-only --version --help -h -c
+    put bin edit lsp completions keys fm server --html --lex --parse --type-check-only --version --help -h -c
     return
   }
 
