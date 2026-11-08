@@ -131,7 +131,8 @@ func TestPaintPromptWritesStylesInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The background is off for the line break and set again after it.
-	want := "\r\033[0m" + "\033[32mab\033[48;5;4mc\033[49m\r\n\033[48;5;4md\033[0me\033[0m"
+	// The prompt is marked from its first column to the end of its text.
+	want := "\r\033[0m" + osc133PromptStart + "\033[32mab\033[48;5;4mc\033[49m\r\n\033[48;5;4md\033[0me\033[0m" + osc133InputStart
 	if output.String() != want {
 		t.Fatalf("output %q, want %q", output.String(), want)
 	}

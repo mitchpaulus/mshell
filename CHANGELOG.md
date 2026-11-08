@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It is given a `PromptInfo` with the stack's depth and types, and whether the last line succeeded, its exit code and how long it took.
   A prompt that fails, takes longer than 3 seconds, or is interrupted with Ctrl-C is stopped, and the built-in prompt is shown.
 - `setCursorShape` sets the cursor's shape while the interactive shell reads a command.
+- The interactive shell marks each prompt, command line and command output for the terminal (OSC 133), with the command's exit status.
+  Terminals that support it, such as Ghostty, kitty, WezTerm and tmux, can jump between prompts and select a command's output.
 - The language server supports goto declaration and goto definition on a `type` alias, an enum, an enum member, or a definition,
   going to its declaration in the file or in the standard library or init file.
 - The language server offers a `Convert to prefix quote` code action that rewrites a quote followed by a word, such as `(2 *) map`, as `map. 2 * end`.

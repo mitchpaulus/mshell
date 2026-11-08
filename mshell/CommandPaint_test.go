@@ -27,6 +27,7 @@ type commandScreen struct {
 	writes []string
 	replies []TerminalToken
 	styles []string
+	oscs []string // OSC strings written, without ESC ] and the terminator
 }
 
 func newCommandScreen(t *testing.T, rows, columns int) *commandScreen {
@@ -55,6 +56,14 @@ func (screen *commandScreen) Write(output []byte) (int, error) {
 			screen.lineFeed()
 			rest = rest[1:]
 		case '\x1b':
+			if strings.HasPrefix(rest, "\x1b]") {
+				// An OSC string draws nothing. The shell ends its own with ST.
+				end := strings.Index(rest, "\x1b\\")
+				if end < 0 { screen.t.Fatalf("unterminated OSC: %q", rest) }
+				screen.oscs = append(screen.oscs, rest[2:end])
+				rest = rest[end+2:]
+				continue
+			}
 			if !strings.HasPrefix(rest, "\x1b[") { screen.t.Fatalf("non-CSI output: %q", rest) }
 			end := 2
 			for end < len(rest) && (rest[end] >= '0' && rest[end] <= '9' || rest[end] == ';') { end++ }

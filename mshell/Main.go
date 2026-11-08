@@ -3988,6 +3988,9 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	// An empty line leaves what the prompt is told about the last line.
 	state.lineRan = len(currentCommandStr) > 0
 	if state.lineRan {
+		// Everything from here to the next prompt, errors included, is the
+		// line's output. An empty line has none: the next prompt follows.
+		fmt.Fprint(os.Stdout, osc133OutputStart)
 		state.lineStart = time.Now()
 		state.lastLineOk = false
 		state.evalState.clearLastExitCode()
@@ -4165,7 +4168,8 @@ func promptNewlineSequence(columns int) string {
 	return "\033[0m⏎" + strings.Repeat(" ", columns-1) + "\r⏎ \r\033[K"
 }
 
-// finishLine records how the line that just ran ended, for the prompt.
+// finishLine records how the line that just ran ended, for the prompt, and
+// tells the terminal its output has ended (OSC 133 D).
 func (state *TermState) finishLine() {
 	if !state.lineRan {
 		return
@@ -4173,6 +4177,7 @@ func (state *TermState) finishLine() {
 	state.lineRan = false
 	state.lastLineDuration = time.Since(state.lineStart)
 	state.lastLineExit, state.lastLineExitSet = state.evalState.lastExitCode, state.evalState.ranProcess
+	fmt.Fprint(os.Stdout, osc133CommandEnd(lineExitStatus(state.lastLineOk, state.lastLineExit, state.lastLineExitSet)))
 }
 
 func (state *TermState) printPrompt() error {
