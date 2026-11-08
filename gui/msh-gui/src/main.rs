@@ -11,7 +11,7 @@
 //!   Alt-Enter        new tab
 //!   Alt-N / Alt-P    next / previous tab
 //!   Alt-H/J/K/L      focus the pane left / below / above / right
-//!   Alt-S            split: a new pane in this tab
+//!   Alt-;            split: a new pane in this tab
 //!   Alt-R            reorder: swap the pane with the first
 //!   Alt-Space        next layout: everything, columns, right halves,
 //!                    right thirds
@@ -228,7 +228,7 @@ impl App {
                 let rects = layout::rects(tab.layout, n, tab.focus, self.area());
                 self.tabs[self.tab].focus = layout::neighbor(&rects, self.tabs[self.tab].focus, dir);
             }
-            's' => {
+            ';' => {
                 let pane = self.new_pane();
                 let tab = &mut self.tabs[self.tab];
                 // A split shows: from everything, the columns.

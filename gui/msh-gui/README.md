@@ -33,7 +33,7 @@ with your `init.msh`, so your bindings and abbreviations work at the prompt.
   | Alt-Enter | new tab |
   | Alt-N, Alt-P | next, previous tab |
   | Alt-H/J/K/L | focus the pane left, below, above, right |
-  | Alt-S | split: a new pane in this tab |
+  | Alt-; | split: a new pane in this tab |
   | Alt-R | reorder: swap the pane with the first |
   | Alt-Space | next layout: everything (the focused pane), columns, right halves, right thirds |
 
