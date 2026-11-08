@@ -153,6 +153,8 @@ func (c *serverClient) read(out io.Reader) {
 			e.data = append([]byte(nil), p...)
 		case serverMsgOps:
 			e.id, e.data = le.Uint64(p), append([]byte(nil), p[8:]...)
+		case serverMsgFmView:
+			e.data = append([]byte(nil), p...)
 		}
 		c.events <- e
 	}
@@ -670,5 +672,87 @@ func TestServerRunQuote(t *testing.T) {
 	want := append(le.AppendUint16(nil, 1), byte(opInsert))
 	if !bytes.Equal(c.ops, appendTestStr(want, "done")) {
 		t.Fatalf("editRunOps ops: %q", c.ops)
+	}
+}
+
+// A file manager view as the test reads it: shown, the entries' names and
+// which has the cursor.
+func decodeFmView(t *testing.T, b []byte) (bool, []string, int) {
+	t.Helper()
+	le := binary.LittleEndian
+	shown := b[0]&1 != 0
+	b = b[1:]
+	str := func() string {
+		n := le.Uint32(b)
+		v := string(b[4 : 4+n])
+		b = b[4+n:]
+		return v
+	}
+	str()
+	str()
+	b = b[8:]
+	n := int(le.Uint16(b))
+	b = b[2:]
+	var names []string
+	cursor := -1
+	for i := range n {
+		flags := b[0]
+		b = b[1:]
+		names = append(names, str())
+		str()
+		str()
+		if flags&2 != 0 {
+			cursor = i
+		}
+	}
+	return shown, names, cursor
+}
+
+func TestServerFileManagerGUI(t *testing.T) {
+	c := startServer(t)
+	le := binary.LittleEndian
+	dir := t.TempDir()
+	for _, f := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("hello"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	view := func() (bool, []string, int) {
+		t.Helper()
+		for {
+			e := c.next()
+			if e.kind == serverMsgFmView {
+				return decodeFmView(t, e.data)
+			}
+			if e.kind == serverMsgBlockFinished {
+				t.Fatalf("block finished before a view")
+			}
+		}
+	}
+	key := func(k KeyCode) {
+		c.send(serverMsgFmInput, append([]byte{fmInputKey}, append(le.AppendUint32(nil, uint32(k)), 0, 0, 0, 0)...))
+	}
+	c.run(1, "'"+dir+"' mshFileManager")
+	c.started(1)
+	// The file manager draws to the GUI, not the PTY.
+	shown, names, cursor := view()
+	if !shown || len(names) != 2 || names[0] != "a.txt" || cursor != 0 {
+		t.Fatalf("first view: shown %v, %q, cursor %d", shown, names, cursor)
+	}
+	c.send(serverMsgFmInput, append([]byte{fmInputResize}, append(le.AppendUint16(nil, 80), le.AppendUint16(nil, 20)...)...))
+	view()
+	// Its keymap runs in the engine: j moves down, q quits.
+	key('j')
+	for {
+		if shown, _, cursor = view(); cursor == 1 {
+			break
+		}
+	}
+	key('q')
+	for shown {
+		shown, _, _ = view()
+	}
+	if _, code := c.rest(1); code != 0 {
+		t.Fatalf("file manager block: exit %d", code)
 	}
 }

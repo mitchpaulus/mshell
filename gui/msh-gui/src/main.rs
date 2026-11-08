@@ -105,6 +105,7 @@ struct App {
     start: Instant,
     quads: Vec<Quad>,
     glyph_quads: Vec<Quad>,
+    top_quads: Vec<Quad>,
 }
 
 impl App {
@@ -323,6 +324,10 @@ impl App {
         }
         let (t, p) = (self.tab, self.tabs[self.tab].focus);
         let pane = &mut self.tabs[t].panes[p];
+        if pane.fm.is_some() {
+            let _ = pane.engine.fm_key(code, None);
+            return false;
+        }
         if pane.running.is_some() {
             return false;
         }
@@ -334,6 +339,17 @@ impl App {
 
     fn key_event(&mut self, event: &winit::event::KeyEvent) -> bool {
         let code = keys::editor_key(event, self.mods);
+        // The file manager's dialog takes keys, after the window's.
+        if self.focused().is_some_and(|p| p.fm.is_some()) {
+            if let Some(c) = code {
+                if !self.window_key(c) {
+                    if let Some(p) = self.focused() {
+                        let _ = p.engine.fm_key(c, None);
+                    }
+                }
+            }
+            return false;
+        }
         let running = self.focused().is_some_and(|p| p.running.is_some());
         if running {
             if code.is_some_and(|c| self.window_key(c)) {
@@ -370,6 +386,7 @@ impl App {
     fn compose(&mut self) {
         self.quads.clear();
         self.glyph_quads.clear();
+        self.top_quads.clear();
         if self.tabs.is_empty() || self.glyphs.is_none() {
             return;
         }
@@ -380,7 +397,7 @@ impl App {
         let Some(glyphs) = &mut self.glyphs else { return };
         // The tab bar, when there are tabs: each tab's title or number.
         if self.tabs.len() > 1 {
-            let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, x0: 0, y0: 0, cols, rows: 1, cell };
+            let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, top: &mut self.top_quads, on_top: false, x0: 0, y0: 0, cols, rows: 1, cell };
             for (i, (x, label)) in labels.iter().enumerate() {
                 if i == self.tab {
                     cv.fill(*x, 0, label.chars().count(), color(TAB_SELECTED_BG));
@@ -405,10 +422,11 @@ impl App {
             }
             self.quads.push(Quad { x, y, w, h, glyph: render::SOLID, color: color(PANE_BG) });
             let pane = &mut self.tabs[self.tab].panes[i];
-            let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, x0: x, y0: y, cols: pane.cols, rows: pane.rows, cell };
+            let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, top: &mut self.top_quads, on_top: false, x0: x, y0: y, cols: pane.cols, rows: pane.rows, cell };
             pane.compose(&mut cv, glyphs, i == focus);
         }
         self.quads.extend_from_slice(&self.glyph_quads);
+        self.quads.extend_from_slice(&self.top_quads);
     }
 }
 
@@ -540,6 +558,7 @@ fn main() {
         start: Instant::now(),
         quads: Vec::new(),
         glyph_quads: Vec::new(),
+        top_quads: Vec::new(),
     };
     // The first pane's engine starts first: it loads init.msh while the
     // window opens.

@@ -25,6 +25,10 @@ with your `init.msh`, so your bindings and abbreviations work at the prompt.
 - The mouse wheel scrolls back through the blocks, including long output kept in a block's scrollback.
   Clearing the screen (Ctrl-L) puts the cards so far above the view, as a terminal does; scrolling up shows them.
 - `editRun` and `editRunOps` bindings run their quotation as a card (named by the binding's keys); the line stays.
+- The file manager (`mshFileManager`, `;r`-style bindings, Ctrl-O) is a dialog over its pane.
+  Its logic stays in the engine, so its keymap, `fmBindingAdd` bindings, quotations and previews are terminal msh's;
+  the engine sends the view and the dialog sends the keys (`mshell/FileManagerGUI.go`).
+  When it hands the terminal to a program (an editor), the dialog hides and the program runs in the pane.
 - Tabs hold panes, each with its own engine, laid out as a tiling window manager does.
   The window's keys come before the editor's and a program's:
 
@@ -47,6 +51,6 @@ runs the app headless from a script of keys and writes the frame it would draw (
 
 ## Not yet
 
-History, selection and copy, mouse reporting, a GUI file manager (the terminal one runs in its pane),
+History, selection and copy, mouse reporting, the mouse in the file manager, image previews,
 resizing finished blocks, fallback fonts, wide characters and bold.
 A cell shows its first code point, one cell wide.

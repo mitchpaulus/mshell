@@ -74,11 +74,6 @@ type serverEditor struct {
 	abbrs   []*abbrEntry
 }
 
-func appendStr(b []byte, s string) []byte {
-	b = binary.LittleEndian.AppendUint32(b, uint32(len(s)))
-	return append(b, s...)
-}
-
 // encodeEditorConfig writes the bindings in force and the abbreviations
 // that can expand, oldest first, and gives the quotations and
 // abbreviations the ids name:

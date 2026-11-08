@@ -288,6 +288,15 @@ type FileManager struct {
 	// renderMu serializes render() calls between the main loop and the
 	// preview receiver goroutine.
 	renderMu sync.Mutex
+
+	// gui is set under msh server: the file manager draws to the GUI and
+	// reads its keys from it (FileManagerGUI.go). guiHidden is set while
+	// it lends the pane to a program, guiDone once it ends, and askLines
+	// holds the question being asked.
+	gui       *fmGUI
+	guiHidden bool
+	guiDone   bool
+	askLines  []string
 }
 
 // RunFileManager runs as a standalone subcommand (msh fm). It loads the
@@ -370,6 +379,10 @@ func RunFileManagerBuiltin(ev *EvalState, context ExecuteContext, definitions []
 	if err != nil {
 		return "", nil
 	}
+	if fileManagerGUI != nil {
+		fm.gui = fileManagerGUI
+		fm.gui.start()
+	}
 	if err := fm.run(); err != nil {
 		return "", nil
 	}
@@ -421,6 +434,14 @@ func newFileManager(ev *EvalState, context ExecuteContext, definitions []MShellD
 
 // run takes the terminal and runs the file manager until it ends.
 func (fm *FileManager) run() error {
+	if fm.gui != nil {
+		// The GUI's dialog stands for the terminal.
+		fm.hasTerminal = true
+		fm.mainLoop()
+		fm.guiDone = true
+		fm.renderGUI()
+		return nil
+	}
 	if err := fm.takeTerminal(); err != nil {
 		return fmt.Errorf("Error entering raw mode: %s", err)
 	}
@@ -778,7 +799,7 @@ func (fm *FileManager) selectedImage() []byte {
 }
 
 func (fm *FileManager) mainLoop() {
-	if term.IsTerminal(fm.stdInFd) && term.IsTerminal(int(fm.ttyOut.Fd())) {
+	if fm.gui == nil && term.IsTerminal(fm.stdInFd) && term.IsTerminal(int(fm.ttyOut.Fd())) {
 		detected, kitty := detectTerminal(fm.ttyOut, fm.stdInFd, fm.cols, fm.rows, os.Getenv("MSH_KITTY_KEYS") != "0")
 		setting, set := os.LookupEnv(cellPixelsEnvVar)
 		var message string
@@ -1189,6 +1210,10 @@ func (fm *FileManager) writeHighlightedName(buf *bytes.Buffer, name string, isDi
 }
 
 func (fm *FileManager) render() {
+	if fm.gui != nil {
+		fm.renderGUI()
+		return
+	}
 	var buf bytes.Buffer
 
 	// Hide the cursor, move it to top-left, clear screen

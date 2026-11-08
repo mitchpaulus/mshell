@@ -320,6 +320,8 @@ func (s *server) readProtocol(in io.Reader, runs chan<- any) {
 			// The editor's requests run in order with the blocks, on the
 			// main loop, which owns the evaluator.
 			runs <- serverCall{kind: kind, payload: append([]byte(nil), payload...)}
+		case serverMsgFmInput:
+			s.fmInput(payload)
 		case serverMsgInput:
 			if _, err := s.master.Write(payload); err != nil {
 				fmt.Fprintf(os.Stderr, "msh server: writing input: %v\n", err)
@@ -432,6 +434,11 @@ func runServer() int {
 		}
 	}()
 
+	// mshFileManager draws to the GUI, as a dialog (FileManagerGUI.go).
+	fileManagerGUI = &fmGUI{
+		input: make(chan fmGUIInput, 256),
+		send:  func(view []byte) { s.out.send(serverMsgFmView, view, nil) },
+	}
 	go s.readPTY()
 	runs := make(chan any, 64)
 	go s.readProtocol(os.NewFile(uintptr(protoIn), "protocol in"), runs)

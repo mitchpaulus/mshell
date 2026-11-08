@@ -27,6 +27,7 @@ const MSG_REGEX_MATCH: u8 = 0x06;
 const MSG_IS_PROGRAM: u8 = 0x07;
 const MSG_EDIT: u8 = 0x08;
 const MSG_RUN_QUOTE: u8 = 0x09;
+const MSG_FM_INPUT: u8 = 0x0A;
 
 // Engine to frontend.
 const MSG_HELLO: u8 = 0x81;
@@ -38,6 +39,7 @@ const MSG_EDITOR_CONFIG: u8 = 0x86;
 const MSG_CALL_RESULT: u8 = 0x87;
 const MSG_PROMPT: u8 = 0x88;
 const MSG_OPS: u8 = 0x89;
+const MSG_FM_VIEW: u8 = 0x8A;
 
 const CALL_NO: u8 = 0;
 const CALL_YES: u8 = 1;
@@ -58,6 +60,9 @@ pub enum Event {
     /// The prompt for the next line: text with SGR and OSC 8 escapes and
     /// \r\n line breaks, and the window title it sets, if any.
     Prompt { title: Option<String>, text: Vec<u8> },
+    /// The file manager's view (mshFileManager under msh server): the GUI
+    /// shows it as a dialog while `shown`.
+    FileManager(FmView),
     /// What an editRunOps quote returned, before its block_finished.
     Ops { id: u64, ops: Vec<EditOp> },
     /// The engine ran `exit`; it exits after this.
@@ -255,6 +260,31 @@ impl Engine {
         p.extend_from_slice(&(before.len() as u32).to_le_bytes());
         p.extend_from_slice(before.as_bytes());
         self.send(MSG_RUN_QUOTE, &p, after.as_bytes())
+    }
+
+    /// A key for the file manager, as the editor names keys; `esc_of` when
+    /// the legacy encoding sent it as ESC and that key.
+    pub fn fm_key(&mut self, key: KeyCode, esc_of: Option<KeyCode>) -> io::Result<()> {
+        let mut p = vec![0u8];
+        p.extend_from_slice(&key.0.to_le_bytes());
+        p.extend_from_slice(&esc_of.map_or(0, |k| k.0).to_le_bytes());
+        self.send(MSG_FM_INPUT, &p, &[])
+    }
+
+    pub fn fm_paste(&mut self, text: &str) -> io::Result<()> {
+        self.send(MSG_FM_INPUT, &[1], text.as_bytes())
+    }
+
+    /// The dialog's size in cells, which the file manager lays out for.
+    pub fn fm_resize(&mut self, cols: u16, rows: u16) -> io::Result<()> {
+        let mut p = vec![2u8];
+        p.extend_from_slice(&cols.to_le_bytes());
+        p.extend_from_slice(&rows.to_le_bytes());
+        self.send(MSG_FM_INPUT, &p, &[])
+    }
+
+    pub fn fm_close(&mut self) -> io::Result<()> {
+        self.send(MSG_FM_INPUT, &[3], &[])
     }
 
     /// Keys for the running program, written to the PTY.
@@ -467,6 +497,7 @@ fn decode_event(kind: u8, r: &mut Reader) -> Result<Frame, String> {
         MSG_PTY_OUTPUT => Event::PtyOutput { id: r.u64()?, bytes: r.rest().to_vec() },
         MSG_BLOCK_FINISHED => Event::BlockFinished { id: r.u64()?, exit_code: r.u32()? as i32, duration_ns: r.u64()? },
         MSG_EXIT => Event::Exit { code: r.u32()? as i32 },
+        MSG_FM_VIEW => Event::FileManager(decode_fm_view(r)?),
         MSG_OPS => {
             let id = r.u64()?;
             Event::Ops { id, ops: (0..r.u16()?).map(|_| r.op()).collect::<Result<_, _>>()? }
@@ -558,4 +589,72 @@ fn op_member(op: &EditOp) -> Option<&'static str> {
         EditOp::CompleteAccept => "editCompleteAccept",
         _ => return None,
     })
+}
+
+/// The file manager's view (FileManagerGUI.go).
+#[derive(Debug, Default, Clone)]
+pub struct FmView {
+    /// Shown as a dialog; false when it ends or lends the pane to a program.
+    pub shown: bool,
+    /// The help screen: `preview` holds its lines.
+    pub help: bool,
+    pub header: String,
+    pub clipboard: String,
+    pub total: u32,
+    pub offset: u32,
+    pub entries: Vec<FmEntry>,
+    pub preview: Vec<String>,
+    /// 0 none, 1 the directory summary, 2 a message.
+    pub status_kind: u8,
+    pub status: String,
+    /// The prompt line: its label, text, and cursor (bytes).
+    pub line: Option<(String, String, usize)>,
+    /// The key popup, or a question.
+    pub overlay: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FmEntry {
+    pub name: String,
+    pub size: String,
+    pub marker: String,
+    pub dir: bool,
+    pub cursor: bool,
+    pub selected: bool,
+    pub cut: bool,
+    pub copied: bool,
+}
+
+fn decode_fm_view(r: &mut Reader) -> Result<FmView, String> {
+    let flags = r.u8()?;
+    let mut v = FmView { shown: flags & 1 != 0, help: flags & 2 != 0, ..FmView::default() };
+    v.header = r.str()?;
+    v.clipboard = r.str()?;
+    v.total = r.u32()?;
+    v.offset = r.u32()?;
+    for _ in 0..r.u16()? {
+        let f = r.u8()?;
+        v.entries.push(FmEntry {
+            name: r.str()?,
+            size: r.str()?,
+            marker: r.str()?,
+            dir: f & 1 != 0,
+            cursor: f & 2 != 0,
+            selected: f & 4 != 0,
+            cut: f & 8 != 0,
+            copied: f & 16 != 0,
+        });
+    }
+    for _ in 0..r.u16()? {
+        v.preview.push(r.str()?);
+    }
+    v.status_kind = r.u8()?;
+    v.status = r.str()?;
+    let has_line = r.u8()? == 1;
+    let (label, text, cursor) = (r.str()?, r.str()?, r.u32()? as usize);
+    v.line = has_line.then_some((label, text, cursor));
+    for _ in 0..r.u16()? {
+        v.overlay.push(r.str()?);
+    }
+    Ok(v)
 }
