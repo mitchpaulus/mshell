@@ -1,0 +1,7 @@
+[package]
+name = "msh-editor"
+version = "0.1.0"
+edition = "2024"
+description = "The GUI's line editor core: the mshell lexer, key resolver and fixed edit operations, ported from mshell's Go"
+
+[dependencies]

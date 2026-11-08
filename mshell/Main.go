@@ -622,6 +622,7 @@ func main() {
 	}
 
 	command := CLIEXECUTE
+	lexEditor, lexCases := false, false
 
 	// printLex := false
 	// printParse := false
@@ -653,6 +654,11 @@ func main() {
 		if arg == "--lex" {
 			command = CLILEX
 			// printLex = true
+		} else if arg == "--lex-editor" {
+			// Hidden: see LexDump.go.
+			lexEditor = true
+		} else if arg == "--lex-cases" {
+			lexCases = true
 		} else if arg == "--check-types" {
 			// Checking is the default; kept so existing command lines work.
 		} else if arg == "--type-check-only" {
@@ -810,6 +816,18 @@ func main() {
 			return
 		}
 		input = string(inputBytes)
+	}
+
+	if command == CLILEX && (lexEditor || lexCases) {
+		if lexCases {
+			if err := lexDumpCases(os.Stdout, []byte(input), lexEditor); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
+		lexDump(os.Stdout, input, lexEditor)
+		return
 	}
 
 	if command == CLILEX {
