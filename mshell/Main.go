@@ -587,6 +587,11 @@ func main() {
 		return
 	}
 
+	if len(os.Args) >= 2 && os.Args[1] == "--resolver-cases" {
+		// Hidden: see ResolverCases.go.
+		os.Exit(runResolverCases(os.Args[2:]))
+	}
+
 	if len(os.Args) >= 2 && os.Args[1] == "server" {
 		os.Exit(runServer())
 		return
@@ -622,7 +627,7 @@ func main() {
 	}
 
 	command := CLIEXECUTE
-	lexEditor, lexCases := false, false
+	lexEditor, lexCases, lexGraphemes := false, false, false
 
 	// printLex := false
 	// printParse := false
@@ -659,6 +664,8 @@ func main() {
 			lexEditor = true
 		} else if arg == "--lex-cases" {
 			lexCases = true
+		} else if arg == "--lex-graphemes" {
+			lexGraphemes = true
 		} else if arg == "--check-types" {
 			// Checking is the default; kept so existing command lines work.
 		} else if arg == "--type-check-only" {
@@ -820,7 +827,7 @@ func main() {
 
 	if command == CLILEX && (lexEditor || lexCases) {
 		if lexCases {
-			if err := lexDumpCases(os.Stdout, []byte(input), lexEditor); err != nil {
+			if err := lexDumpCases(os.Stdout, []byte(input), lexEditor, lexGraphemes); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
@@ -4497,8 +4504,13 @@ func WriteToHistory(command string, directory string, historyFilePath string) er
 // it is; a key goes to the key bindings (Bindings.go). It returns whether
 // the shell should end.
 func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
+	return state.handleTokenAt(token, time.Now())
+}
+
+// handleTokenAt is HandleToken for a token that arrived at now.
+func (state *TermState) handleTokenAt(token TerminalToken, now time.Time) (bool, error) {
 	if t, ok := token.(PasteToken); ok {
-		state.keys.event(time.Now())
+		state.keys.event(now)
 		state.resetTabCycle()
 		state.resetLastArgCycle()
 		if t.Text != "" {
@@ -4511,12 +4523,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		return false, nil
 	}
 	if t, ok := token.(KeyToken); ok && t.EscOf != 0 && !state.keyUsed(code) {
-		if end, err := state.resolveKey(NamedEscape, time.Now()); end || err != nil {
+		if end, err := state.resolveKey(NamedEscape, now); end || err != nil {
 			return end, err
 		}
 		code = t.EscOf
 	}
-	return state.resolveKey(code, time.Now())
+	return state.resolveKey(code, now)
 }
 
 // historyPrev puts the previous history entry on the line, skipping ones

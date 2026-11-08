@@ -1,11 +1,14 @@
 //! Prints tokens as `msh --lex` does, for comparison with it
 //! (tools/lexcompare.py).
 //!
-//! Usage: mshlex [--editor] [--cases] [FILE]
-//!   --editor  the line editor's settings (msh --lex --lex-editor)
-//!   --cases   input is length-prefixed cases (msh --lex --lex-cases)
+//! Usage: mshlex [--editor] [--cases] [--graphemes] [FILE]
+//!   --editor     the line editor's settings (msh --lex --lex-editor)
+//!   --cases      input is length-prefixed cases (msh --lex --lex-cases)
+//!   --graphemes  print where grapheme clusters end instead of tokens
+//!                (msh --lex --lex-cases --lex-graphemes)
 //! An error token prints the text scanned, not Go's message.
 
+use msh_editor::graphemes::clusters;
 use msh_editor::lexer::{Lexer, Token};
 use std::io::{Read, Write};
 
@@ -21,6 +24,7 @@ fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let editor = args.iter().any(|a| a == "--editor");
     let cases = args.iter().any(|a| a == "--cases");
+    let graphemes = args.iter().any(|a| a == "--graphemes");
     let file = args.iter().find(|a| !a.starts_with("--"));
     let mut data = Vec::new();
     match file {
@@ -43,7 +47,14 @@ fn main() -> std::io::Result<()> {
         let size = u32::from_le_bytes(rest[..4].try_into().unwrap()) as usize;
         let input = std::str::from_utf8(&rest[4..4 + size]).expect("mshlex: case is not UTF-8");
         writeln!(out, "=== case {n}")?;
-        dump(&mut out, &mut lexer, &mut tokens, input)?;
+        if graphemes {
+            for (_, end) in clusters(input) {
+                write!(out, " {end}")?;
+            }
+            writeln!(out)?;
+        } else {
+            dump(&mut out, &mut lexer, &mut tokens, input)?;
+        }
         rest = &rest[4 + size..];
         n += 1;
     }

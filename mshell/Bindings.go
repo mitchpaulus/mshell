@@ -398,12 +398,19 @@ func (state *TermState) showPendingKeys() {
 	}
 }
 
+// bindingFiredHook, when set, is told of each binding that runs: the
+// resolver cases (ResolverCases.go) record it.
+var bindingFiredHook func(e *bindingEntry)
+
 // fireBinding runs a binding for the keys of w, on the line as it was
 // before them. It reports false when the binding's quote declined.
 func (state *TermState) fireBinding(e *bindingEntry, w []pendingKey[editSnapshot]) (bool, bool, error) {
 	program, ok := state.bindingProgram(e, w)
 	if !ok {
 		return false, false, nil
+	}
+	if bindingFiredHook != nil {
+		bindingFiredHook(e)
 	}
 	state.currentCommand, state.index = w[0].snap.line, w[0].snap.index
 	end, err := state.runEditOps(program, w[len(w)-1].code)
