@@ -541,11 +541,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "ghostty-vt-sys"
+name = "ghostty-vt-bindgen"
 version = "0.1.0"
 dependencies = [
  "bindgen",
 ]
+
+[[package]]
+name = "ghostty-vt-sys"
+version = "0.1.0"
 
 [[package]]
 name = "gl_generator"

@@ -4,6 +4,3 @@ version = "0.1.0"
 edition = "2024"
 links = "ghostty-vt"
 description = "Raw bindings to libghostty-vt 1.x, linked statically"
-
-[build-dependencies]
-bindgen = "0.73"

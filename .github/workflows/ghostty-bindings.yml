@@ -1,0 +1,43 @@
+name: libghostty-vt bindings
+
+# gui/ghostty-vt-sys/src/bindings.rs is committed so building the GUI needs
+# no libclang. This checks it still matches the pinned libghostty-vt headers,
+# and that the one file still serves Windows (MSVC).
+# To update it: download the job's bindings.rs artifact and commit it, or
+# run `cargo run -p ghostty-vt-bindgen -- "$(ghostty-vt-sys/fetch.sh --source)"` in gui/.
+
+on:
+  push:
+    paths:
+      - 'gui/ghostty-vt-sys/**'
+      - 'gui/ghostty-vt-bindgen/**'
+      - 'gui/Cargo.lock'
+      - '.github/workflows/ghostty-bindings.yml'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install libclang
+      run: sudo apt-get update && sudo apt-get install -y libclang-dev
+
+    - name: Download libghostty-vt source
+      run: echo "GHOSTTY_SRC=$(gui/ghostty-vt-sys/fetch.sh --source)" >> "$GITHUB_ENV"
+
+    - name: Check bindings
+      run: cd gui && cargo run --locked -p ghostty-vt-bindgen -- --check "$GHOSTTY_SRC"
+
+    - name: Generate bindings
+      if: failure()
+      run: cd gui && cargo run --locked -p ghostty-vt-bindgen -- "$GHOSTTY_SRC"
+
+    - name: Upload generated bindings
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        path: gui/ghostty-vt-sys/src/bindings.rs
+        archive: false

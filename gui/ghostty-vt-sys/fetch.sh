@@ -2,6 +2,9 @@
 # Download libghostty-vt's release tarballs, check them against pinned
 # SHA-256 sums, and build the library into gui/third_party/.
 # Needs Zig 0.17.x (see PACKAGING-LIBGHOSTTY.md in the tarball). Takes ~5 min.
+#
+# fetch.sh --source  stops after unpacking the source and prints its path,
+# whose include/ holds the headers ghostty-vt-bindgen reads; no Zig needed.
 set -eu
 
 VERSION=1.0.0
@@ -21,7 +24,13 @@ fetch() {
     fi
     echo "$2  $1" | sha256sum -c -
 }
-fetch libghostty-vt-$VERSION.tar.gz "$SRC_SHA"
+fetch libghostty-vt-$VERSION.tar.gz "$SRC_SHA" >&2
+if [ "${1:-}" = --source ]; then
+    rm -rf libghostty-vt-$VERSION
+    tar -xzf libghostty-vt-$VERSION.tar.gz
+    echo "$dir/libghostty-vt-$VERSION"
+    exit
+fi
 fetch libghostty-vt-$VERSION-deps.tar.gz "$DEPS_SHA"
 
 rm -rf libghostty-vt-$VERSION libghostty-vt-$VERSION-deps cache

@@ -34,6 +34,8 @@ libghostty-vt is built once, outside Cargo (Zig 0.17.x, ~5 minutes):
 ```
 
 Or set `GHOSTTY_VT_PREFIX` to an existing install prefix.
+The Rust bindings are committed (`gui/ghostty-vt-sys/src/bindings.rs`), so building needs no libclang;
+`gui/ghostty-vt-bindgen` rewrites them when the libghostty-vt version changes.
 
 ```
 cargo build --release
