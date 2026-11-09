@@ -804,7 +804,11 @@ impl Pane {
         }
         if focused {
             let (x, row, w) = cursor;
-            cv.box_cursor(tx + x, ty + row as f32 * line_h, w, line_h);
+            // A bar, as text fields have, in a proportional font, where a
+            // space is too thin for a block; a block, as a terminal's, in
+            // a monospace one, which lays the box out as cells.
+            let bar = !glyphs.prompt_is_monospace();
+            cv.box_cursor(tx + x, ty + row as f32 * line_h, w, line_h, bar);
         }
         if let Some(m) = &self.message {
             let text: String = m.trim_end().chars().filter(|c| *c != '\n').collect();
@@ -1334,11 +1338,17 @@ impl Canvas<'_> {
         }
     }
 
-    /// The prompt's cursor in pixels from the origin: a block that shows
-    /// the text through it, hollow while the window hasn't the keyboard.
-    pub fn box_cursor(&mut self, x: f32, y: f32, w: f32, h: f32) {
+    /// The prompt's cursor in pixels from the origin: a bar, faint while
+    /// the window hasn't the keyboard; or a block that shows the text
+    /// through it, hollow while the window hasn't the keyboard.
+    pub fn box_cursor(&mut self, x: f32, y: f32, w: f32, h: f32, bar: bool) {
         let (x, y, w, h) = (self.x0 + x.round() as u32, self.y0 + y.round() as u32, w.round().max(2.0) as u32, h.round() as u32);
-        if self.window_focused {
+        if bar {
+            // As thick as a terminal's bar cursor in this cell size.
+            let line = (self.cell.0 / 8).max(2);
+            let alpha = if self.window_focused { 0xff } else { 0x60 };
+            self.push_glyph(Quad::solid(x, y, line, h, rgba(FG[0], FG[1], FG[2], alpha)));
+        } else if self.window_focused {
             self.push_glyph(Quad::solid(x, y, w, h, rgba(FG[0], FG[1], FG[2], 0x90)));
         } else {
             for (qx, qy, qw, qh) in [(x, y, w, 1), (x, y + h - 1, w, 1), (x, y, 1, h), (x + w - 1, y, 1, h)] {

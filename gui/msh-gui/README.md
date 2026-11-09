@@ -26,7 +26,7 @@ where msh-gui and the engine's tests (`go test` in `mshell/`, `Server_windows_te
 for program output and file previews;
 `MSH_GUI_UI_FONT` the proportional font of the app's own text (default Noto Sans, Segoe UI on Windows);
 `MSH_GUI_PROMPT_FONT` the prompt box's: the prompt, the line you type, and the completion menu (default the UI font).
-A monospace prompt font lays the box out as cells would.
+A monospace prompt font lays the box out as cells would, with a block cursor; a proportional one has a bar.
 A character a font lacks comes from the monospace font, and one that lacks too from the first fallback font that has it:
 `MSH_GUI_FALLBACK_FONTS` (files, separated as in `PATH`), else Segoe UI Symbol and Segoe UI Emoji on Windows,
 and on Linux the Noto Sans Symbols, Symbols 2 and Emoji fonts that are installed.

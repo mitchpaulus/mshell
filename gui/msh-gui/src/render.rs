@@ -319,6 +319,10 @@ impl Glyphs {
             .map(|i| FALLBACK + i as u8)
     }
 
+    /// Whether the prompt's font is monospace: its i as wide as its M.
+    pub fn prompt_is_monospace(&mut self) -> bool {
+        (self.width(PROMPT, "i") - self.width(PROMPT, "M")).abs() < 0.5
+    }
 
     /// A family's vertical metrics.
     pub fn metrics(&self, slot: u8) -> Metrics {
