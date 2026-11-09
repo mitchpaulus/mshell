@@ -1,0 +1,98 @@
+#!/usr/bin/env msh
+
+# Download libghostty-vt's release tarballs, check them against pinned
+# SHA-256 sums, and build the library into gui/third_party/libghostty-vt-1.0.0-{os}/.
+# Needs Zig 0.17.x (see PACKAGING-LIBGHOSTTY.md in the tarball). Takes ~5 min.
+#
+# Run from gui/:
+#   msh ghostty-vt-sys/fetch.msh           download, check, build, install
+#   msh ghostty-vt-sys/fetch.msh --source  stop after unpacking the source and print its path,
+#                                          whose include/ holds the headers ghostty-vt-bindgen reads
+
+soe
+
+"1.0.0" version!
+"4a6ef758be721923e1969e7b81b443dcc92d8dd3fb5a39600c03a8817a753676" srcSha!
+"4d5ea5e448e4c7ea8fb55ccbaa8668f2a97d44f438cee831e2b7ecd162d85c29" depsSha!
+$"https://release.files.ghostty.org/libghostty-vt/{@version}" baseUrl!
+
+# Download url to file unless it is already there, then check its SHA-256.
+def fetchChecked (str path str -- )
+    url!, file!, sha!
+    @file isFile not if
+        $"downloading {@url}" wle
+        {'url': @url, 'timeout': 600} httpGet ? resp!
+        @resp :status? 200 != if
+            $"{@url}: {@resp :reason?}" wle
+            1 exit
+        end
+        $"{@file}.part" toPath part!
+        @resp :body? @part writeFile
+        @part @file mv
+    end
+    @file sha256sum @sha != if
+        $"{@file}: SHA-256 is not {@sha}" wle
+        1 exit
+    end
+    $"{@file}: OK" wle
+end
+
+# Delete a file, or a directory and everything in it. A symlink is deleted
+# itself, never followed.
+def rmTree (path -- )
+    p!
+    @p fileExists if
+        @p evalSymLinks ? @p dirname evalSymLinks ? @p basename / = @p isDir and if
+            @p lsDir (rmTree) each
+        end
+        @p rm
+    end
+end
+
+args match
+    [] : false,
+    [flag] : @flag "--source" = dup not if $"unknown argument {@flag}" wle 1 exit end,
+    _ : "usage: msh ghostty-vt-sys/fetch.msh [--source]" wle 1 exit,
+end sourceOnly!
+
+`ghostty-vt-sys/fetch.msh` isFile not if
+    "run from the gui/ directory: msh ghostty-vt-sys/fetch.msh" wle
+    1 exit
+end
+
+# One install per OS, named as Cargo names target OSes, since WSL and
+# Windows can share a checkout.
+runtime match
+    "darwin" : "macos",
+    str os : @os,
+end os!
+pwd toPath `third_party` / root!
+@root $"libghostty-vt-{@version}-{@os}-build" toPath / dir!
+@dir $"libghostty-vt-{@version}" toPath / src!
+@dir $"libghostty-vt-{@version}-deps" toPath / deps!
+@dir mkdirp
+
+$"libghostty-vt-{@version}.tar.gz" srcTar!
+$"{@baseUrl}/{@srcTar}" @dir @srcTar toPath / @srcSha fetchChecked
+@src rmTree
+@dir @srcTar toPath / @dir {} tarExtract
+
+@sourceOnly if
+    @src str wl
+    0 exit
+end
+
+$"libghostty-vt-{@version}-deps.tar.gz" depsTar!
+$"{@baseUrl}/{@depsTar}" @dir @depsTar toPath / @depsSha fetchChecked
+@deps rmTree
+@dir @depsTar toPath / @dir {} tarExtract
+
+# The build cache must start empty (Zig 0.17 can crash on a cache holding
+# package archives), and --system keeps the build offline.
+@dir `cache` / cache!
+@cache rmTree
+@cache str $ZIG_GLOBAL_CACHE_DIR!
+@root $"libghostty-vt-{@version}-{@os}" toPath / prefix!
+@src cd
+['zig' 'build' '--prefix' @prefix '--system' @deps '-Doptimize=ReleaseFast']!
+$"installed to {@prefix}" wle

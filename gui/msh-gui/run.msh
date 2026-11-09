@@ -1,0 +1,36 @@
+#!/usr/bin/env msh
+
+# Build msh and start msh-gui with it, for working on the GUI.
+#
+# The engine is built into gui/target/msh-engine/, not mshell/, so it is
+# always the current code and never the msh a shell has open (on Windows
+# a running msh.exe can't be replaced). On Windows, Microsoft's ConPTY is
+# fetched first if it isn't there (msh-gui/fetch-conpty.msh).
+#
+# Run from gui/:  msh msh-gui/run.msh [ARGS for msh-gui]
+
+soe
+
+`msh-gui/run.msh` isFile not if
+    "run from the gui/ directory: msh msh-gui/run.msh" wle
+    1 exit
+end
+
+pwd toPath gui!
+runtime "windows" = if "msh.exe" else "msh" end exeName!
+@gui `target` / `msh-engine` / engineDir!
+@engineDir mkdirp
+@engineDir @exeName toPath / engine!
+
+"building msh" wle
+@gui `..` / `mshell` / cd
+['go' 'build' '-o' @engine '.']!
+@gui cd
+
+runtime "windows" = if
+    `third_party/conpty-1.25.260930003/x64/conpty.dll` isFile not if
+        [@engine 'msh-gui/fetch-conpty.msh']!
+    end
+end
+
+['cargo' 'run' '--release' '-p' 'msh-gui' '--' @engine args]!

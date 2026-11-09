@@ -1,0 +1,58 @@
+#!/usr/bin/env msh
+
+# Download Microsoft's ConPTY package (Microsoft.Windows.Console.ConPTY, MIT,
+# built from github.com/microsoft/terminal), check it against a pinned
+# SHA-256, and unpack conpty.dll and OpenConsole.exe for each architecture
+# into gui/third_party/conpty-{version}/{x64,arm64}/.
+#
+# On Windows, msh server's pseudoconsole needs them: the one built into
+# Windows reorders the block markers (ai/windows-server-experiments.md).
+# msh-gui ships them beside msh-gui.exe; msh alone never needs them.
+#
+# Run from gui/:  msh msh-gui/fetch-conpty.msh
+# It prints the x64 folder.
+
+soe
+
+"1.25.260930003" version!
+"02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665afdae7ee" sha!
+$"https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/{@version}/microsoft.windows.console.conpty.{@version}.nupkg" url!
+
+`msh-gui/fetch-conpty.msh` isFile not if
+    "run from the gui/ directory: msh msh-gui/fetch-conpty.msh" wle
+    1 exit
+end
+
+pwd toPath `third_party` / $"conpty-{@version}" toPath / dir!
+@dir mkdirp
+@dir $"microsoft.windows.console.conpty.{@version}.nupkg" toPath / pkg!
+
+@pkg isFile not if
+    $"downloading {@url}" wle
+    {'url': @url, 'timeout': 600} httpGet ? resp!
+    @resp :status? 200 != if
+        $"{@url}: {@resp :reason?}" wle
+        1 exit
+    end
+    $"{@pkg}.part" toPath part!
+    @resp :body? @part writeFile
+    @part @pkg mv
+end
+@pkg sha256sum @sha != if
+    $"{@pkg}: SHA-256 is not {@sha}" wle
+    1 exit
+end
+$"{@pkg}: OK" wle
+
+# A .nupkg is a zip. Each architecture's two files, as the package lays them out.
+[
+    ['x64' 'runtimes/win-x64/native/conpty.dll' 'build/native/runtimes/x64/OpenConsole.exe']
+    ['arm64' 'runtimes/win-arm64/native/conpty.dll' 'build/native/runtimes/arm64/OpenConsole.exe']
+] each.
+    => [arch dll exe]
+    @dir @arch toPath / out!
+    @pkg @dll @out `conpty.dll` / {'overwrite': true} zipExtractEntry
+    @pkg @exe @out `OpenConsole.exe` / {'overwrite': true} zipExtractEntry
+end
+
+@dir `x64` / str wl

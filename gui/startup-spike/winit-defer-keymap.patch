@@ -1,0 +1,204 @@
+diff --git a/src/platform/wayland.rs b/src/platform/wayland.rs
+index 9c1a8e4..a6c6d37 100644
+--- a/src/platform/wayland.rs
++++ b/src/platform/wayland.rs
+@@ -49,6 +49,19 @@ impl<T: 'static> EventLoopExtWayland for EventLoop<T> {
+     }
+ }
+ 
++/// A socket already connected to the compositor (mshell startup patch).
++pub(crate) static PRECONNECTED: std::sync::Mutex<Option<std::os::unix::net::UnixStream>> =
++    std::sync::Mutex::new(None);
++
++/// Use `stream`, already connected to the compositor, for the next Wayland
++/// event loop instead of connecting then (mshell startup patch). Connecting
++/// early lets the compositor start on its per-client setup sooner, and
++/// unlike `WAYLAND_SOCKET` it doesn't touch the environment, which other
++/// threads may be reading.
++pub fn set_preconnected_socket(stream: std::os::unix::net::UnixStream) {
++    *PRECONNECTED.lock().unwrap() = Some(stream);
++}
++
+ /// Additional methods on [`EventLoopBuilder`] that are specific to Wayland.
+ pub trait EventLoopBuilderExtWayland {
+     /// Force using Wayland.
+diff --git a/src/platform_impl/linux/common/xkb/mod.rs b/src/platform_impl/linux/common/xkb/mod.rs
+index 706397f..fbad8ed 100644
+--- a/src/platform_impl/linux/common/xkb/mod.rs
++++ b/src/platform_impl/linux/common/xkb/mod.rs
+@@ -62,6 +62,13 @@ pub struct Context {
+     _compose_table: Option<XkbComposeTable>,
+     context: XkbContext,
+     scratch_buffer: Vec<u8>,
++    // Deferred work (mshell startup patch): compiling the keymap and parsing
++    // the locale's Compose file take several ms each and aren't needed until
++    // the first key, so they run in `warm`, called when the event loop is
++    // idle or on first use, instead of before the app's first frame.
++    compose_pending: bool,
++    #[cfg(wayland_platform)]
++    pending_keymap: Option<(OwnedFd, usize)>,
+ }
+ 
+ impl Context {
+@@ -71,30 +78,52 @@ impl Context {
+         }
+ 
+         let context = XkbContext::new()?;
+-        let mut compose_table = XkbComposeTable::new(&context);
+-        let mut compose_state1 = compose_table.as_ref().and_then(|table| table.new_state());
+-        let mut compose_state2 = compose_table.as_ref().and_then(|table| table.new_state());
+-
+-        // Disable compose if anything compose related failed to initialize.
+-        if compose_table.is_none() || compose_state1.is_none() || compose_state2.is_none() {
+-            compose_state2 = None;
+-            compose_state1 = None;
+-            compose_table = None;
+-        }
+-
+         Ok(Self {
+             state: None,
+             keymap: None,
+-            compose_state1,
+-            compose_state2,
++            compose_state1: None,
++            compose_state2: None,
+             #[cfg(x11_platform)]
+             core_keyboard_id: 0,
+-            _compose_table: compose_table,
++            _compose_table: None,
+             context,
+             scratch_buffer: Vec::with_capacity(8),
++            compose_pending: true,
++            #[cfg(wayland_platform)]
++            pending_keymap: None,
+         })
+     }
+ 
++    /// Do the deferred keymap and compose work, if any is left.
++    pub fn warm(&mut self) {
++        #[cfg(wayland_platform)]
++        if let Some((fd, size)) = self.pending_keymap.take() {
++            let keymap = XkbKeymap::from_fd(&self.context, fd, size);
++            let state = keymap.as_ref().and_then(XkbState::new_wayland);
++            if keymap.is_none() || state.is_none() {
++                warn!("failed to update xkb keymap");
++            }
++            self.state = state;
++            self.keymap = keymap;
++        }
++        if self.compose_pending {
++            self.compose_pending = false;
++            let mut compose_table = XkbComposeTable::new(&self.context);
++            let mut compose_state1 = compose_table.as_ref().and_then(|table| table.new_state());
++            let mut compose_state2 = compose_table.as_ref().and_then(|table| table.new_state());
++
++            // Disable compose if anything compose related failed to initialize.
++            if compose_table.is_none() || compose_state1.is_none() || compose_state2.is_none() {
++                compose_state2 = None;
++                compose_state1 = None;
++                compose_table = None;
++            }
++            self.compose_state1 = compose_state1;
++            self.compose_state2 = compose_state2;
++            self._compose_table = compose_table;
++        }
++    }
++
+     #[cfg(feature = "x11")]
+     pub fn from_x11_xkb(xcb: *mut xcb_connection_t) -> Result<Self, Error> {
+         let result = unsafe {
+@@ -121,22 +150,19 @@ impl Context {
+     }
+ 
+     pub fn state_mut(&mut self) -> Option<&mut XkbState> {
++        self.warm();
+         self.state.as_mut()
+     }
+ 
+     pub fn keymap_mut(&mut self) -> Option<&mut XkbKeymap> {
++        self.warm();
+         self.keymap.as_mut()
+     }
+ 
+     #[cfg(wayland_platform)]
+     pub fn set_keymap_from_fd(&mut self, fd: OwnedFd, size: usize) {
+-        let keymap = XkbKeymap::from_fd(&self.context, fd, size);
+-        let state = keymap.as_ref().and_then(XkbState::new_wayland);
+-        if keymap.is_none() || state.is_none() {
+-            warn!("failed to update xkb keymap");
+-        }
+-        self.state = state;
+-        self.keymap = keymap;
++        // Compiled in `warm`; a newer keymap replaces one not yet compiled.
++        self.pending_keymap = Some((fd, size));
+     }
+ 
+     #[cfg(x11_platform)]
+@@ -152,6 +178,7 @@ impl Context {
+ 
+     /// Key builder context with the user provided xkb state.
+     pub fn key_context(&mut self) -> Option<KeyContext<'_>> {
++        self.warm();
+         let state = self.state.as_mut()?;
+         let keymap = self.keymap.as_mut()?;
+         let compose_state1 = self.compose_state1.as_mut();
+@@ -168,6 +195,7 @@ impl Context {
+         &'a mut self,
+         state: &'a mut XkbState,
+     ) -> Option<KeyContext<'a>> {
++        self.warm();
+         let keymap = self.keymap.as_mut()?;
+         let compose_state1 = self.compose_state1.as_mut();
+         let compose_state2 = self.compose_state2.as_mut();
+diff --git a/src/platform_impl/linux/wayland/event_loop/mod.rs b/src/platform_impl/linux/wayland/event_loop/mod.rs
+index fef13f4..7798e82 100644
+--- a/src/platform_impl/linux/wayland/event_loop/mod.rs
++++ b/src/platform_impl/linux/wayland/event_loop/mod.rs
+@@ -86,7 +86,11 @@ impl<T: 'static> EventLoop<T> {
+             };
+         }
+ 
+-        let connection = map_err!(Connection::connect_to_env(), WaylandError::Connection)?;
++        let preconnected = crate::platform::wayland::PRECONNECTED.lock().unwrap().take();
++        let connection = match preconnected {
++            Some(stream) => map_err!(Connection::from_socket(stream), WaylandError::Connection)?,
++            None => map_err!(Connection::connect_to_env(), WaylandError::Connection)?,
++        };
+ 
+         let (globals, mut event_queue) =
+             map_err!(globals::registry_queue_init(&connection), WaylandError::Global)?;
+@@ -514,6 +518,14 @@ impl<T: 'static> EventLoop<T> {
+         // This is always the last event we dispatch before poll again
+         callback(Event::AboutToWait, &self.window_target);
+ 
++        // The app has had its chance to draw; finish deferred keyboard setup
++        // before blocking (mshell startup patch).
++        self.with_state(|state| {
++            for seat in state.seats.values_mut() {
++                seat.warm_keyboard();
++            }
++        });
++
+         // Update the window frames and schedule redraws.
+         let mut wake_up = false;
+         for window_id in window_ids.drain(..) {
+diff --git a/src/platform_impl/linux/wayland/seat/mod.rs b/src/platform_impl/linux/wayland/seat/mod.rs
+index eaecd93..f2b79b9 100644
+--- a/src/platform_impl/linux/wayland/seat/mod.rs
++++ b/src/platform_impl/linux/wayland/seat/mod.rs
+@@ -219,6 +219,15 @@ impl SeatHandler for WinitState {
+     }
+ }
+ 
++impl WinitSeatState {
++    /// Finish deferred keyboard setup (mshell startup patch).
++    pub fn warm_keyboard(&mut self) {
++        if let Some(keyboard_state) = self.keyboard_state.as_mut() {
++            keyboard_state.xkb_context.warm();
++        }
++    }
++}
++
+ impl WinitState {
+     fn on_keyboard_destroy(&mut self, seat: &ObjectId) {
+         for (window_id, window) in self.windows.get_mut() {

@@ -161,6 +161,14 @@ The terminal's own cursor is put back before each command runs, and when the she
 These types and their members are built in, so their names cannot be used for your own types, members or definitions.
 </p>
 
+<p>
+The shell also tells the terminal where each prompt, each command line and each command's output begin, and how each command ended (OSC 133),
+and which directory it is in (OSC 7).
+Terminals that understand these, such as Ghostty, kitty, WezTerm, iTerm2, foot, Windows Terminal and tmux,
+can then jump between prompts, select a command's output, or open a new tab in the same directory.
+Other terminals ignore them.
+</p>
+
 <h1 id="getting-started-abbreviations">Abbreviations <a class="section-link" href="#getting-started-abbreviations" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
 
 <p>

@@ -291,7 +291,7 @@ func (state *TermState) paintPrompt(writer io.Writer, readTerminal func() (Termi
 	if columns < 4 || columns > Cells(maxTerminalCoordinate) || state.numRows < 1 || state.numRows > int(maxTerminalCoordinate) {
 		return fmt.Errorf("prompt: unsupported terminal geometry")
 	}
-	if err := writeProbeOutput(writer, []byte("\r\033[0m")); err != nil { return err }
+	if err := writeProbeOutput(writer, []byte("\r\033[0m"+osc133PromptStart)); err != nil { return err }
 	state.promptText = source
 	region := ProbeRegion{RelativeOrigin: true, OriginCol: 1, PaintedRows: 1, ScreenRows: state.numRows, Columns: columns}
 	atoms := segmentAtomsInto(nil, source)
@@ -342,6 +342,7 @@ func (state *TermState) paintPrompt(writer io.Writer, readTerminal func() (Termi
 		col = 0
 	}
 	output = append(output, "\033[0m"...)
+	output = append(output, osc133InputStart...)
 	if err := writeProbeOutput(writer, output); err != nil { return err }
 	state.numPromptLines = row+1
 	origin := 0
@@ -510,6 +511,15 @@ func (p *stylePainter) appendText(dst []byte, offset ByteOffset, text string) []
 		text = text[end:]
 	}
 	return dst
+}
+
+// suggestionText is the history suggestion's text after the current
+// command, whether or not suggestions are shown: for msh server.
+func (state *TermState) suggestionText() SourceText {
+	if len(state.historyComplete) <= len(state.currentCommand) || state.historyComplete[:len(state.currentCommand)] != state.currentCommand {
+		return ""
+	}
+	return state.historyComplete[len(state.currentCommand):]
 }
 
 // suggestionSuffix is the history ghost text after the current command, or

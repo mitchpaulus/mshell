@@ -1,0 +1,10 @@
+[workspace]
+resolver = "3"
+members = ["startup-spike", "ghostty-vt-sys", "ghostty-vt-bindgen", "msh-editor", "msh-client", "msh-gui"]
+
+[profile.release]
+opt-level = 3
+debug = 1
+codegen-units = 1
+lto = "thin"
+

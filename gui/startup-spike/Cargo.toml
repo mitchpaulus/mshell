@@ -1,0 +1,22 @@
+[package]
+name = "startup-spike"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+getrandom = "0.3.4"
+ghostty-vt-sys = { path = "../ghostty-vt-sys" }
+libc = "0.2"
+pollster = "1"
+raw-window-handle = "0.6"
+swash = "0.2"
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+wayland-client = "0.31"
+wayland-sys = { version = "0.31", features = ["client", "dlopen"] }
+wgpu = "30"
+winit = "0.30"
+xkbcommon-dl = "0.4"
+
+[features]
+# Plain C main, skipping Rust's runtime setup (see main.rs).
+no-rt-init = []

@@ -398,12 +398,19 @@ func (state *TermState) showPendingKeys() {
 	}
 }
 
+// bindingFiredHook, when set, is told of each binding that runs: the
+// resolver cases (ResolverCases.go) record it.
+var bindingFiredHook func(e *bindingEntry)
+
 // fireBinding runs a binding for the keys of w, on the line as it was
 // before them. It reports false when the binding's quote declined.
 func (state *TermState) fireBinding(e *bindingEntry, w []pendingKey[editSnapshot]) (bool, bool, error) {
 	program, ok := state.bindingProgram(e, w)
 	if !ok {
 		return false, false, nil
+	}
+	if bindingFiredHook != nil {
+		bindingFiredHook(e)
 	}
 	state.currentCommand, state.index = w[0].snap.line, w[0].snap.index
 	end, err := state.runEditOps(program, w[len(w)-1].code)
@@ -423,34 +430,13 @@ func (state *TermState) bindingProgram(e *bindingEntry, w []pendingKey[editSnaps
 	if e.fn == nil {
 		return e.ops, true
 	}
-	ev := &state.evalState
-	info := NewDict()
 	line, index := w[0].snap.line, w[0].snap.index
-	// The quote may keep what it is given, so it gets copies, not the
-	// editor's arena.
-	info.Items["before"] = MShellString{strings.Clone(string(line[:index]))}
-	info.Items["after"] = MShellString{strings.Clone(string(line[index:]))}
-	keys := NewList(len(w))
+	keys := make([]KeyCode, len(w))
 	for i, k := range w {
-		keys.Items[i] = ev.keyValue(k.code)
+		keys[i] = k.code
 	}
-	info.Items["keys"] = keys
-	info.Items["mode"] = ev.builtinEnumValue(editModeMembers[state.keys.mode])
-	stack := MShellStack{info}
-
-	var out bytes.Buffer
-	context := state.context
-	context.StandardOutput = &out
-	context.StandardError = &out
-	run := state.runUserQuote(e.fn, &stack, context, abbrTimeout, newEvalCancel())
-
 	what := "The quote of binding " + e.describe()
-	var program []editOp
-	some := false
-	problem := run.problem(what, "the shell", abbrTimeout)
-	if problem == "" {
-		program, some, problem = stackProgram(stack, what, "Maybe[[EditOp]]", parseEditOps)
-	}
+	program, some, problem := state.callBindingFunc(e.fn, what, string(line[:index]), string(line[index:]), keys, state.keys.mode)
 	if problem == "" {
 		state.abbrProblem = ""
 		for i, op := range program {
@@ -469,6 +455,38 @@ func (state *TermState) bindingProgram(e *bindingEntry, w []pendingKey[editSnaps
 	}
 	state.abbrProblem = problem
 	return nil, false
+}
+
+// callBindingFunc runs a bindingFunc's quote on an EditState, with the
+// time limit, and gives the program it returned. some is false when it
+// declined; problem says why it failed, or is "". The interactive editor
+// and the server (msh server) both call quotes this way.
+func (state *TermState) callBindingFunc(fn *MShellQuotation, what, before, after string, keyCodes []KeyCode, mode editMode) (program []editOp, some bool, problem string) {
+	ev := &state.evalState
+	info := NewDict()
+	// The quote may keep what it is given, so it gets copies, not the
+	// editor's arena.
+	info.Items["before"] = MShellString{strings.Clone(before)}
+	info.Items["after"] = MShellString{strings.Clone(after)}
+	keys := NewList(len(keyCodes))
+	for i, k := range keyCodes {
+		keys.Items[i] = ev.keyValue(k)
+	}
+	info.Items["keys"] = keys
+	info.Items["mode"] = ev.builtinEnumValue(editModeMembers[mode])
+	stack := MShellStack{info}
+
+	var out bytes.Buffer
+	context := state.context
+	context.StandardOutput = &out
+	context.StandardError = &out
+	run := state.runUserQuote(fn, &stack, context, abbrTimeout, newEvalCancel())
+
+	problem = run.problem(what, "the shell", abbrTimeout)
+	if problem == "" {
+		program, some, problem = stackProgram(stack, what, "Maybe[[EditOp]]", parseEditOps)
+	}
+	return program, some, problem
 }
 
 // ----- Running ops (section 7) -----
