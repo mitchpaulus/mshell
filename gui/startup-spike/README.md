@@ -27,10 +27,10 @@ and then from removing every place where the main thread waited on the GPU threa
 
 ## Running
 
-libghostty-vt is built once, outside Cargo (Zig 0.17.x, ~5 minutes):
+libghostty-vt is built once per OS, outside Cargo (Zig 0.17.x, ~5 minutes), from `gui/`:
 
 ```
-../ghostty-vt-sys/fetch.sh     # downloads the 1.0.0 tarballs, checks SHA-256, builds into gui/third_party/
+msh ghostty-vt-sys/fetch.msh   # downloads the 1.0.0 tarballs, checks SHA-256, builds into gui/third_party/libghostty-vt-1.0.0-{os}/
 ```
 
 Or set `GHOSTTY_VT_PREFIX` to an existing install prefix.

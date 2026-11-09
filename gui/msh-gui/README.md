@@ -5,7 +5,7 @@ one window, one pane of blocks, and the prompt edited locally.
 
 ```
 ../mshell/build.sh            # msh with `msh server` (from the repository root: mshell/build.sh)
-ghostty-vt-sys/fetch.sh       # once: builds libghostty-vt into gui/third_party/ (Zig 0.17.x, ~5 min)
+msh ghostty-vt-sys/fetch.msh  # once per OS: builds libghostty-vt into gui/third_party/ (Zig 0.17.x, ~5 min)
 cargo run --release -p msh-gui
 ```
 

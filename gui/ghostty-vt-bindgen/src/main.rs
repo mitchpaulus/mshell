@@ -8,9 +8,9 @@
 //! ```
 //!
 //! `DIR` holds `include/ghostty/vt.h`: an install prefix, or the unpacked
-//! source tarball (`ghostty-vt-sys/fetch.sh --source` prints its path).
-//! It defaults to `gui/third_party/libghostty-vt-1.0.0`, where `fetch.sh`
-//! installs. Running this needs libclang with its built-in headers
+//! source tarball (`msh ghostty-vt-sys/fetch.msh --source` prints its path).
+//! It defaults to `gui/third_party/libghostty-vt-1.0.0-{os}`, where
+//! `fetch.msh` installs. Running this needs libclang with its built-in headers
 //! (on Windows, LLVM in `C:\Program Files\LLVM` or `LIBCLANG_PATH`).
 //!
 //! One file serves every platform. The headers include only freestanding C
@@ -46,7 +46,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    let dir = dir.unwrap_or_else(|| gui.join("third_party/libghostty-vt-1.0.0"));
+    let dir = dir.unwrap_or_else(|| gui.join(format!("third_party/libghostty-vt-1.0.0-{}", env::consts::OS)));
     let include = dir.join("include");
     if !include.join("ghostty/vt.h").exists() {
         eprintln!("ghostty-vt-bindgen: {} not found", include.join("ghostty/vt.h").display());
