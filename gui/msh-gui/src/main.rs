@@ -112,7 +112,8 @@ struct App {
     glyphs: Option<Glyphs>,
     /// The font families (UI, monospace, the prompt's), until the window
     /// (or the script) takes them.
-    fonts: Option<(Family, Family, Option<Family>)>,
+    /// UI, monospace, the prompt's own, and the fallbacks.
+    fonts: Option<(Family, Family, Option<Family>, Vec<Family>)>,
     font_size: f32,
     /// The window's size in pixels.
     width: usize,
@@ -662,8 +663,8 @@ impl ApplicationHandler<UserEvent> for App {
         }
         let attrs = Window::default_attributes().with_title("msh").with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
         let window = Arc::new(el.create_window(attrs).expect("create_window"));
-        let (ui, mono, prompt) = self.fonts.take().expect("fonts");
-        let glyphs = Glyphs::new(ui, mono, prompt, self.font_size * window.scale_factor() as f32);
+        let (ui, mono, prompt, fallbacks) = self.fonts.take().expect("fonts");
+        let glyphs = Glyphs::new(ui, mono, prompt, fallbacks, self.font_size * window.scale_factor() as f32);
         let renderer = Renderer::new(window.clone(), &glyphs);
         self.glyphs = Some(glyphs);
         self.renderer = Some(renderer);
@@ -776,6 +777,30 @@ fn default_font(kind: FontKind) -> DefaultFont {
     DefaultFont { regular: regular.into(), styles: None }
 }
 
+/// The fonts for a character no other has (symbols, emoji), tried in
+/// order: MSH_GUI_FALLBACK_FONTS (files, separated as PATH is), else the
+/// platform's that are there. Emoji draw in the text's colour, from their
+/// fonts' outlines.
+fn fallback_fonts() -> Vec<Family> {
+    let paths: Vec<std::path::PathBuf> = match std::env::var_os("MSH_GUI_FALLBACK_FONTS") {
+        Some(v) => std::env::split_paths(&v).collect(),
+        None if cfg!(windows) => {
+            let fonts = std::path::Path::new(&std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into())).join("Fonts");
+            // Segoe UI Symbol has the symbols, and many emoji in outline.
+            ["seguisym.ttf", "seguiemj.ttf"].iter().map(|f| fonts.join(f)).collect()
+        }
+        None => ["NotoSansSymbols-Regular.ttf", "NotoSansSymbols2-Regular.ttf", "NotoEmoji-Regular.ttf"]
+            .iter()
+            .map(|f| std::path::Path::new("/usr/share/fonts/noto").join(f))
+            .collect(),
+    };
+    paths
+        .iter()
+        .filter(|p| p.exists())
+        .filter_map(|p| Family::load(&p.to_string_lossy(), "MSH_GUI_FALLBACK_FONTS", None).ok())
+        .collect()
+}
+
 fn msh_binary(args: &[String]) -> String {
     if let Some(a) = args.iter().find(|a| !a.starts_with("--")) {
         return a.clone();
@@ -851,6 +876,7 @@ fn main() {
     let mono = family("MSH_GUI_FONT", Some(default_font(FontKind::Mono)));
     let ui = family("MSH_GUI_UI_FONT", Some(default_font(FontKind::Ui)));
     let prompt = std::env::var("MSH_GUI_PROMPT_FONT").ok().map(|_| family("MSH_GUI_PROMPT_FONT", None));
+    let fallbacks = fallback_fonts();
     let font_size = std::env::var("MSH_GUI_FONT_SIZE").ok().and_then(|s| s.parse().ok()).unwrap_or(15.0);
     let mut app = App {
         msh,
@@ -861,7 +887,7 @@ fn main() {
         window: None,
         renderer: None,
         glyphs: None,
-        fonts: Some((ui, mono, prompt)),
+        fonts: Some((ui, mono, prompt, fallbacks)),
         font_size,
         width: 800,
         height: 600,

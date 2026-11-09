@@ -27,7 +27,10 @@ for program output and file previews;
 `MSH_GUI_UI_FONT` the proportional font of the app's own text (default Noto Sans, Segoe UI on Windows);
 `MSH_GUI_PROMPT_FONT` the prompt box's: the prompt, the line you type, and the completion menu (default the UI font).
 A monospace prompt font lays the box out as cells would.
-A character a font lacks comes from the monospace font.
+A character a font lacks comes from the monospace font, and one that lacks too from the first fallback font that has it:
+`MSH_GUI_FALLBACK_FONTS` (files, separated as in `PATH`), else Segoe UI Symbol and Segoe UI Emoji on Windows,
+and on Linux the Noto Sans Symbols, Symbols 2 and Emoji fonts that are installed.
+Emoji are drawn in the text's colour, from their outlines.
 Each font's bold and italic come from the files beside it (`NotoSans-Bold.ttf` beside `NotoSans-Regular.ttf`;
 the Windows defaults' own, `consolab.ttf` and the rest), or from `{VAR}_BOLD`, `{VAR}_ITALIC` and `{VAR}_BOLD_ITALIC` (`MSH_GUI_FONT_BOLD`);
 a style without a file is made from the nearest one, emboldened or slanted (Noto Sans Mono has no italic).

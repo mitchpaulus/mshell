@@ -162,8 +162,8 @@ fn ready(app: &App) -> bool {
 
 pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols: u16, rows: u16) -> Result<(), String> {
     let steps = parse(script)?;
-    let (ui, mono, prompt) = app.fonts.take().expect("fonts");
-    let glyphs = Glyphs::new(ui, mono, prompt, app.font_size);
+    let (ui, mono, prompt, fallbacks) = app.fonts.take().expect("fonts");
+    let glyphs = Glyphs::new(ui, mono, prompt, fallbacks, app.font_size);
     let (cw, ch) = (glyphs.cell.w, glyphs.cell.h);
     app.glyphs = Some(glyphs);
     // Frames are the same each run: blinking things in their shown phase.

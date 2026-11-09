@@ -198,7 +198,7 @@ mod tests {
     fn glyphs() -> Option<Glyphs> {
         let ui = Family::load("/usr/share/fonts/noto/NotoSans-Regular.ttf", "TEST_NO_VAR", None).ok()?;
         let mono = Family::load("/usr/share/fonts/noto/NotoSansMono-Regular.ttf", "TEST_NO_VAR", None).ok()?;
-        Some(Glyphs::new(ui, mono, None, 15.0))
+        Some(Glyphs::new(ui, mono, None, Vec::new(), 15.0))
     }
 
     /// The marks' rows and xs, rounded.

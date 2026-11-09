@@ -120,6 +120,8 @@ pub const ITALIC: u8 = 2;
 pub const UI: u8 = 0;
 pub const MONO: u8 = 1;
 pub const PROMPT: u8 = 2;
+/// The first fallback family's slot; the n-th is FALLBACK + n.
+pub const FALLBACK: u8 = 3;
 
 /// A font family: its regular face, and its bold, italic and bold italic,
 /// read on first use from files named by variables, else given with the
@@ -180,6 +182,15 @@ impl Family {
     }
 }
 
+/// The family at a slot (as Glyphs::slot gives it): a main one, or a
+/// fallback from FALLBACK on.
+fn family_of<'a>(families: &'a [Family], fallbacks: &'a [Family], si: usize) -> &'a Family {
+    match si.checked_sub(FALLBACK as usize) {
+        Some(i) => &fallbacks[i],
+        None => &families[si],
+    }
+}
+
 /// A family's vertical metrics, in pixels: its ascent and descent, and the
 /// height of a line of it.
 #[derive(Clone, Copy, Debug)]
@@ -207,9 +218,9 @@ pub struct Cluster {
     pub last: usize,
 }
 
-/// A glyph of shaped text: its family (the text's, or the monospace one's
-/// for a character the text's lacks), style and id, and how far it is from
-/// its cluster's start.
+/// A glyph of shaped text: its family (the text's, or for a character the
+/// text's lacks the monospace one's or a fallback's), style and id, and how
+/// far it is from its cluster's start.
 #[derive(Clone, Copy, Debug)]
 pub struct ShapedGlyph {
     pub slot: u8,
@@ -222,6 +233,9 @@ pub struct ShapedGlyph {
 pub struct Glyphs {
     /// UI, MONO, and PROMPT when the prompt has a font of its own.
     families: Vec<Family>,
+    /// For a character neither a text's family nor the monospace one has
+    /// (symbols, emoji), tried in order: slots FALLBACK and on.
+    fallbacks: Vec<Family>,
     px: f32,
     pub cell: CellMetrics,
     metrics: [Metrics; 3],
@@ -245,7 +259,7 @@ pub struct Glyphs {
 }
 
 impl Glyphs {
-    pub fn new(ui: Family, mono: Family, prompt: Option<Family>, px: f32) -> Glyphs {
+    pub fn new(ui: Family, mono: Family, prompt: Option<Family>, fallbacks: Vec<Family>, px: f32) -> Glyphs {
         let cell = {
             let f = FontRef::from_index(&mono.regular, 0).unwrap();
             let m = f.metrics(&[]).scale(px);
@@ -265,6 +279,7 @@ impl Glyphs {
         let metrics = [metrics_of(&families[0]), metrics_of(&families[1]), metrics_of(families.get(2).unwrap_or(&families[0]))];
         Glyphs {
             families,
+            fallbacks,
             px,
             cell,
             metrics,
@@ -286,8 +301,24 @@ impl Glyphs {
     /// The family a slot draws with: the prompt's is the UI font's unless
     /// it has one of its own.
     fn slot(&self, slot: u8) -> usize {
-        if (slot as usize) < self.families.len() { slot as usize } else { UI as usize }
+        if slot >= FALLBACK || (slot as usize) < self.families.len() { slot as usize } else { UI as usize }
     }
+
+    fn family_mut(&mut self, si: usize) -> &mut Family {
+        match si.checked_sub(FALLBACK as usize) {
+            Some(i) => &mut self.fallbacks[i],
+            None => &mut self.families[si],
+        }
+    }
+
+    /// The first fallback family that has a character, by slot.
+    fn fallback_for(&self, c: char) -> Option<u8> {
+        self.fallbacks
+            .iter()
+            .position(|f| FontRef::from_index(&f.regular, 0).is_some_and(|font| font.charmap().map(c) != 0))
+            .map(|i| FALLBACK + i as u8)
+    }
+
 
     /// A family's vertical metrics.
     pub fn metrics(&self, slot: u8) -> Metrics {
@@ -365,10 +396,16 @@ impl Glyphs {
         let regular = FontRef::from_index(&family.regular, 0).unwrap();
         let face = family.face(base);
         // A character the face lacks comes from the regular, made up to
-        // the style.
-        let (font, id, render) = match face.charmap().map(c) {
-            0 => (regular, regular.charmap().map(c), if lacks == style { render } else { self.render(style, self.cell.baseline as f32 * 0.3) }),
-            id => (face, id, render),
+        // the style, and one the regular lacks from the first fallback that
+        // has it, likewise.
+        let fallback = (regular.charmap().map(c) == 0).then(|| self.fallback_for(c)).flatten();
+        let (font, id, render) = match (face.charmap().map(c), fallback) {
+            (0, Some(slot)) => {
+                let f = FontRef::from_index(&self.fallbacks[(slot - FALLBACK) as usize].regular, 0).unwrap();
+                (f, f.charmap().map(c), self.render(style, self.cell.baseline as f32 * 0.3))
+            }
+            (0, None) => (regular, regular.charmap().map(c), if lacks == style { render } else { self.render(style, self.cell.baseline as f32 * 0.3) }),
+            (id, _) => (face, id, render),
         };
         let mut scaler = self.scale.builder(font).size(self.px).hint(lacks & ITALIC == 0).build();
         if let Some(img) = render.render(&mut scaler, id) {
@@ -398,9 +435,11 @@ impl Glyphs {
         if let Some(&g) = self.glyphs.get(&(si as u8, style, id)) {
             return g;
         }
-        let (base, lacks) = self.families[si].pick(style);
-        let render = self.render(lacks, self.metrics[si].ascent * 0.3);
-        let font = self.families[si].face(base);
+        let (base, lacks) = self.family_mut(si).pick(style);
+        // A fallback is slanted about the monospace font's middle.
+        let ascent = self.metrics.get(si).unwrap_or(&self.metrics[MONO as usize]).ascent;
+        let render = self.render(lacks, ascent * 0.3);
+        let font = family_of(&self.families, &self.fallbacks, si).face(base);
         let mut scaler = self.scale.builder(font).size(self.px).hint(lacks & ITALIC == 0).build();
         let g = match render.render(&mut scaler, id) {
             Some(img) if img.placement.width > 0 => {
@@ -424,17 +463,29 @@ impl Glyphs {
 
     /// Shapes text in a family and style, into `out`: its clusters in
     /// order, each with its advance and glyphs. A character the family
-    /// lacks comes from the monospace font. Returns the text's width.
+    /// lacks comes from the monospace font, and one that lacks too from the
+    /// first fallback that has it. Returns the text's width.
     pub fn shape(&mut self, slot: u8, style: u8, text: &str, out: &mut Shaped) -> f32 {
         out.clusters.clear();
         out.glyphs.clear();
         let si = self.slot(slot);
-        let (base, _) = self.families[si].pick(style);
+        let (base, _) = self.family_mut(si).pick(style);
         let (mono_base, _) = self.families[MONO as usize].pick(style);
-        let font = self.families[si].face(base);
-        let mono = self.families[MONO as usize].face(mono_base);
-        let mono_metrics = mono.glyph_metrics(&[]).scale(self.px);
-        let mut shaper = self.shape.builder(font).size(self.px).build();
+        // The faces a missing character can come from, in order: the
+        // monospace font (unless the text is in it), then the fallbacks.
+        let mut sources: Vec<(u8, u8)> = Vec::new();
+        if si != MONO as usize {
+            sources.push((MONO, mono_base));
+        }
+        for i in 0..self.fallbacks.len() {
+            let (b, _) = self.fallbacks[i].pick(style);
+            sources.push((FALLBACK + i as u8, b));
+        }
+        let px = self.px;
+        let (families, fallbacks) = (&self.families, &self.fallbacks);
+        let faces: Vec<(u8, FontRef<'_>)> = sources.iter().map(|&(s, b)| (s, family_of(families, fallbacks, s as usize).face(b))).collect();
+        let font = family_of(families, fallbacks, si).face(base);
+        let mut shaper = self.shape.builder(font).size(px).build();
         shaper.add_str(text);
         let mut pen = 0.0;
         shaper.shape_with(|cluster| {
@@ -442,11 +493,23 @@ impl Glyphs {
             let first = out.glyphs.len();
             let missing = !cluster.glyphs.is_empty() && cluster.glyphs.iter().all(|g| g.id == 0);
             let mut advance = 0.0;
-            if missing && si != MONO as usize {
+            let found = |c: char| faces.iter().find_map(|&(s, f)| match f.charmap().map(c) {
+                0 => None,
+                id => Some((s, f, id)),
+            });
+            if missing && text[start..end].chars().all(|c| found(c).is_some()) {
+                for c in text[start..end].chars() {
+                    let (s, f, id) = found(c).unwrap();
+                    out.glyphs.push(ShapedGlyph { slot: s, style, id, dx: advance });
+                    advance += f.glyph_metrics(&[]).scale(px).advance_width(id);
+                }
+            } else if missing && si != MONO as usize {
+                // Nothing has it: the monospace font's missing glyph.
+                let (_, mono) = faces[0];
                 for c in text[start..end].chars() {
                     let id = mono.charmap().map(c);
                     out.glyphs.push(ShapedGlyph { slot: MONO, style, id, dx: advance });
-                    advance += mono_metrics.advance_width(id);
+                    advance += mono.glyph_metrics(&[]).scale(px).advance_width(id);
                 }
             } else {
                 for g in cluster.glyphs {
