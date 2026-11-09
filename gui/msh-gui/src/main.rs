@@ -23,7 +23,11 @@
 //! button goes to the parent directory.
 //!
 //! Usage: msh-gui [MSH]   (MSH: the msh binary; default $MSH_BIN, then the
-//!                         repository's mshell/mshell, then msh on PATH)
+//!                         repository's mshell/mshell (mshell/msh.exe on
+//!                         Windows), then msh on PATH)
+//! On Windows msh server needs Microsoft's ConPTY: MSH_CONPTY, else the
+//! conpty.dll beside msh-gui.exe (with OpenConsole.exe), else the copy
+//! msh-gui/fetch-conpty.msh unpacks in the repository (conpty_dll).
 //! MSH_GUI_FONT and MSH_GUI_FONT_SIZE choose the monospace font (program
 //! output), MSH_GUI_UI_FONT the app's own, and MSH_GUI_PROMPT_FONT the
 //! prompt box's (else the UI font); {VAR}_BOLD, _ITALIC and _BOLD_ITALIC
@@ -177,6 +181,17 @@ impl App {
         // from a desktop menu, the GUI may have no TERM of its own.
         let mut cmd = std::process::Command::new(&self.msh);
         cmd.arg("server").env("TERM", "xterm-256color").env("COLORTERM", "truecolor").env("TERM_PROGRAM", "msh-gui");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // msh.exe is a console program: without this Windows opens a
+            // console window for it. The engine moves to its pseudoconsole.
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            if let Some(dll) = conpty_dll() {
+                cmd.env("MSH_CONPTY", dll);
+            }
+        }
         let engine = Engine::spawn_command(cmd, move || sink.send(UserEvent::Wake))
             .unwrap_or_else(|e| panic!("starting {} server: {e}", self.msh));
         Pane::new(id, engine)
@@ -736,11 +751,36 @@ fn msh_binary(args: &[String]) -> String {
     if let Ok(m) = std::env::var("MSH_BIN") {
         return m;
     }
-    let repo = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mshell/mshell");
+    let repo = if cfg!(windows) {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../mshell/msh.exe")
+    } else {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../mshell/mshell")
+    };
     if std::path::Path::new(repo).exists() {
         return repo.to_string();
     }
     "msh".to_string()
+}
+
+/// The ConPTY package's conpty.dll for msh server on Windows: MSH_CONPTY if
+/// set, else beside msh-gui.exe, as it ships, else the copy
+/// msh-gui/fetch-conpty.msh unpacks in the repository. None leaves msh server
+/// to say what it needs.
+#[cfg(windows)]
+fn conpty_dll() -> Option<std::path::PathBuf> {
+    if let Some(p) = std::env::var_os("MSH_CONPTY") {
+        return Some(p.into());
+    }
+    let beside = std::env::current_exe().ok()?.with_file_name("conpty.dll");
+    if beside.exists() {
+        return Some(beside);
+    }
+    let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" };
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../third_party/conpty-1.25.260930003")
+        .join(arch)
+        .join("conpty.dll");
+    repo.exists().then_some(repo)
 }
 
 fn main() {
