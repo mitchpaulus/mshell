@@ -162,7 +162,7 @@ pub struct Pane {
     /// Where the screen was last cleared: the rows of the cards before it,
     /// which are above the view until scrolled back to.
     clear_rows: usize,
-    message: Option<String>,
+    pub message: Option<String>,
     /// The ops editRunOps quotes returned, by block, run when it finishes.
     pending_ops: HashMap<u64, Vec<EditOp>>,
     /// The file manager's view while it shows as a dialog, and the size

@@ -48,6 +48,11 @@ for program output, the prompt and file previews;
   The wheel scrolls the listing (or the help), the cursor kept in view, and the Back button goes to the parent.
   When it hands the terminal to a program (an editor), the dialog hides and the program runs in the pane.
 - Tabs hold panes, each with its own engine, laid out as a tiling window manager does.
+  A split shows the stack: the first pane on the left, the others in rows on the right.
+  A split that would leave a pane smaller than 20 by 8 cells is refused, with a message under the prompt.
+  The bar at the top shows the tabs, and, while the tab has more than one pane,
+  its layout: a little map of it, the focused pane in the accent colour, and its name
+  (in everything, which pane of how many).
   The window's keys come before the editor's and a program's:
 
   | Key | |
@@ -57,7 +62,7 @@ for program output, the prompt and file previews;
   | Alt-H/J/K/L | focus the pane left, below, above, right |
   | Alt-; | split: a new pane in this tab |
   | Alt-R | reorder: swap the pane with the first |
-  | Alt-' | next layout: everything (the focused pane), columns, right halves, right thirds |
+  | Alt-' | next layout: everything (the focused pane), stack, columns, right halves, right thirds |
 
 ## Checking it without a window
 

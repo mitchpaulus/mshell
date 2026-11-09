@@ -13,8 +13,10 @@
 //!   Alt-H/J/K/L      focus the pane left / below / above / right
 //!   Alt-;            split: a new pane in this tab
 //!   Alt-R            reorder: swap the pane with the first
-//!   Alt-'            next layout: everything, columns, right halves,
-//!                    right thirds
+//!   Alt-'            next layout: everything, stack, columns, right
+//!                    halves, right thirds
+//! The bar at the top shows the tabs, and the layout while the tab has
+//! more than one pane.
 //! A click on a tab shows it, on a pane focuses it; the wheel scrolls the
 //! pane under the pointer. In the file manager's dialog, presses act at
 //! once (Pane::fm_press), the wheel scrolls the listing, and the Back
@@ -50,6 +52,9 @@ use winit::window::{Window, WindowId};
 // focused pane's border, in pixels.
 const GAP: usize = 8;
 const BORDER: u32 = 2;
+/// The smallest a split may leave a pane, in cells: room for the prompt box
+/// and a few lines of output.
+const MIN_PANE: (usize, usize) = (20, 8);
 /// Behind the panes: what shows in the gaps.
 pub const BG: [u8; 3] = [0x0b, 0x0b, 0x0e];
 const PANE_BG: [u8; 3] = pane::BG;
@@ -167,15 +172,25 @@ impl App {
         self.glyphs.as_ref().map_or((8, 16), |g| (g.cell.w, g.cell.h))
     }
 
-    /// The tab bar's height in pixels: a row, when there are tabs.
+    /// Whether the bar at the top shows: for the tabs, or for the layout
+    /// of a tab with more than one pane.
+    fn bar_shown(&self) -> bool {
+        self.tabs.len() > 1 || self.tabs.get(self.tab).is_some_and(|t| t.panes.len() > 1)
+    }
+
+    /// The bar's height in pixels: a row, when it shows.
     fn bar_height(&self) -> usize {
-        if self.tabs.len() > 1 { self.cell().1 as usize } else { 0 }
+        if self.bar_shown() { self.cell().1 as usize } else { 0 }
     }
 
     /// The panes' area in pixels: the window, inside the outer gap, below
     /// the tab bar.
     fn area(&self) -> Rect {
-        let top = self.bar_height();
+        self.area_with_bar(self.bar_shown())
+    }
+
+    fn area_with_bar(&self, bar: bool) -> Rect {
+        let top = if bar { self.cell().1 as usize } else { 0 };
         Rect { x: GAP, y: top + GAP, w: self.width.saturating_sub(2 * GAP), h: self.height.saturating_sub(top + 2 * GAP) }
     }
 
@@ -386,12 +401,19 @@ impl App {
                 self.tabs[self.tab].focus = layout::neighbor(&rects, self.tabs[self.tab].focus, dir);
             }
             ';' => {
+                // A split shows: from everything, the stack. One that would
+                // leave a pane too small to use is refused.
+                let (layout, focus) = (if tab.layout == Layout::Everything { Layout::Stack } else { tab.layout }, tab.focus);
+                let cell = self.cell();
+                let rects = layout::rects(layout, n + 1, focus + 1, self.area_with_bar(true), GAP);
+                let small = |r: &Rect| r.w / (cell.0 as usize) < MIN_PANE.0 || r.h / (cell.1 as usize) < MIN_PANE.1;
+                if rects.iter().flatten().any(small) {
+                    self.tabs[self.tab].panes[focus].message = Some("No room for another pane".into());
+                    return true;
+                }
                 let pane = self.new_pane();
                 let tab = &mut self.tabs[self.tab];
-                // A split shows: from everything, the columns.
-                if tab.layout == Layout::Everything {
-                    tab.layout = Layout::Columns;
-                }
+                tab.layout = layout;
                 tab.panes.insert(tab.focus + 1, pane);
                 tab.focus += 1;
             }
@@ -494,20 +516,44 @@ impl App {
         let labels = self.tab_labels();
         let cell = self.cell();
         let cols = (self.width / cell.0 as usize).max(1);
+        let bar = self.bar_height() > 0;
         let Some(glyphs) = &mut self.glyphs else { return };
-        // The tab bar, when there are tabs: each tab's title or number.
-        if self.tabs.len() > 1 {
+        // The bar: each tab's title or number, when there are tabs; and
+        // the layout, when the tab has more than one pane.
+        if bar {
             let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, top: &mut self.top_quads, on_top: false, x0: 0, y0: 0, cols, rows: 1, cell };
             let h = cell.1 as f32;
-            for (i, (x, w, label)) in labels.iter().enumerate() {
-                if i == self.tab {
-                    cv.fill_px(*x, 0.0, *w, h, color(TAB_SELECTED_BG));
+            if self.tabs.len() > 1 {
+                for (i, (x, w, label)) in labels.iter().enumerate() {
+                    if i == self.tab {
+                        cv.fill_px(*x, 0.0, *w, h, color(TAB_SELECTED_BG));
+                    }
+                    cv.ui_text(glyphs, x + TAB_PAD, 0.0, h, label, color(if i == self.tab { ACCENT } else { DIM }), *w);
                 }
-                cv.ui_text(glyphs, x + TAB_PAD, 0.0, h, label, color(if i == self.tab { ACCENT } else { DIM }), *w);
             }
-            let layout = self.tabs[self.tab].layout.name();
-            let lw = glyphs.ui_width(layout);
-            cv.ui_text(glyphs, self.width as f32 - lw - TAB_PAD, 0.0, h, layout, color(DIM), lw + 1.0);
+            let tab = &self.tabs[self.tab];
+            if tab.panes.len() > 1 {
+                // Its name (in everything, which pane of how many), after a
+                // map of it: the panes shown, the focused one in the
+                // accent colour.
+                let name = match tab.layout {
+                    Layout::Everything => format!("everything {}/{}", tab.focus + 1, tab.panes.len()),
+                    l => l.name().to_string(),
+                };
+                let lw = glyphs.ui_width(&name);
+                let x = self.width as f32 - lw - TAB_PAD;
+                cv.ui_text(glyphs, x, 0.0, h, &name, color(DIM), lw + 1.0);
+                let mh = (h * 0.6).round() as usize;
+                let mw = mh * 3 / 2;
+                let (mx, my) = (x as usize - 8 - mw, ((h as usize) - mh) / 2);
+                let map = Rect { x: mx, y: my, w: mw, h: mh };
+                for (i, r) in layout::rects(tab.layout, tab.panes.len(), tab.focus, map, 1).into_iter().enumerate() {
+                    if let Some(r) = r {
+                        let c = if i == tab.focus { ACCENT } else { DIM };
+                        cv.fill_px(r.x as f32, r.y as f32, r.w as f32, r.h as f32, color(c));
+                    }
+                }
+            }
         }
         let focus = self.tabs[self.tab].focus;
         let shown = tab_count_shown(&self.tabs[self.tab]);
@@ -532,9 +578,14 @@ impl App {
     }
 }
 
-/// The panes a tab shows: its layout's, at most all of them.
+/// How many panes a tab shows: its layout's, at most all of them.
 fn tab_count_shown(tab: &Tab) -> usize {
-    if tab.layout == Layout::Everything { 1 } else { tab.panes.len() }
+    match tab.layout {
+        Layout::Everything => 1,
+        Layout::RightHalves => tab.panes.len().min(3),
+        Layout::RightThirds => tab.panes.len().min(4),
+        Layout::Stack | Layout::Columns => tab.panes.len(),
+    }
 }
 
 impl ApplicationHandler<UserEvent> for App {

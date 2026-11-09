@@ -21,6 +21,9 @@ impl Rect {
 pub enum Layout {
     /// The focused pane has the whole tab.
     Everything,
+    /// The first pane on the left; the others stacked on the right, each a
+    /// row. What a split shows.
+    Stack,
     /// Every pane a column, side by side.
     Columns,
     /// The first pane on the left; the right side in halves, for the next
@@ -34,7 +37,8 @@ pub enum Layout {
 impl Layout {
     pub fn next(self) -> Layout {
         match self {
-            Layout::Everything => Layout::Columns,
+            Layout::Everything => Layout::Stack,
+            Layout::Stack => Layout::Columns,
             Layout::Columns => Layout::RightHalves,
             Layout::RightHalves => Layout::RightThirds,
             Layout::RightThirds => Layout::Everything,
@@ -44,6 +48,7 @@ impl Layout {
     pub fn name(self) -> &'static str {
         match self {
             Layout::Everything => "everything",
+            Layout::Stack => "stack",
             Layout::Columns => "columns",
             Layout::RightHalves => "right halves",
             Layout::RightThirds => "right thirds",
@@ -81,8 +86,12 @@ pub fn rects(layout: Layout, n: usize, focus: usize, area: Rect, gap: usize) -> 
                 out[i] = Some(Rect { x: area.x + x, w, ..area });
             }
         }
-        Layout::RightHalves | Layout::RightThirds => {
-            let slots = if layout == Layout::RightHalves { 2 } else { 3 };
+        Layout::Stack | Layout::RightHalves | Layout::RightThirds => {
+            let slots = match layout {
+                Layout::RightHalves => 2,
+                Layout::RightThirds => 3,
+                _ => n - 1,
+            };
             let cols = split(area.w, 2, gap);
             out[0] = Some(Rect { x: area.x + cols[0].0, w: cols[0].1, ..area });
             let k = (n - 1).min(slots);
@@ -157,6 +166,13 @@ mod tests {
         assert_eq!(halves[3], None);
         let thirds = rects(Layout::RightThirds, 4, 0, AREA, GAP);
         assert_eq!(thirds.iter().skip(1).map(|r| r.unwrap().h).sum::<usize>() + 2 * GAP, AREA.h);
+        // The stack shows every pane: the first on the left, the rest in
+        // rows on the right.
+        let stack = rects(Layout::Stack, 5, 0, AREA, GAP);
+        assert_eq!(stack[0], Some(Rect { x: 0, y: 1, w: 50, h: 31 }));
+        assert!(stack[1..].iter().all(|r| r.is_some_and(|r| r.x == 51 && r.w == 50)));
+        assert_eq!(stack[1..].iter().map(|r| r.unwrap().h).sum::<usize>() + 3 * GAP, AREA.h);
+        assert_eq!(rects(Layout::Stack, 2, 0, AREA, GAP), rects(Layout::RightHalves, 2, 0, AREA, GAP));
     }
 
     #[test]
