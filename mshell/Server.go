@@ -1,14 +1,14 @@
-//go:build linux || darwin
-
 package main
 
 // msh server: the engine of the GUI frontend (ai/gui-terminal.typ, "Architecture").
 //
-// One engine runs one session on one PTY, the pane's. At startup it keeps
-// private copies of its stdin and stdout for the protocol, then makes the
-// PTY's slave side its stdin, stdout, stderr and controlling terminal. The
-// evaluator, job control and every child process then see exactly what
-// interactive msh sees on a terminal, and nothing in the evaluator changes.
+// One engine runs one session on one terminal, the pane's: a PTY on Unix
+// (Server_unix.go), a pseudoconsole on Windows (Server_windows.go). At
+// startup it keeps its stdin and stdout for the protocol, then makes the
+// terminal its stdin, stdout and stderr (and on Unix its controlling
+// terminal). The evaluator, job control and every child process then see
+// exactly what interactive msh sees on a terminal, and nothing in the
+// evaluator changes.
 //
 // The protocol, both directions: frames of
 //
@@ -48,7 +48,8 @@ package main
 // has block id 0.
 //
 // When the frontend closes the protocol, the engine exits; the PTY is hung
-// up, and the foreground job gets SIGHUP, as when a terminal window closes.
+// up, and the foreground job gets SIGHUP, as when a terminal window closes
+// (on Windows, closing the pseudoconsole closes the programs attached to it).
 
 import (
 	"bufio"
@@ -60,16 +61,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
-
-	"github.com/creack/pty"
-	"golang.org/x/sys/unix"
 )
 
 const serverProtocolVersion = 1
@@ -90,8 +85,19 @@ const (
 // stream is not this protocol.
 const serverMaxFrame = 64 << 20
 
-// serverSetsidEnv marks the copy of the engine started in its own session.
-const serverSetsidEnv = "MSH_SERVER_SETSID"
+// serverTerminal is the pane's terminal as the engine drives it: a PTY's
+// master on Unix, a pseudoconsole's pipes on Windows.
+type serverTerminal interface {
+	// Read gives the terminal's output: everything the engine and its
+	// programs wrote to it.
+	io.Reader
+	// Write is input for the terminal's programs.
+	io.Writer
+	resize(cols, rows, widthPx, heightPx uint16) error
+	// flushInput discards input the terminal has received and nothing has
+	// read yet.
+	flushInput()
+}
 
 // serverFrameWriter serializes frames from the PTY reader and the main loop.
 type serverFrameWriter struct {
@@ -251,8 +257,8 @@ type serverInput struct {
 	// The writer is writing (or flushing after a stale write).
 	writing bool
 	ready chan struct{}
-	// The PTY's slave, whose input queue blockDone flushes; -1 for none.
-	tty int
+	// The terminal whose unread input blockDone flushes; nil for none.
+	term serverTerminal
 }
 
 const (
@@ -262,13 +268,13 @@ const (
 	serverInputChunk = 4096
 )
 
-func newServerInput(tty int) *serverInput {
-	return &serverInput{ready: make(chan struct{}, 1), tty: tty}
+func newServerInput(term serverTerminal) *serverInput {
+	return &serverInput{ready: make(chan struct{}, 1), term: term}
 }
 
 func (in *serverInput) flush() {
-	if in.tty >= 0 {
-		flushInput(in.tty)
+	if in.term != nil {
+		in.term.flushInput()
 	}
 }
 
@@ -321,8 +327,8 @@ func (in *serverInput) add(b []byte) {
 	}
 }
 
-// run writes the queued input to the PTY's master, in order.
-func (in *serverInput) run(master *os.File) {
+// run writes the queued input to the terminal, in order.
+func (in *serverInput) run(master io.Writer) {
 	for range in.ready {
 		for {
 			in.mu.Lock()
@@ -357,9 +363,11 @@ func (in *serverInput) run(master *os.File) {
 
 type server struct {
 	out    serverFrameWriter
-	master *os.File
+	master serverTerminal
 	marks  *serverMarks
 	input  *serverInput
+	// beforeExit, when set, runs just before the engine exits.
+	beforeExit func()
 
 	mu     sync.Mutex
 	blocks map[uint64]*serverBlock
@@ -413,7 +421,7 @@ func (s *server) readPTY() {
 		if n > 0 {
 			if ferr := s.marks.feed(buf[:n], emit, mark); ferr != nil {
 				fmt.Fprintf(os.Stderr, "msh server: %v\n", ferr)
-				os.Exit(1)
+				s.exit(1)
 			}
 		}
 		if err != nil {
@@ -436,7 +444,7 @@ func (s *server) readProtocol(in io.Reader, runs chan<- any) {
 			if !errors.Is(err, io.EOF) {
 				fmt.Fprintf(os.Stderr, "msh server: reading the protocol: %v\n", err)
 			}
-			os.Exit(0)
+			s.exit(0)
 		}
 		switch kind {
 		case serverMsgRun:
@@ -464,14 +472,9 @@ func (s *server) readProtocol(in io.Reader, runs chan<- any) {
 			if len(payload) < 8 {
 				s.protocolError("short resize message")
 			}
-			ws := pty.Winsize{
-				Cols: binary.LittleEndian.Uint16(payload),
-				Rows: binary.LittleEndian.Uint16(payload[2:]),
-				X:    binary.LittleEndian.Uint16(payload[4:]),
-				Y:    binary.LittleEndian.Uint16(payload[6:]),
-			}
-			if err := pty.Setsize(s.master, &ws); err != nil {
-				fmt.Fprintf(os.Stderr, "msh server: resizing the PTY: %v\n", err)
+			le := binary.LittleEndian
+			if err := s.master.resize(le.Uint16(payload), le.Uint16(payload[2:]), le.Uint16(payload[4:]), le.Uint16(payload[6:])); err != nil {
+				fmt.Fprintf(os.Stderr, "msh server: resizing the terminal: %v\n", err)
 			}
 		default:
 			s.protocolError(fmt.Sprintf("unknown message type 0x%02x", kind))
@@ -481,7 +484,15 @@ func (s *server) readProtocol(in io.Reader, runs chan<- any) {
 
 func (s *server) protocolError(msg string) {
 	fmt.Fprintf(os.Stderr, "msh server: protocol error: %s\n", msg)
-	os.Exit(1)
+	s.exit(1)
+}
+
+// exit ends the engine.
+func (s *server) exit(code int) {
+	if s.beforeExit != nil {
+		s.beforeExit()
+	}
+	os.Exit(code)
 }
 
 type serverRun struct {
@@ -495,91 +506,47 @@ type serverRun struct {
 	staleQuote     bool
 }
 
-// runServer is msh server. It returns only on a setup error.
-func runServer() int {
-	if code, handled := serverOwnSession(); handled {
-		return code
-	}
-
-	// The protocol keeps the original stdin and stdout, at descriptors no
-	// child inherits.
-	protoIn, err := unix.FcntlInt(0, unix.F_DUPFD_CLOEXEC, 3)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "msh server: %v\n", err)
-		return 1
-	}
-	protoOut, err := unix.FcntlInt(1, unix.F_DUPFD_CLOEXEC, 3)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "msh server: %v\n", err)
-		return 1
-	}
-
-	master, slave, err := pty.Open()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "msh server: opening a PTY: %v\n", err)
-		return 1
-	}
-	if err := pty.Setsize(master, &pty.Winsize{Cols: 80, Rows: 24}); err != nil {
-		fmt.Fprintf(os.Stderr, "msh server: %v\n", err)
-		return 1
-	}
-	// The PTY becomes this session's controlling terminal, with the engine
-	// in the foreground, as a terminal's shell is.
-	if err := unix.IoctlSetInt(int(slave.Fd()), unix.TIOCSCTTY, 0); err != nil {
-		fmt.Fprintf(os.Stderr, "msh server: taking the PTY as controlling terminal: %v\n", err)
-		return 1
-	}
+// newServer is the engine for a pane's terminal, with the protocol's output
+// on protoOut.
+func newServer(protoOut io.Writer, term serverTerminal) (*server, error) {
 	marks, err := newServerMarks()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "msh server: %v\n", err)
-		return 1
+		return nil, err
 	}
-	s := &server{
-		out:      serverFrameWriter{w: os.NewFile(uintptr(protoOut), "protocol out")},
-		master:   master,
+	return &server{
+		out:      serverFrameWriter{w: protoOut},
+		master:   term,
 		marks:    marks,
-		input:    newServerInput(0),
+		input:    newServerInput(term),
 		blocks:   map[uint64]*serverBlock{},
 		started:  make(chan uint64, 1),
 		finished: make(chan uint64, 1),
-	}
+	}, nil
+}
 
+// sendHello is the engine's first message.
+func (s *server) sendHello() error {
 	hello := binary.LittleEndian.AppendUint32(nil, serverProtocolVersion)
 	hello = binary.LittleEndian.AppendUint32(hello, uint32(os.Getpid()))
-	if err := s.out.send(serverMsgHello, hello, nil); err != nil {
-		return 1
-	}
+	return s.out.send(serverMsgHello, hello, nil)
+}
 
-	for fd := 0; fd <= 2; fd++ {
-		if err := dupTo(int(slave.Fd()), fd); err != nil {
-			fmt.Fprintf(os.Stderr, "msh server: %v\n", err)
-			return 1
-		}
-	}
-	slave.Close()
-
-	// Keys typed while the engine itself is in the foreground would signal
-	// it: Ctrl-C, Ctrl-\ and Ctrl-Z mean nothing to the engine between
-	// blocks. Caught rather than ignored, so children get the default
-	// action back when they exec.
-	signals := make(chan os.Signal, 8)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTSTP)
-	go func() {
-		for range signals {
-		}
-	}()
-
+// serve runs the engine once the platform's runServer has made the terminal
+// its stdin, stdout and stderr: the protocol from protoIn, the evaluator,
+// and a block at a time. ttyFd is the terminal's input as TermState takes
+// it. It returns only on a setup error.
+func (s *server) serve(protoIn io.Reader, ttyFd int) int {
 	// mshFileManager draws to the GUI, as a dialog (FileManagerGUI.go).
 	fileManagerGUI = &fmGUI{
 		input: make(chan fmGUIInput, 256),
 		send:  func(view []byte) { s.out.send(serverMsgFmView, view, nil) },
 	}
 	go s.readPTY()
-	go s.input.run(master)
+	go s.input.run(s.master)
 	runs := make(chan any, 64)
-	go s.readProtocol(os.NewFile(uintptr(protoIn), "protocol in"), runs)
+	go s.readProtocol(protoIn, runs)
 
-	state := newSessionState(0, 80, 24, nil)
+	state := newSessionState(ttyFd, 80, 24, nil)
 	// The cooked state each line starts from and returns to, as in
 	// interactive mode: a program that leaves the terminal raw doesn't
 	// leave it raw for the next block.
@@ -611,14 +578,14 @@ func runServer() int {
 			code, exit := s.runBlock(&state, request)
 			if exit {
 				s.out.send(serverMsgExit, binary.LittleEndian.AppendUint32(nil, uint32(int32(code))), nil)
-				os.Exit(code)
+				s.exit(code)
 			}
 		case serverCall:
 			if request.kind == serverMsgRunQuote {
 				code, exit := s.runBlock(&state, s.quoteRun(request))
 				if exit {
 					s.out.send(serverMsgExit, binary.LittleEndian.AppendUint32(nil, uint32(int32(code))), nil)
-					os.Exit(code)
+					s.exit(code)
 				}
 				continue
 			}
@@ -697,39 +664,4 @@ func (s *server) runBlock(state *TermState, run serverRun) (int, bool) {
 		}
 	}
 	return code, exit
-}
-
-// serverOwnSession makes the engine a session leader, so the PTY can become
-// its controlling terminal. A process that leads its process group (as a
-// shell starts it) can't call setsid, so then the engine runs a copy of
-// itself in a new session and passes its exit code on.
-func serverOwnSession() (int, bool) {
-	copied := os.Getenv(serverSetsidEnv) != ""
-	// Programs the engine runs must not inherit the marker.
-	os.Unsetenv(serverSetsidEnv)
-	if _, err := syscall.Setsid(); err == nil {
-		return 0, false
-	}
-	if copied {
-		fmt.Fprintln(os.Stderr, "msh server: can't start a new session")
-		return 1, true
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "msh server: %v\n", err)
-		return 1, true
-	}
-	cmd := exec.Command(exe, os.Args[1:]...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	cmd.Env = append(os.Environ(), serverSetsidEnv+"=1")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return exitErr.ExitCode(), true
-		}
-		fmt.Fprintf(os.Stderr, "msh server: %v\n", err)
-		return 1, true
-	}
-	return 0, true
 }

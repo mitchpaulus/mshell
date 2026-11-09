@@ -1,5 +1,3 @@
-//go:build linux || darwin
-
 package main
 
 // The line editor's side of msh server (ai/gui-terminal.typ, "The line
