@@ -315,6 +315,18 @@ func addFileToTar(tw *tar.Writer, sourcePath, entryName string, info os.FileInfo
 	return nil
 }
 
+// nextTarEntry is reader.Next, skipping pax global headers (type 'g'):
+// metadata for the whole archive, not an entry. `git archive` writes one
+// first, and other tar tools skip it the same way.
+func nextTarEntry(reader *tar.Reader) (*tar.Header, error) {
+	for {
+		header, err := reader.Next()
+		if err != nil || header.Typeflag != tar.TypeXGlobalHeader {
+			return header, err
+		}
+	}
+}
+
 func tarEntryType(header *tar.Header) string {
 	switch header.Typeflag {
 	case tar.TypeDir:
@@ -335,7 +347,7 @@ func collectTarMetadata(tarPath string) ([]tarEntryMetadata, error) {
 
 	entries := make([]tarEntryMetadata, 0)
 	for {
-		header, err := reader.Next()
+		header, err := nextTarEntry(reader)
 		if err == io.EOF {
 			break
 		}
@@ -392,7 +404,7 @@ func extractTarArchive(tarPath, destDir string, options zipExtractOptions) error
 	budget := newByteBudget(options.maxBytes)
 
 	for {
-		header, err := reader.Next()
+		header, err := nextTarEntry(reader)
 		if err == io.EOF {
 			break
 		}
@@ -472,7 +484,7 @@ func extractTarEntry(tarPath, entryPath, destPath string, options zipExtractEntr
 	budget := newByteBudget(options.maxBytes)
 
 	for {
-		header, err := reader.Next()
+		header, err := nextTarEntry(reader)
 		if err == io.EOF {
 			break
 		}
@@ -704,7 +716,7 @@ func readTarEntry(tarPath, entryPath string) ([]byte, bool, error) {
 	defer closer.Close()
 
 	for {
-		header, err := reader.Next()
+		header, err := nextTarEntry(reader)
 		if err == io.EOF {
 			break
 		}

@@ -247,6 +247,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `tarExtract`, `tarExtractEntry`, `tarList` and `tarRead` skip a pax global header (`pax_global_header`, which `git archive` writes) instead of failing on it.
 - Tab quotes an argument that would mean something else typed bare:
   `2.0` (the number 2), `@preview/x` (a variable), `<intro>` (a redirect), `true`, or the name of a built-in or definition.
   A file name is put in backticks, a completion definition's value in single quotes.
