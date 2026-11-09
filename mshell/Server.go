@@ -104,11 +104,16 @@ type serverFrameWriter struct {
 	mu  sync.Mutex
 	w   io.Writer
 	buf []byte
+	// closed: the engine is exiting, and sends nothing more.
+	closed bool
 }
 
 func (fw *serverFrameWriter) send(kind byte, fixed []byte, tail []byte) error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
+	if fw.closed {
+		return nil
+	}
 	fw.buf = binary.LittleEndian.AppendUint32(fw.buf[:0], uint32(1+len(fixed)+len(tail)))
 	fw.buf = append(fw.buf, kind)
 	fw.buf = append(fw.buf, fixed...)
@@ -487,8 +492,13 @@ func (s *server) protocolError(msg string) {
 	s.exit(1)
 }
 
-// exit ends the engine.
+// exit ends the engine. Nothing is sent after: on Windows, closing the
+// pseudoconsole makes it write its own last bytes, which mustn't follow the
+// exit message.
 func (s *server) exit(code int) {
+	s.out.mu.Lock()
+	s.out.closed = true
+	s.out.mu.Unlock()
 	if s.beforeExit != nil {
 		s.beforeExit()
 	}

@@ -267,9 +267,9 @@ Things still to work out:
 - Resizing: each block's emulator needs a width; the active block follows the pane width.
   Do finished blocks reflow or keep their width?
 - A command that writes both mshell values and terminal output: what order is shown.
-- Windows: one pseudo console per pane, with each child attached to it through `CreateProcess` attributes, which Go's `os/exec` doesn't expose, so Windows needs its own spawning code.
-  ConPTY also behaves differently from Unix PTYs (it rewrites output and has its own resize quirks).
-  libghostty-vt has an option for exactly this: turn off pulling rows back from scrollback on resize, since ConPTY keeps its own screen buffer.
+- Windows: one pseudoconsole per pane, as on Unix, from Microsoft's ConPTY package; the engine attaches to it, so children inherit it and `os/exec` needs no spawning code of its own (@sec-arch).
+  The newer ConPTY passes output through, unlike the built-in one, which rewrites it; how it behaves on resize is still to measure.
+  If it keeps a screen buffer of its own, libghostty-vt has an option for that: turn off pulling rows back from scrollback on resize.
 
 #decision[Do not write the VT emulator ourselves.
 Getting it right takes decades of edge cases; use a battle-tested one.
@@ -580,8 +580,16 @@ How it works:
   So pure mshell code can't be interrupted yet; that needs the `signal` message, or the engine acting on its own SIGINT.
 - Closing the protocol exits the engine; the PTY hangs up and the foreground job gets SIGHUP, as when a terminal window closes.
 
-Not yet: Windows (ConPTY), values and the stack as structured messages, the editor messages, and flow control beyond the pipe's own backpressure.
-Tests: `mshell/Server_unix_test.go` runs blocks, input, Ctrl-C, exit and the marker scanner, through a real engine process.
+Windows (`mshell/Server_windows.go`, measured in `ai/windows-server-experiments.md`):
+- The terminal is a pseudoconsole from Microsoft's ConPTY package (`conpty.dll` and `OpenConsole.exe`), which msh-gui ships beside itself and names to the engine in `MSH_CONPTY`; `msh` alone never needs it.
+  The pseudoconsole built into Windows can't be used: it holds text and draws it later but passes unknown escape sequences through at once, so the markers came out ahead of the block's output, and it redraws its whole screen, earlier blocks' text included.
+- A process can only join a pseudoconsole when it starts, so the engine starts a holder process inside the one it created, attaches to the holder's console (`AttachConsole`), and ends the holder.
+  Its stdin, stdout and stderr become the console's; every program it runs inherits the console, and the markers come out in order, as on Unix.
+- The pseudoconsole's startup handshake (a device attributes query, focus reporting, its Win32 input mode) is the engine's: it answers the query and drops the handshake, so nothing shows outside a block.
+- There is no job control: Ctrl-C reaches every process on the console, and the engine ignores it between blocks.
+
+Not yet: values and the stack as structured messages, the editor messages, and flow control beyond the pipe's own backpressure.
+Tests: `mshell/Server_test.go` is the harness, a real engine process; `Server_unix_test.go` runs blocks, input, Ctrl-C, exit and the marker scanner, and `Server_windows_test.go` the same on a pseudoconsole.
 
 = The line editor <sec-editor>
 
