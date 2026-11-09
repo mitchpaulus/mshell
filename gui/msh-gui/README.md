@@ -22,14 +22,14 @@ where msh-gui and the engine's tests (`go test` in `mshell/`, `Server_windows_te
 `run.msh` does this when it isn't there.
 `ai/windows-server-experiments.md` has why the ConPTY built into Windows won't do.
 
-`MSH_GUI_FONT` and `MSH_GUI_FONT_SIZE` pick the monospace font (default Noto Sans Mono, 15 px),
+`MSH_GUI_FONT` and `MSH_GUI_FONT_SIZE` pick the monospace font (default Noto Sans Mono, Consolas on Windows, 15 px),
 for program output and file previews;
-`MSH_GUI_UI_FONT` the proportional font of the app's own text (default Noto Sans);
+`MSH_GUI_UI_FONT` the proportional font of the app's own text (default Noto Sans, Segoe UI on Windows);
 `MSH_GUI_PROMPT_FONT` the prompt box's: the prompt, the line you type, and the completion menu (default the UI font).
 A monospace prompt font lays the box out as cells would.
 A character a font lacks comes from the monospace font.
-Each font's bold and italic come from the files beside it (`NotoSans-Bold.ttf` beside `NotoSans-Regular.ttf`),
-or from `{VAR}_BOLD`, `{VAR}_ITALIC` and `{VAR}_BOLD_ITALIC` (`MSH_GUI_FONT_BOLD`);
+Each font's bold and italic come from the files beside it (`NotoSans-Bold.ttf` beside `NotoSans-Regular.ttf`;
+the Windows defaults' own, `consolab.ttf` and the rest), or from `{VAR}_BOLD`, `{VAR}_ITALIC` and `{VAR}_BOLD_ITALIC` (`MSH_GUI_FONT_BOLD`);
 a style without a file is made from the nearest one, emboldened or slanted (Noto Sans Mono has no italic).
 
 - Not a terminal emulator: each command is a card (a header with the command, a status dot,

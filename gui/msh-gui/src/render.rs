@@ -122,9 +122,10 @@ pub const MONO: u8 = 1;
 pub const PROMPT: u8 = 2;
 
 /// A font family: its regular face, and its bold, italic and bold italic,
-/// read on first use from files beside the regular (NotoSans-Bold.ttf
-/// beside NotoSans-Regular.ttf) or named by variables. A style without a
-/// file is made from the nearest one that has, emboldened or slanted.
+/// read on first use from files named by variables, else given with the
+/// regular (a platform's default fonts), else beside it (NotoSans-Bold.ttf
+/// beside NotoSans-Regular.ttf). A style without a file is made from the
+/// nearest one that has, emboldened or slanted.
 pub struct Family {
     regular: Vec<u8>,
     paths: [Option<PathBuf>; 4],
@@ -133,17 +134,22 @@ pub struct Family {
 
 impl Family {
     /// The family of a regular font file. `var` names the variables that
-    /// choose its styles' files: `{var}_BOLD`, `_ITALIC`, `_BOLD_ITALIC`.
-    pub fn load(path: &str, var: &str) -> Result<Family, String> {
+    /// choose its styles' files: `{var}_BOLD`, `_ITALIC`, `_BOLD_ITALIC`;
+    /// `styles` are its bold, italic and bold italic files when those
+    /// aren't set.
+    pub fn load(path: &str, var: &str, styles: Option<[String; 3]>) -> Result<Family, String> {
         let regular = std::fs::read(path).map_err(|e| format!("reading font {path}: {e}"))?;
         if FontRef::from_index(&regular, 0).is_none() {
             return Err(format!("{path}: not a font file"));
         }
         let mut paths: [Option<PathBuf>; 4] = Default::default();
-        for (style, suffix, name) in [(BOLD, "_BOLD", "-Bold"), (ITALIC, "_ITALIC", "-Italic"), (BOLD | ITALIC, "_BOLD_ITALIC", "-BoldItalic")] {
+        for (i, (style, suffix, name)) in [(BOLD, "_BOLD", "-Bold"), (ITALIC, "_ITALIC", "-Italic"), (BOLD | ITALIC, "_BOLD_ITALIC", "-BoldItalic")].into_iter().enumerate() {
             paths[style as usize] = match std::env::var(format!("{var}{suffix}")) {
                 Ok(p) => Some(p.into()),
-                Err(_) => path.contains("-Regular").then(|| path.replacen("-Regular", name, 1).into()),
+                Err(_) => match &styles {
+                    Some(files) => Some(files[i].clone().into()),
+                    None => path.contains("-Regular").then(|| path.replacen("-Regular", name, 1).into()),
+                },
             };
         }
         Ok(Family { regular, paths, faces: Default::default() })

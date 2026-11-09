@@ -744,6 +744,38 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
+enum FontKind {
+    Mono,
+    Ui,
+}
+
+/// A platform's default font: the regular file, and its bold, italic and
+/// bold italic when they aren't named as Noto's are (beside it, -Regular
+/// swapped for -Bold and so on).
+struct DefaultFont {
+    regular: String,
+    styles: Option<[String; 3]>,
+}
+
+/// Noto Sans Mono and Noto Sans; on Windows Consolas and Segoe UI, which
+/// every Windows has, with real bold and italic files.
+fn default_font(kind: FontKind) -> DefaultFont {
+    if cfg!(windows) {
+        let fonts = std::path::Path::new(&std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into())).join("Fonts");
+        let file = |name: &str| fonts.join(name).to_string_lossy().into_owned();
+        let [regular, bold, italic, bold_italic] = match kind {
+            FontKind::Mono => ["consola.ttf", "consolab.ttf", "consolai.ttf", "consolaz.ttf"],
+            FontKind::Ui => ["segoeui.ttf", "segoeuib.ttf", "segoeuii.ttf", "segoeuiz.ttf"],
+        };
+        return DefaultFont { regular: file(regular), styles: Some([file(bold), file(italic), file(bold_italic)]) };
+    }
+    let regular = match kind {
+        FontKind::Mono => "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+        FontKind::Ui => "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    };
+    DefaultFont { regular: regular.into(), styles: None }
+}
+
 fn msh_binary(args: &[String]) -> String {
     if let Some(a) = args.iter().find(|a| !a.starts_with("--")) {
         return a.clone();
@@ -808,13 +840,17 @@ fn main() {
     // {VAR}_BOLD, _ITALIC, _BOLD_ITALIC. The prompt box's is the UI font
     // unless MSH_GUI_PROMPT_FONT names one (a monospace one lays it out
     // as cells would).
-    let family = |var: &str, default: &str| {
-        let path = std::env::var(var).unwrap_or_else(|_| default.into());
-        Family::load(&path, var).unwrap_or_else(|e| panic!("{e}"))
+    let family = |var: &str, default: Option<DefaultFont>| {
+        let loaded = match (std::env::var(var), default) {
+            (Ok(path), _) => Family::load(&path, var, None),
+            (Err(_), Some(d)) => Family::load(&d.regular, var, d.styles),
+            (Err(_), None) => Family::load("", var, None),
+        };
+        loaded.unwrap_or_else(|e| panic!("{e}"))
     };
-    let mono = family("MSH_GUI_FONT", "/usr/share/fonts/noto/NotoSansMono-Regular.ttf");
-    let ui = family("MSH_GUI_UI_FONT", "/usr/share/fonts/noto/NotoSans-Regular.ttf");
-    let prompt = std::env::var("MSH_GUI_PROMPT_FONT").ok().map(|_| family("MSH_GUI_PROMPT_FONT", ""));
+    let mono = family("MSH_GUI_FONT", Some(default_font(FontKind::Mono)));
+    let ui = family("MSH_GUI_UI_FONT", Some(default_font(FontKind::Ui)));
+    let prompt = std::env::var("MSH_GUI_PROMPT_FONT").ok().map(|_| family("MSH_GUI_PROMPT_FONT", None));
     let font_size = std::env::var("MSH_GUI_FONT_SIZE").ok().and_then(|s| s.parse().ok()).unwrap_or(15.0);
     let mut app = App {
         msh,

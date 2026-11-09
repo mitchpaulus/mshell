@@ -196,8 +196,8 @@ mod tests {
     use crate::render::{Family, MONO};
 
     fn glyphs() -> Option<Glyphs> {
-        let ui = Family::load("/usr/share/fonts/noto/NotoSans-Regular.ttf", "TEST_NO_VAR").ok()?;
-        let mono = Family::load("/usr/share/fonts/noto/NotoSansMono-Regular.ttf", "TEST_NO_VAR").ok()?;
+        let ui = Family::load("/usr/share/fonts/noto/NotoSans-Regular.ttf", "TEST_NO_VAR", None).ok()?;
+        let mono = Family::load("/usr/share/fonts/noto/NotoSansMono-Regular.ttf", "TEST_NO_VAR", None).ok()?;
         Some(Glyphs::new(ui, mono, None, 15.0))
     }
 
