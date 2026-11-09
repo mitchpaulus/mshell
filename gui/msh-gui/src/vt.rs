@@ -12,8 +12,8 @@ fn ok(r: g::GhosttyResult, what: &str) {
 /// A colour as the cells give it: RGB, or None for the default.
 pub type Rgb = Option<[u8; 3]>;
 
-/// One cell as drawn: its first code point, and its colours with inverse
-/// video applied.
+/// One cell as drawn: its first code point, its colours with inverse
+/// video applied, and the lines through and under it.
 pub struct Cell {
     pub ch: char,
     pub fg: Rgb,
@@ -21,9 +21,44 @@ pub struct Cell {
     /// With inverse video and no colours of its own: the default colours
     /// swapped.
     pub inverse_default: bool,
+    pub underline: Underline,
+    /// The underline's own colour (SGR 58); None draws it in the text's.
+    pub underline_color: Rgb,
+    pub strikethrough: bool,
+}
+
+/// An underline's style (SGR 4, and 4:1 to 4:5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Underline {
+    None,
+    Single,
+    Double,
+    Curly,
+    Dotted,
+    Dashed,
+}
+
+/// The cursor's shape, as the program set it (DECSCUSR, CSI Ps SP q).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CursorShape {
+    Block,
+    HollowBlock,
+    Bar,
+    Underline,
+}
+
+/// The cursor where it is drawn: column and row of the viewport, and its
+/// shape.
+#[derive(Clone, Copy, Debug)]
+pub struct Cursor {
+    pub x: u16,
+    pub y: u16,
+    pub shape: CursorShape,
 }
 
 const STYLE_FLAG_INVERSE: u16 = 1 << 4;
+const STYLE_FLAG_STRIKETHROUGH: u16 = 1 << 6;
+const STYLE_UNDERLINE_MASK: u16 = 0b111 << g::GHOSTTY_STYLE_UNDERLINE_SHIFT;
 
 /// What the terminal's callbacks use, at a fixed address (their userdata).
 struct Shared {
@@ -65,6 +100,9 @@ pub struct Term {
     cells: g::GhosttyRenderStateRowCells,
     encoder: g::GhosttyKeyEncoder,
     event: g::GhosttyKeyEvent,
+    /// The palette, for underline colours given as an index; read once a
+    /// visit, when one is.
+    palette: [g::GhosttyColorRgb; 256],
 }
 
 // SAFETY: the handles are used from one thread at a time (the UI thread).
@@ -80,6 +118,7 @@ impl Term {
             cells: ptr::null_mut(),
             encoder: ptr::null_mut(),
             event: ptr::null_mut(),
+            palette: [g::GhosttyColorRgb::default(); 256],
         };
         // SAFETY: valid out-pointers; NULL allocator = the default.
         unsafe {
@@ -184,8 +223,9 @@ impl Term {
     }
 
     /// Visits the viewport's cells, rows `from..to`, and returns the cursor
-    /// (column, row of the viewport) when it is visible there.
-    pub fn visit(&mut self, from: usize, to: usize, mut f: impl FnMut(usize, usize, &Cell)) -> Option<(u16, u16)> {
+    /// when it is visible there.
+    pub fn visit(&mut self, from: usize, to: usize, mut f: impl FnMut(usize, usize, &Cell)) -> Option<Cursor> {
+        let mut palette_read = false;
         // SAFETY: all handles are live and owned by self; each out-pointer
         // points at the type its data kind documents.
         unsafe {
@@ -252,11 +292,42 @@ impl Term {
                         if inverse {
                             std::mem::swap(&mut fg, &mut bg);
                         }
+                        let underline = match (style.flags & STYLE_UNDERLINE_MASK) >> g::GHOSTTY_STYLE_UNDERLINE_SHIFT {
+                            0 => Underline::None,
+                            1 => Underline::Single,
+                            2 => Underline::Double,
+                            3 => Underline::Curly,
+                            4 => Underline::Dotted,
+                            _ => Underline::Dashed,
+                        };
+                        let uc = style.underline_color;
+                        let underline_color = match uc.tag as g::GhosttyStyleColorTag {
+                            g::GHOSTTY_STYLE_COLOR_RGB => Some([uc.value.rgb.r, uc.value.rgb.g, uc.value.rgb.b]),
+                            g::GHOSTTY_STYLE_COLOR_PALETTE if underline != Underline::None => {
+                                if !palette_read {
+                                    palette_read = true;
+                                    ok(
+                                        g::ghostty_render_state_get(
+                                            self.state,
+                                            g::GHOSTTY_RENDER_STATE_DATA_COLOR_PALETTE,
+                                            self.palette.as_mut_ptr().cast(),
+                                        ),
+                                        "palette",
+                                    );
+                                }
+                                let c = self.palette[uc.value.palette as usize];
+                                Some([c.r, c.g, c.b])
+                            }
+                            _ => None,
+                        };
                         let cell = Cell {
                             ch: char::from_u32(cp[0]).filter(|_| len > 0).unwrap_or(' '),
                             fg,
                             bg,
                             inverse_default: inverse,
+                            underline,
+                            underline_color,
+                            strikethrough: style.flags & STYLE_FLAG_STRIKETHROUGH != 0,
                         };
                         f(row, col, &cell);
                         col += 1;
@@ -273,7 +344,13 @@ impl Term {
                 ),
                 "cursor",
             );
-            (cursor.visible && cursor.viewport_has_value).then_some((cursor.viewport_x, cursor.viewport_y))
+            let shape = match cursor.visual_style {
+                g::GHOSTTY_CURSOR_STYLE_BAR => CursorShape::Bar,
+                g::GHOSTTY_CURSOR_STYLE_UNDERLINE => CursorShape::Underline,
+                g::GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW => CursorShape::HollowBlock,
+                _ => CursorShape::Block,
+            };
+            (cursor.visible && cursor.viewport_has_value).then_some(Cursor { x: cursor.viewport_x, y: cursor.viewport_y, shape })
         }
     }
 

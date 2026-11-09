@@ -576,8 +576,8 @@ impl Pane {
             let term = &mut self.blocks[i].term;
             term.scroll_to_bottom();
             let cursor = term.visit(0, rows, |r, c, cell| cv.cell(glyphs, MARGIN + c, r, cell, BG));
-            if let Some((x, y)) = cursor.filter(|_| focused) {
-                cv.cursor(MARGIN + x as usize, y as usize);
+            if let Some(k) = cursor.filter(|_| focused) {
+                cv.term_cursor(MARGIN + k.x as usize, k.y as usize, k.shape);
             }
             return;
         }
@@ -669,10 +669,10 @@ impl Pane {
                 });
                 b.term.scroll_to_bottom();
                 if Some(bi) == self.running && focused {
-                    if let Some((x, vy)) = cursor {
-                        let row = content_y + (from - off) + vy as usize;
+                    if let Some(k) = cursor {
+                        let row = content_y + (from - off) + k.y as usize;
                         if shown(row) {
-                            cv.cursor(MARGIN + x as usize, row - top);
+                            cv.term_cursor(MARGIN + k.x as usize, row - top, k.shape);
                         }
                     }
                 }
@@ -1190,9 +1190,73 @@ impl Canvas<'_> {
     }
 
     fn cursor(&mut self, col: usize, row: usize) {
-        if col < self.cols && row < self.rows {
-            let (x, y) = self.cell_px(col, row);
-            self.push_glyph(Quad::solid(x, y, self.cell.0, self.cell.1, cursor_color()));
+        self.term_cursor(col, row, vt::CursorShape::Block);
+    }
+
+    /// A program's cursor, in the shape it set: a block shows the
+    /// character through it; the bar, underline and hollow block are
+    /// solid.
+    fn term_cursor(&mut self, col: usize, row: usize, shape: vt::CursorShape) {
+        if col >= self.cols || row >= self.rows {
+            return;
+        }
+        let (x, y) = self.cell_px(col, row);
+        let (w, h) = self.cell;
+        let line = (w / 8).max(2);
+        let c = color(FG);
+        match shape {
+            vt::CursorShape::Block => self.push_glyph(Quad::solid(x, y, w, h, cursor_color())),
+            vt::CursorShape::Bar => self.push_glyph(Quad::solid(x, y, line, h, c)),
+            vt::CursorShape::Underline => self.push_glyph(Quad::solid(x, y + h - line, w, line, c)),
+            vt::CursorShape::HollowBlock => {
+                for (qx, qy, qw, qh) in [(x, y, w, 1), (x, y + h - 1, w, 1), (x, y, 1, h), (x + w - 1, y, 1, h)] {
+                    self.push_glyph(Quad::solid(qx, qy, qw, qh, c));
+                }
+            }
+        }
+    }
+
+    /// A program's underline under a cell, in its style, and a line
+    /// through it for strikethrough.
+    fn decorations(&mut self, col: usize, row: usize, cell: &vt::Cell, fg: u32) {
+        if col >= self.cols || row >= self.rows {
+            return;
+        }
+        let (x, y) = self.cell_px(col, row);
+        let (w, h) = self.cell;
+        let t = (h / 16).max(1);
+        if cell.strikethrough {
+            self.push_glyph(Quad::solid(x, y + h / 2, w, t, fg));
+        }
+        let c = cell.underline_color.map_or(fg, color);
+        let base = y + h - 2 * t;
+        match cell.underline {
+            vt::Underline::None => {}
+            vt::Underline::Single => self.push_glyph(Quad::solid(x, base, w, t, c)),
+            vt::Underline::Double => {
+                self.push_glyph(Quad::solid(x, base, w, t, c));
+                self.push_glyph(Quad::solid(x, base - 2 * t, w, t, c));
+            }
+            vt::Underline::Dotted => {
+                for dx in (0..w).step_by(2 * t as usize) {
+                    self.push_glyph(Quad::solid(x + dx, base, t.min(w - dx), t, c));
+                }
+            }
+            vt::Underline::Dashed => {
+                let dash = (w / 2).saturating_sub(t).max(1);
+                self.push_glyph(Quad::solid(x, base, dash, t, c));
+                self.push_glyph(Quad::solid(x + w / 2, base, dash.min(w - w / 2), t, c));
+            }
+            vt::Underline::Curly => {
+                // A wave a cell long, its crests 2t above the base: a
+                // column of t at each pixel.
+                let amp = (2 * t) as f32;
+                for dx in 0..w {
+                    let phase = dx as f32 / w as f32 * std::f32::consts::TAU;
+                    let dy = (amp * (1.0 - phase.cos()) / 2.0).round() as u32;
+                    self.push_glyph(Quad::solid(x + dx, base + t - dy, 1, t, c));
+                }
+            }
         }
     }
 
@@ -1208,5 +1272,8 @@ impl Canvas<'_> {
             self.fill(col, row, 1, b);
         }
         self.put(glyphs, col, row, cell.ch, fg);
+        if cell.underline != vt::Underline::None || cell.strikethrough {
+            self.decorations(col, row, cell, fg);
+        }
     }
 }

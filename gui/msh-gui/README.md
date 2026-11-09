@@ -31,6 +31,8 @@ for program output, the prompt and file previews;
   bindings, chords with their timings, abbreviations, `bindingFunc`s and `abbrFunc`s run by the engine.
 - While a block runs, keys go to its program, encoded by libghostty from the terminal's modes.
   A program on the alternate screen (`less`, `vim`, `htop`) gets the whole pane.
+  The cursor takes the shape the program sets (block, bar, underline, hollow block: Neovim's modes),
+  and underlines show in their five styles and colours (Neovim's spelling), as does strikethrough.
 - Output is flow-controlled, as a terminal's is: a program writing without end (`cat /dev/random`) goes only as fast as
   the GUI draws it, memory stays bounded, frames keep coming, and Ctrl-C reaches it.
   A program that stops reading its input can't stall the engine or the GUI;
