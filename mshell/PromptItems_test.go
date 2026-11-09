@@ -52,14 +52,16 @@ func TestRenderPromptStyles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Each style's escape sequence, for a terminal, and its op, for the
+	// GUI.
 	want := []promptStyle{
-		{0, "\033[91m", bgKeep},
-		{1, "\033[48;2;1;2;3m", bgSet},
-		{1, "\033[38;5;200m", bgKeep},
-		{1, "\033[7m", bgKeep},
-		{1, "\033[22m", bgKeep},
-		{2, "\033[49m", bgClear},
-		{2, "\033[0m", bgClear},
+		{0, "\033[91m", bgKeep, promptOp{Kind: promptOpFgPalette, A: [3]uint8{9}}},
+		{1, "\033[48;2;1;2;3m", bgSet, promptOp{Kind: promptOpBgRgb, A: [3]uint8{1, 2, 3}}},
+		{1, "\033[38;5;200m", bgKeep, promptOp{Kind: promptOpFgPalette, A: [3]uint8{200}}},
+		{1, "\033[7m", bgKeep, promptOp{Kind: promptOpAttrOn, A: [3]uint8{5}}},
+		{1, "\033[22m", bgKeep, promptOp{Kind: promptOpAttrOff, A: [3]uint8{1}}},
+		{2, "\033[49m", bgClear, promptOp{Kind: promptOpBgDefault}},
+		{2, "\033[0m", bgClear, promptOp{Kind: promptOpReset}},
 	}
 	if len(r.Styles) != len(want) {
 		t.Fatalf("styles %q, want %q", r.Styles, want)
@@ -104,8 +106,8 @@ func TestRenderPromptTitleAndHyperlink(t *testing.T) {
 		t.Fatalf("title %q", r.Title)
 	}
 	if string(r.Text) != "link" || len(r.Styles) != 2 ||
-		r.Styles[0] != (promptStyle{0, "\033]8;;https://x.test/a%20b\033\\", bgKeep}) ||
-		r.Styles[1] != (promptStyle{4, "\033]8;;\033\\", bgKeep}) {
+		r.Styles[0] != (promptStyle{0, "\033]8;;https://x.test/a%20b\033\\", bgKeep, promptOp{Kind: promptOpLinkStart, URL: "https://x.test/a%20b"}}) ||
+		r.Styles[1] != (promptStyle{4, "\033]8;;\033\\", bgKeep, promptOp{Kind: promptOpLinkEnd}}) {
 		t.Fatalf("hyperlink %q %q", r.Text, r.Styles)
 	}
 }
@@ -143,7 +145,7 @@ func TestPaintPromptWritesStylesInPlace(t *testing.T) {
 
 func TestDefaultPromptIsMagenta(t *testing.T) {
 	r := defaultPrompt("~/a\nb", true, 2)
-	if string(r.Text) != "~/a^Jb (2)> \n:: " || len(r.Styles) != 1 || r.Styles[0].Seq != "\033[35m" {
+	if string(r.Text) != "~/a^Jb (2)> \n:: " || len(r.Styles) != 1 || r.Styles[0].Seq != "\033[35m" || r.Styles[0].Op != (promptOp{Kind: promptOpFgPalette, A: [3]uint8{5}}) {
 		t.Fatalf("default prompt %q %q", r.Text, r.Styles)
 	}
 }

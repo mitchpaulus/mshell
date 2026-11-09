@@ -24,9 +24,12 @@
 //!
 //! Usage: msh-gui [MSH]   (MSH: the msh binary; default $MSH_BIN, then the
 //!                         repository's mshell/mshell, then msh on PATH)
-//! MSH_GUI_FONT and MSH_GUI_FONT_SIZE choose the font; MSH_GUI_FONT_BOLD,
-//! _ITALIC and _BOLD_ITALIC its styles (else the files beside it).
+//! MSH_GUI_FONT and MSH_GUI_FONT_SIZE choose the monospace font (program
+//! output), MSH_GUI_UI_FONT the app's own, and MSH_GUI_PROMPT_FONT the
+//! prompt box's (else the UI font); {VAR}_BOLD, _ITALIC and _BOLD_ITALIC
+//! their styles (else the files beside them).
 
+mod flow;
 mod keys;
 mod layout;
 mod pane;
@@ -38,7 +41,7 @@ use layout::{Direction, Layout, Rect};
 use msh_client::{Engine, Event};
 use msh_editor::keys::{KeyCode, MOD_ALT};
 use pane::{color, Canvas, Pane, ACCENT, DIM};
-use render::{Glyphs, MonoFaces, Quad, Renderer};
+use render::{Family, Glyphs, Quad, Renderer};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -103,11 +106,9 @@ struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     glyphs: Option<Glyphs>,
-    font: Vec<u8>,
-    /// Where the monospace font is: its bold and italic are beside it.
-    font_path: String,
-    /// The font of the app's own text: proportional.
-    ui_font: Vec<u8>,
+    /// The font families (UI, monospace, the prompt's), until the window
+    /// (or the script) takes them.
+    fonts: Option<(Family, Family, Option<Family>)>,
     font_size: f32,
     /// The window's size in pixels.
     width: usize,
@@ -238,7 +239,7 @@ impl App {
         let rects = self.rects();
         for (p, r) in self.tabs[self.tab].panes.iter_mut().zip(rects) {
             if let Some(r) = r {
-                p.resize((r.w / cell.0 as usize).max(1), (r.h / cell.1 as usize).max(1), cell);
+                p.resize((r.w / cell.0 as usize).max(1), (r.h / cell.1 as usize).max(1), cell, (r.w as u32, r.h as u32));
             }
         }
     }
@@ -646,7 +647,8 @@ impl ApplicationHandler<UserEvent> for App {
         }
         let attrs = Window::default_attributes().with_title("msh").with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
         let window = Arc::new(el.create_window(attrs).expect("create_window"));
-        let glyphs = Glyphs::new(std::mem::take(&mut self.font), MonoFaces::beside(&self.font_path), std::mem::take(&mut self.ui_font), self.font_size * window.scale_factor() as f32);
+        let (ui, mono, prompt) = self.fonts.take().expect("fonts");
+        let glyphs = Glyphs::new(ui, mono, prompt, self.font_size * window.scale_factor() as f32);
         let renderer = Renderer::new(window.clone(), &glyphs);
         self.glyphs = Some(glyphs);
         self.renderer = Some(renderer);
@@ -762,10 +764,17 @@ fn main() {
         Some(el) => Sink::Window(el.create_proxy()),
         None => Sink::Script(tx),
     };
-    let font_path = std::env::var("MSH_GUI_FONT").unwrap_or_else(|_| "/usr/share/fonts/noto/NotoSansMono-Regular.ttf".into());
-    let font = std::fs::read(&font_path).unwrap_or_else(|e| panic!("reading font {font_path}: {e}"));
-    let ui_font_path = std::env::var("MSH_GUI_UI_FONT").unwrap_or_else(|_| "/usr/share/fonts/noto/NotoSans-Regular.ttf".into());
-    let ui_font = std::fs::read(&ui_font_path).unwrap_or_else(|e| panic!("reading font {ui_font_path}: {e}"));
+    // The fonts: each a family, its bold and italic beside it or named by
+    // {VAR}_BOLD, _ITALIC, _BOLD_ITALIC. The prompt box's is the UI font
+    // unless MSH_GUI_PROMPT_FONT names one (a monospace one lays it out
+    // as cells would).
+    let family = |var: &str, default: &str| {
+        let path = std::env::var(var).unwrap_or_else(|_| default.into());
+        Family::load(&path, var).unwrap_or_else(|e| panic!("{e}"))
+    };
+    let mono = family("MSH_GUI_FONT", "/usr/share/fonts/noto/NotoSansMono-Regular.ttf");
+    let ui = family("MSH_GUI_UI_FONT", "/usr/share/fonts/noto/NotoSans-Regular.ttf");
+    let prompt = std::env::var("MSH_GUI_PROMPT_FONT").ok().map(|_| family("MSH_GUI_PROMPT_FONT", ""));
     let font_size = std::env::var("MSH_GUI_FONT_SIZE").ok().and_then(|s| s.parse().ok()).unwrap_or(15.0);
     let mut app = App {
         msh,
@@ -776,9 +785,7 @@ fn main() {
         window: None,
         renderer: None,
         glyphs: None,
-        font,
-        font_path: font_path.clone(),
-        ui_font,
+        fonts: Some((ui, mono, prompt)),
         font_size,
         width: 800,
         height: 600,

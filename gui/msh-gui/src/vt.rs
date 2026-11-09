@@ -243,11 +243,6 @@ impl Term {
         self.get(g::GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS)
     }
 
-    /// The cursor: column and row of the active area.
-    pub fn cursor(&self) -> (u16, u16) {
-        (self.get(g::GHOSTTY_TERMINAL_DATA_CURSOR_X), self.get(g::GHOSTTY_TERMINAL_DATA_CURSOR_Y))
-    }
-
     /// The rows of output so far: the history, and the active area down to
     /// the cursor's row (counted only once something is on it).
     pub fn content_rows(&self) -> usize {

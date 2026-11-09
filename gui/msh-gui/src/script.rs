@@ -21,7 +21,7 @@
 //!   <focus off>     the window without the keyboard (<focus on>)
 //!   <sleep N>       N ms of real time, for the program to react
 
-use crate::render::{draw_cpu, Glyphs, MonoFaces};
+use crate::render::{draw_cpu, Glyphs};
 use crate::{App, UserEvent, BG, DRAIN_BUDGET};
 use msh_editor::keys::{KeyCode, MOD_ALT, MOD_CTRL};
 use std::sync::mpsc::Receiver;
@@ -162,7 +162,8 @@ fn ready(app: &App) -> bool {
 
 pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols: u16, rows: u16) -> Result<(), String> {
     let steps = parse(script)?;
-    let glyphs = Glyphs::new(std::mem::take(&mut app.font), MonoFaces::beside(&app.font_path), std::mem::take(&mut app.ui_font), app.font_size);
+    let (ui, mono, prompt) = app.fonts.take().expect("fonts");
+    let glyphs = Glyphs::new(ui, mono, prompt, app.font_size);
     let (cw, ch) = (glyphs.cell.w, glyphs.cell.h);
     app.glyphs = Some(glyphs);
     // Frames are the same each run: blinking things in their shown phase.

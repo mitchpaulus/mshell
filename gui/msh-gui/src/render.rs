@@ -5,6 +5,7 @@
 //! (gui/startup-spike).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use swash::scale::{Render, ScaleContext, Source};
 use swash::shape::ShapeContext;
@@ -62,13 +63,6 @@ pub struct CellMetrics {
     pub baseline: i32,
 }
 
-/// The UI font's vertical metrics, in pixels.
-#[derive(Clone, Copy, Debug)]
-pub struct UiMetrics {
-    pub ascent: f32,
-    pub descent: f32,
-}
-
 /// A region of the atlas.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Region {
@@ -116,52 +110,115 @@ struct Packer {
 
 const ATLAS: u32 = 2048;
 
-/// A monospace face's style: bold, italic, or both.
+/// A face's style: bold, italic, or both.
 pub const BOLD: u8 = 1;
 pub const ITALIC: u8 = 2;
 
-/// The faces of the monospace font beside the regular: files for bold,
-/// italic and bold italic, read on first use. A face without one is made
-/// from another, emboldened or slanted.
-pub struct MonoFaces {
-    paths: [Option<std::path::PathBuf>; 4],
-    data: [Option<Option<Vec<u8>>>; 4],
+/// Font families, by slot: the UI font (the app's own text), the monospace
+/// font (program output, and the fallback for a character another family
+/// lacks), and the prompt box's (the UI font, unless one is chosen).
+pub const UI: u8 = 0;
+pub const MONO: u8 = 1;
+pub const PROMPT: u8 = 2;
+
+/// A font family: its regular face, and its bold, italic and bold italic,
+/// read on first use from files beside the regular (NotoSans-Bold.ttf
+/// beside NotoSans-Regular.ttf) or named by variables. A style without a
+/// file is made from the nearest one that has, emboldened or slanted.
+pub struct Family {
+    regular: Vec<u8>,
+    paths: [Option<PathBuf>; 4],
+    faces: [Option<Option<Vec<u8>>>; 4],
 }
 
-impl MonoFaces {
-    /// The faces beside a regular font file: each from its variable
-    /// (MSH_GUI_FONT_BOLD, _ITALIC, _BOLD_ITALIC), else the regular's name
-    /// with "-Regular" changed (NotoSansMono-Bold.ttf), when there is
-    /// such a file.
-    pub fn beside(regular: &str) -> MonoFaces {
-        let mut paths: [Option<std::path::PathBuf>; 4] = Default::default();
-        for (style, var, name) in [(BOLD, "MSH_GUI_FONT_BOLD", "-Bold"), (ITALIC, "MSH_GUI_FONT_ITALIC", "-Italic"), (BOLD | ITALIC, "MSH_GUI_FONT_BOLD_ITALIC", "-BoldItalic")] {
-            paths[style as usize] = match std::env::var(var) {
+impl Family {
+    /// The family of a regular font file. `var` names the variables that
+    /// choose its styles' files: `{var}_BOLD`, `_ITALIC`, `_BOLD_ITALIC`.
+    pub fn load(path: &str, var: &str) -> Result<Family, String> {
+        let regular = std::fs::read(path).map_err(|e| format!("reading font {path}: {e}"))?;
+        if FontRef::from_index(&regular, 0).is_none() {
+            return Err(format!("{path}: not a font file"));
+        }
+        let mut paths: [Option<PathBuf>; 4] = Default::default();
+        for (style, suffix, name) in [(BOLD, "_BOLD", "-Bold"), (ITALIC, "_ITALIC", "-Italic"), (BOLD | ITALIC, "_BOLD_ITALIC", "-BoldItalic")] {
+            paths[style as usize] = match std::env::var(format!("{var}{suffix}")) {
                 Ok(p) => Some(p.into()),
-                Err(_) => regular.contains("-Regular").then(|| regular.replacen("-Regular", name, 1).into()),
+                Err(_) => path.contains("-Regular").then(|| path.replacen("-Regular", name, 1).into()),
             };
         }
-        MonoFaces { paths, data: Default::default() }
+        Ok(Family { regular, paths, faces: Default::default() })
     }
 
-    /// Whether the face has a file of its own, read now if it wasn't.
+    /// Whether a style has a file of its own, read now if it wasn't.
     fn has(&mut self, style: u8) -> bool {
         let i = style as usize;
-        if self.data[i].is_none() {
-            self.data[i] = Some(self.paths[i].as_ref().and_then(|p| std::fs::read(p).ok()).filter(|d| FontRef::from_index(d, 0).is_some()));
+        if self.faces[i].is_none() {
+            self.faces[i] = Some(self.paths[i].as_ref().and_then(|p| std::fs::read(p).ok()).filter(|d| FontRef::from_index(d, 0).is_some()));
         }
-        self.data[i].as_ref().is_some_and(|d| d.is_some())
+        self.faces[i].as_ref().is_some_and(|d| d.is_some())
     }
+
+    /// The face a style is drawn from (its own, or the nearest), and what
+    /// of the style that face lacks.
+    fn pick(&mut self, style: u8) -> (u8, u8) {
+        let base = [style, style & ITALIC, style & BOLD, 0].into_iter().find(|&s| s == 0 || self.has(s)).unwrap_or(0);
+        (base, style & !base)
+    }
+
+    fn face(&self, base: u8) -> FontRef<'_> {
+        self.faces[base as usize]
+            .as_ref()
+            .and_then(|d| d.as_deref())
+            .and_then(|d| FontRef::from_index(d, 0))
+            .unwrap_or_else(|| FontRef::from_index(&self.regular, 0).unwrap())
+    }
+}
+
+/// A family's vertical metrics, in pixels: its ascent and descent, and the
+/// height of a line of it.
+#[derive(Clone, Copy, Debug)]
+pub struct Metrics {
+    pub ascent: f32,
+    pub descent: f32,
+    pub line: f32,
+}
+
+/// Text shaped in a family: its clusters in order, and their glyphs.
+#[derive(Default)]
+pub struct Shaped {
+    pub clusters: Vec<Cluster>,
+    pub glyphs: Vec<ShapedGlyph>,
+}
+
+/// A cluster of shaped text: its bytes of the text, its advance, and its
+/// glyphs, `glyphs[first..last]`.
+#[derive(Clone, Copy, Debug)]
+pub struct Cluster {
+    pub start: usize,
+    pub end: usize,
+    pub advance: f32,
+    pub first: usize,
+    pub last: usize,
+}
+
+/// A glyph of shaped text: its family (the text's, or the monospace one's
+/// for a character the text's lacks), style and id, and how far it is from
+/// its cluster's start.
+#[derive(Clone, Copy, Debug)]
+pub struct ShapedGlyph {
+    pub slot: u8,
+    pub style: u8,
+    pub id: u16,
+    pub dx: f32,
 }
 
 /// The atlas and what has been rasterised into it.
 pub struct Glyphs {
-    mono_font: Vec<u8>,
-    faces: MonoFaces,
-    ui_font: Vec<u8>,
+    /// UI, MONO, and PROMPT when the prompt has a font of its own.
+    families: Vec<Family>,
     px: f32,
     pub cell: CellMetrics,
-    pub ui: UiMetrics,
+    metrics: [Metrics; 3],
     pixels: Vec<u8>,
     width: u32,
     height: u32,
@@ -170,21 +227,21 @@ pub struct Glyphs {
     packer: Packer,
     /// By character and style (BOLD, ITALIC).
     mono: HashMap<(char, u8), Region>,
-    /// By font (0 the UI font, 1 the monospace font, its fallback) and
-    /// glyph id.
-    ui_glyphs: HashMap<(u8, u16), GlyphImage>,
+    /// By family, style and glyph id.
+    glyphs: HashMap<(u8, u8, u16), GlyphImage>,
     icons: HashMap<(Icon, u32), Region>,
     /// Set when the atlas filled and was cleared: regions handed out before
     /// are stale, so the frame is laid out again.
     pub reset: bool,
     scale: ScaleContext,
     shape: ShapeContext,
+    scratch: Shaped,
 }
 
 impl Glyphs {
-    pub fn new(mono_font: Vec<u8>, faces: MonoFaces, ui_font: Vec<u8>, px: f32) -> Glyphs {
+    pub fn new(ui: Family, mono: Family, prompt: Option<Family>, px: f32) -> Glyphs {
         let cell = {
-            let f = FontRef::from_index(&mono_font, 0).expect("not a font file");
+            let f = FontRef::from_index(&mono.regular, 0).unwrap();
             let m = f.metrics(&[]).scale(px);
             let gm = f.glyph_metrics(&[]).scale(px);
             CellMetrics {
@@ -193,30 +250,42 @@ impl Glyphs {
                 baseline: m.ascent.round() as i32,
             }
         };
-        let ui = {
-            let f = FontRef::from_index(&ui_font, 0).expect("not a font file");
-            let m = f.metrics(&[]).scale(px);
-            UiMetrics { ascent: m.ascent, descent: m.descent }
+        let mut families = vec![ui, mono];
+        families.extend(prompt);
+        let metrics_of = |f: &Family| {
+            let m = FontRef::from_index(&f.regular, 0).unwrap().metrics(&[]).scale(px);
+            Metrics { ascent: m.ascent, descent: m.descent, line: (m.ascent + m.descent + m.leading).ceil() }
         };
+        let metrics = [metrics_of(&families[0]), metrics_of(&families[1]), metrics_of(families.get(2).unwrap_or(&families[0]))];
         Glyphs {
-            mono_font,
-            faces,
-            ui_font,
+            families,
             px,
             cell,
-            ui,
+            metrics,
             pixels: vec![0; (ATLAS * ATLAS) as usize],
             width: ATLAS,
             height: ATLAS,
             dirty: None,
             packer: Packer { x: 0, y: 0, row: 0 },
             mono: HashMap::new(),
-            ui_glyphs: HashMap::new(),
+            glyphs: HashMap::new(),
             icons: HashMap::new(),
             reset: false,
             scale: ScaleContext::new(),
             shape: ShapeContext::new(),
+            scratch: Shaped::default(),
         }
+    }
+
+    /// The family a slot draws with: the prompt's is the UI font's unless
+    /// it has one of its own.
+    fn slot(&self, slot: u8) -> usize {
+        if (slot as usize) < self.families.len() { slot as usize } else { UI as usize }
+    }
+
+    /// A family's vertical metrics.
+    pub fn metrics(&self, slot: u8) -> Metrics {
+        self.metrics[slot as usize]
     }
 
     /// A free region of the atlas; when it is full, it is cleared first.
@@ -227,7 +296,7 @@ impl Glyphs {
         }
         if p.y + h > self.height {
             self.mono.clear();
-            self.ui_glyphs.clear();
+            self.glyphs.clear();
             self.icons.clear();
             self.pixels.fill(0);
             self.packer = Packer { x: 0, y: 0, row: 0 };
@@ -253,6 +322,23 @@ impl Glyphs {
         self.dirty = Some((lo.min(r.v), hi.max(r.v + r.h)));
     }
 
+    /// A renderer of outlines, made up to what of a style the face lacks:
+    /// emboldened, and slanted right (outlines are y-up) about `pivot`
+    /// pixels above the baseline, so the glyph stays over its place.
+    fn render(&self, lacks: u8, pivot: f32) -> Render<'static> {
+        let mut render = Render::new(&[Source::Outline]);
+        render.format(Format::Alpha);
+        if lacks & BOLD != 0 {
+            render.embolden((self.px / 24.0).max(0.5));
+        }
+        if lacks & ITALIC != 0 {
+            let slant = Angle::from_degrees(12.0);
+            let shift = -slant.to_radians().tan() * pivot;
+            render.transform(Some(Transform::skew(slant, Angle::ZERO).then_translate(shift, 0.0)));
+        }
+        render
+    }
+
     /// A character of the monospace font, in a cell-sized region.
     pub fn mono(&mut self, c: char) -> Region {
         self.mono_styled(c, 0)
@@ -267,32 +353,18 @@ impl Glyphs {
         }
         let (cw, ch) = (self.cell.w, self.cell.h);
         let mut cellbuf = vec![0u8; (cw * ch) as usize];
-        // The face to draw from, and what it lacks of the style.
-        let base = [style, style & ITALIC, style & BOLD, 0].into_iter().find(|&s| s == 0 || self.faces.has(s)).unwrap_or(0);
-        let regular = FontRef::from_index(&self.mono_font, 0).unwrap();
-        let face = match base {
-            0 => regular,
-            s => self.faces.data[s as usize].as_ref().and_then(|d| d.as_deref()).and_then(|d| FontRef::from_index(d, 0)).unwrap_or(regular),
-        };
+        let (base, lacks) = self.families[MONO as usize].pick(style);
+        let render = self.render(lacks, self.cell.baseline as f32 * 0.3);
+        let family = &self.families[MONO as usize];
+        let regular = FontRef::from_index(&family.regular, 0).unwrap();
+        let face = family.face(base);
         // A character the face lacks comes from the regular, made up to
         // the style.
-        let (font, id, lacks) = match face.charmap().map(c) {
-            0 => (regular, regular.charmap().map(c), style),
-            id => (face, id, style & !base),
+        let (font, id, render) = match face.charmap().map(c) {
+            0 => (regular, regular.charmap().map(c), if lacks == style { render } else { self.render(style, self.cell.baseline as f32 * 0.3) }),
+            id => (face, id, render),
         };
         let mut scaler = self.scale.builder(font).size(self.px).hint(lacks & ITALIC == 0).build();
-        let mut render = Render::new(&[Source::Outline]);
-        render.format(Format::Alpha);
-        if lacks & BOLD != 0 {
-            render.embolden((self.px / 24.0).max(0.5));
-        }
-        if lacks & ITALIC != 0 {
-            // Slanted right (outlines are y-up), about the middle of the
-            // x-height, so the glyph stays in its cell.
-            let slant = Angle::from_degrees(12.0);
-            let shift = -slant.to_radians().tan() * self.cell.baseline as f32 * 0.3;
-            render.transform(Some(Transform::skew(slant, Angle::ZERO).then_translate(shift, 0.0)));
-        }
         if let Some(img) = render.render(&mut scaler, id) {
             let p = img.placement;
             for y in 0..p.height as i32 {
@@ -314,14 +386,17 @@ impl Glyphs {
         r
     }
 
-    fn ui_glyph(&mut self, font_index: u8, id: u16) -> GlyphImage {
-        if let Some(&g) = self.ui_glyphs.get(&(font_index, id)) {
+    /// A glyph of a family in a style, rasterised on first use.
+    fn glyph(&mut self, slot: u8, style: u8, id: u16) -> GlyphImage {
+        let si = self.slot(slot);
+        if let Some(&g) = self.glyphs.get(&(si as u8, style, id)) {
             return g;
         }
-        let data = if font_index == 0 { &self.ui_font } else { &self.mono_font };
-        let font = FontRef::from_index(data, 0).unwrap();
-        let mut scaler = self.scale.builder(font).size(self.px).hint(true).build();
-        let g = match Render::new(&[Source::Outline]).format(Format::Alpha).render(&mut scaler, id) {
+        let (base, lacks) = self.families[si].pick(style);
+        let render = self.render(lacks, self.metrics[si].ascent * 0.3);
+        let font = self.families[si].face(base);
+        let mut scaler = self.scale.builder(font).size(self.px).hint(lacks & ITALIC == 0).build();
+        let g = match render.render(&mut scaler, id) {
             Some(img) if img.placement.width > 0 => {
                 let p = img.placement;
                 let r = self.alloc(p.width, p.height);
@@ -330,70 +405,106 @@ impl Glyphs {
             }
             _ => GlyphImage::default(),
         };
-        self.ui_glyphs.insert((font_index, id), g);
+        self.glyphs.insert((si as u8, style, id), g);
         g
     }
 
-    /// Shapes text in the UI font: each glyph's font, id, pen position and
-    /// advance. A character the UI font lacks comes from the monospace
-    /// font.
-    fn shape(&mut self, text: &str, out: &mut Vec<(u8, u16, f32, f32)>) -> f32 {
-        out.clear();
-        let font = FontRef::from_index(&self.ui_font, 0).unwrap();
-        let mono = FontRef::from_index(&self.mono_font, 0).unwrap();
+    /// The quad of a shaped glyph, its cluster starting at `x`, on a
+    /// baseline at `baseline`.
+    pub fn glyph_quad(&mut self, g: ShapedGlyph, x: f32, baseline: f32, color: u32) -> Option<Quad> {
+        let img = self.glyph(g.slot, g.style, g.id);
+        Quad::image((x + g.dx).round() as i32 + img.left, baseline.round() as i32 - img.top, img.region, color)
+    }
+
+    /// Shapes text in a family and style, into `out`: its clusters in
+    /// order, each with its advance and glyphs. A character the family
+    /// lacks comes from the monospace font. Returns the text's width.
+    pub fn shape(&mut self, slot: u8, style: u8, text: &str, out: &mut Shaped) -> f32 {
+        out.clusters.clear();
+        out.glyphs.clear();
+        let si = self.slot(slot);
+        let (base, _) = self.families[si].pick(style);
+        let (mono_base, _) = self.families[MONO as usize].pick(style);
+        let font = self.families[si].face(base);
+        let mono = self.families[MONO as usize].face(mono_base);
         let mono_metrics = mono.glyph_metrics(&[]).scale(self.px);
         let mut shaper = self.shape.builder(font).size(self.px).build();
         shaper.add_str(text);
         let mut pen = 0.0;
         shaper.shape_with(|cluster| {
-            let missing = cluster.glyphs.iter().all(|g| g.id == 0);
-            let source = &text[cluster.source.start as usize..cluster.source.end as usize];
-            if missing && !cluster.glyphs.is_empty() {
-                for c in source.chars() {
+            let (start, end) = (cluster.source.start as usize, cluster.source.end as usize);
+            let first = out.glyphs.len();
+            let missing = !cluster.glyphs.is_empty() && cluster.glyphs.iter().all(|g| g.id == 0);
+            let mut advance = 0.0;
+            if missing && si != MONO as usize {
+                for c in text[start..end].chars() {
                     let id = mono.charmap().map(c);
-                    let advance = mono_metrics.advance_width(id);
-                    out.push((1, id, pen, advance));
-                    pen += advance;
+                    out.glyphs.push(ShapedGlyph { slot: MONO, style, id, dx: advance });
+                    advance += mono_metrics.advance_width(id);
                 }
-                return;
+            } else {
+                for g in cluster.glyphs {
+                    out.glyphs.push(ShapedGlyph { slot: si as u8, style, id: g.id, dx: advance + g.x });
+                    advance += g.advance;
+                }
             }
-            for g in cluster.glyphs {
-                out.push((0, g.id, pen + g.x, g.advance));
-                pen += g.advance;
-            }
+            out.clusters.push(Cluster { start, end, advance, first, last: out.glyphs.len() });
+            pen += advance;
         });
         pen
     }
 
-    /// The width of text in the UI font, in pixels.
-    pub fn ui_width(&mut self, text: &str) -> f32 {
-        let mut run = Vec::new();
-        self.shape(text, &mut run)
+    /// The width of text in a family, in pixels.
+    pub fn width(&mut self, slot: u8, text: &str) -> f32 {
+        let mut sh = std::mem::take(&mut self.scratch);
+        let w = self.shape(slot, 0, text, &mut sh);
+        self.scratch = sh;
+        w
     }
 
-    /// Quads for text in the UI font, its baseline at (x, y), cut to fit
-    /// `max` pixels with an ellipsis; returns its width.
-    pub fn ui_text(&mut self, out: &mut Vec<Quad>, x: f32, y: f32, text: &str, color: u32, max: f32) -> f32 {
-        let mut run = Vec::new();
-        let width = self.shape(text, &mut run);
-        let mut end = run.len();
+    /// The width of text in the UI font, in pixels.
+    pub fn ui_width(&mut self, text: &str) -> f32 {
+        self.width(UI, text)
+    }
+
+    /// Quads for text in a family, its baseline at (x, y), cut to fit `max`
+    /// pixels with an ellipsis; returns its width.
+    pub fn text(&mut self, slot: u8, out: &mut Vec<Quad>, x: f32, y: f32, text: &str, color: u32, max: f32) -> f32 {
+        let mut run = std::mem::take(&mut self.scratch);
+        let width = self.shape(slot, 0, text, &mut run);
         let mut shown = width;
-        let mut ellipsis = Vec::new();
+        let mut pen = 0.0;
+        let mut ellipsis = Shaped::default();
+        let mut ellipsis_at = None;
         if width > max {
-            let ew = self.shape("…", &mut ellipsis);
-            end = run.iter().position(|&(_, _, px, adv)| px + adv > max - ew).unwrap_or(run.len());
-            let at = run.get(end).map_or(width, |&(_, _, px, _)| px);
+            let ew = self.shape(slot, 0, "…", &mut ellipsis);
+            let mut at = 0.0;
+            for (i, c) in run.clusters.iter().enumerate() {
+                if at + c.advance > max - ew {
+                    run.clusters.truncate(i);
+                    break;
+                }
+                at += c.advance;
+            }
             shown = at + ew;
-            for e in ellipsis.iter_mut() {
-                e.2 += at;
+            ellipsis_at = Some(at);
+        }
+        for c in &run.clusters {
+            for &g in &run.glyphs[c.first..c.last] {
+                if let Some(q) = self.glyph_quad(g, x + pen, y, color) {
+                    out.push(q);
+                }
+            }
+            pen += c.advance;
+        }
+        if let Some(at) = ellipsis_at {
+            for &g in &ellipsis.glyphs {
+                if let Some(q) = self.glyph_quad(g, x + at, y, color) {
+                    out.push(q);
+                }
             }
         }
-        for &(font, id, px, _) in run[..end].iter().chain(ellipsis.iter()) {
-            let g = self.ui_glyph(font, id);
-            if let Some(q) = Quad::image((x + px).round() as i32 + g.left, y.round() as i32 - g.top, g.region, color) {
-                out.push(q);
-            }
-        }
+        self.scratch = run;
         shown
     }
 

@@ -65,9 +65,8 @@ pub enum Event {
     BlockFinished { id: u64, exit_code: i32, duration_ns: u64 },
     /// A new editor config arrived; `Engine::take_config` has it.
     EditorConfig { version: u32 },
-    /// The prompt for the next line: text with SGR and OSC 8 escapes and
-    /// \r\n line breaks, and the window title it sets, if any.
-    Prompt { title: Option<String>, text: Vec<u8> },
+    /// The prompt for the next line, and the window title it sets, if any.
+    Prompt { title: Option<String>, prompt: Prompt },
     /// The file manager's view (mshFileManager under msh server): the GUI
     /// shows it as a dialog while `shown`.
     FileManager(FmView),
@@ -653,7 +652,7 @@ fn decode_event(kind: u8, r: &mut Reader) -> Result<Frame, String> {
         MSG_PROMPT => {
             let has_title = r.u8()? == 1;
             let title = r.str()?;
-            Event::Prompt { title: has_title.then_some(title), text: r.rest().to_vec() }
+            Event::Prompt { title: has_title.then_some(title), prompt: decode_prompt(r)? }
         }
         MSG_EDITOR_CONFIG => {
             let version = r.u32()?;
@@ -744,6 +743,81 @@ fn op_member(op: &EditOp) -> Option<&'static str> {
         EditOp::LastArg => "editLastArg",
         _ => return None,
     })
+}
+
+/// The prompt as setPrompt's quotation gave it (or the built-in one): its
+/// text, with \n line breaks, and the styles it sets within it, for the
+/// frontend to draw as it likes. No escape sequences.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Prompt {
+    pub text: String,
+    /// Each style and the byte of the text it starts at, in order.
+    pub styles: Vec<(u32, PromptStyle)>,
+}
+
+/// A colour a prompt sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptColor {
+    Rgb([u8; 3]),
+    /// An index of the 256-colour palette: 0 to 15 are the base colours.
+    Palette(u8),
+    Default,
+}
+
+/// A text attribute a prompt sets or clears.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptAttr {
+    Bold,
+    Faint,
+    Italic,
+    Underline,
+    Blinking,
+    Reverse,
+    Hidden,
+    Strikethrough,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptStyle {
+    Reset,
+    Fg(PromptColor),
+    Bg(PromptColor),
+    On(PromptAttr),
+    Off(PromptAttr),
+    LinkStart(String),
+    LinkEnd,
+}
+
+fn decode_prompt(r: &mut Reader) -> Result<Prompt, String> {
+    let text = r.str()?;
+    let mut styles = Vec::new();
+    for _ in 0..r.u16()? {
+        let offset = r.u32()?;
+        let attr = |r: &mut Reader| -> Result<PromptAttr, String> {
+            use PromptAttr::*;
+            [Bold, Faint, Italic, Underline, Blinking, Reverse, Hidden, Strikethrough]
+                .get(r.u8()? as usize)
+                .copied()
+                .ok_or_else(|| "unknown prompt attribute".to_string())
+        };
+        let rgb = |r: &mut Reader| -> Result<PromptColor, String> { Ok(PromptColor::Rgb([r.u8()?, r.u8()?, r.u8()?])) };
+        let style = match r.u8()? {
+            0 => PromptStyle::Reset,
+            1 => PromptStyle::Fg(rgb(r)?),
+            2 => PromptStyle::Fg(PromptColor::Palette(r.u8()?)),
+            3 => PromptStyle::Fg(PromptColor::Default),
+            4 => PromptStyle::Bg(rgb(r)?),
+            5 => PromptStyle::Bg(PromptColor::Palette(r.u8()?)),
+            6 => PromptStyle::Bg(PromptColor::Default),
+            7 => PromptStyle::On(attr(r)?),
+            8 => PromptStyle::Off(attr(r)?),
+            9 => PromptStyle::LinkStart(r.str()?),
+            10 => PromptStyle::LinkEnd,
+            k => return Err(format!("unknown prompt style {k}")),
+        };
+        styles.push((offset, style));
+    }
+    Ok(Prompt { text, styles })
 }
 
 /// What a press or the wheel does in the file manager.

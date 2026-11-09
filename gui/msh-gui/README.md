@@ -11,18 +11,24 @@ cargo run --release -p msh-gui
 It starts `msh server` (from `$MSH_BIN`, else the repository's `mshell/mshell`, else `msh` on `PATH`),
 with your `init.msh`, so your bindings and abbreviations work at the prompt.
 `MSH_GUI_FONT` and `MSH_GUI_FONT_SIZE` pick the monospace font (default Noto Sans Mono, 15 px),
-for program output, the prompt and file previews;
-`MSH_GUI_UI_FONT` the proportional font of the app's own text (default Noto Sans), whose missing characters come from the monospace font.
-Bold and italic come from the files beside the monospace font (`NotoSansMono-Bold.ttf` beside `NotoSansMono-Regular.ttf`),
-or `MSH_GUI_FONT_BOLD`, `MSH_GUI_FONT_ITALIC` and `MSH_GUI_FONT_BOLD_ITALIC`; a style without a file is made from the nearest one,
-emboldened or slanted (Noto Sans Mono has no italic).
+for program output and file previews;
+`MSH_GUI_UI_FONT` the proportional font of the app's own text (default Noto Sans);
+`MSH_GUI_PROMPT_FONT` the prompt box's: the prompt, the line you type, and the completion menu (default the UI font).
+A monospace prompt font lays the box out as cells would.
+A character a font lacks comes from the monospace font.
+Each font's bold and italic come from the files beside it (`NotoSans-Bold.ttf` beside `NotoSans-Regular.ttf`),
+or from `{VAR}_BOLD`, `{VAR}_ITALIC` and `{VAR}_BOLD_ITALIC` (`MSH_GUI_FONT_BOLD`);
+a style without a file is made from the nearest one, emboldened or slanted (Noto Sans Mono has no italic).
 
 - Not a terminal emulator: each command is a card (a header with the command, a status dot,
   its time and exit code, then its output, which alone runs in its own libghostty-vt terminal),
   and the prompt is a box of its own.
 - The prompt box sits where a terminal's prompt would: just after the last card, at the top of a clean screen.
   Once the cards fill the pane, or while scrolled back, it stays at the bottom, like frozen panes in a spreadsheet.
-- The prompt is yours: the engine runs `setPrompt`'s quotation (or the built-in prompt) and sends it with its colours.
+- The prompt is yours: the engine runs `setPrompt`'s quotation (or the built-in prompt) and sends its text and its typed styles
+  (colours, bold, italic, faint, underline, reverse and the rest), not escape sequences; the GUI draws them.
+- The prompt box is laid out as a GUI lays out text: in pixels, by each glyph's measured width, wrapping between words.
+  The cards above it are terminals, in cells.
 - The line is coloured as terminal msh colours it: strings, paths, variables, booleans, dates,
   and on a command line the program and the builtins and definitions underlined.
   The history suggestion shows after it, dimmed: Ctrl-F at the end of the line or Ctrl-Y takes it.

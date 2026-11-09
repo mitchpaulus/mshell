@@ -377,10 +377,16 @@ func (s *server) handleCall(state *TermState, call serverCall) {
 //	             candidate selected (-1: none), u8 bell, u16 candidate count,
 //	             strs, then the line (rest). The engine keeps the completion
 //	             cycle between requests, as terminal msh does.
-//	0x88 prompt  u8 has title, str title, then the prompt as text with SGR
-//	             and OSC 8 escapes and \r\n line breaks (rest): what setPrompt's
-//	             quotation gave, or the built-in prompt. Sent at startup and
-//	             before each block_finished.
+//	0x88 prompt  u8 has title, str title, str text (\n line breaks), u16
+//	             style count, each: u32 offset (bytes), u8 kind, then by
+//	             kind: 0 reset; 1 fg RGB: 3 u8; 2 fg palette: u8 index; 3 fg
+//	             default; 4 bg RGB: 3 u8; 5 bg palette: u8; 6 bg default; 7
+//	             attribute on, 8 off: u8 (0 bold, 1 faint, 2 italic, 3
+//	             underline, 4 blinking, 5 reverse, 6 hidden, 7
+//	             strikethrough); 9 link start: str URL; 10 link end. What
+//	             setPrompt's quotation gave, or the built-in prompt, as typed
+//	             styles for the frontend to draw, not escape sequences. Sent
+//	             at startup and before each block_finished.
 
 const (
 	serverMsgEdit   = 0x07 + 1
@@ -398,27 +404,27 @@ func (s *server) sendPrompt(state *TermState) {
 		}
 		render = defaultPrompt(cwd, err == nil, len(state.stack))
 	}
-	var text strings.Builder
-	next := 0
-	for i := 0; i <= len(render.Text); i++ {
-		for ; next < len(render.Styles) && int(render.Styles[next].Offset) <= i; next++ {
-			text.WriteString(render.Styles[next].Seq)
-		}
-		if i == len(render.Text) {
-			break
-		}
-		if render.Text[i] == '\n' {
-			text.WriteString("\r")
-		}
-		text.WriteByte(render.Text[i])
-	}
-	text.WriteString("\x1b[0m")
-	fixed := []byte{0}
+	le := binary.LittleEndian
+	b := []byte{0}
 	if render.HasTitle {
-		fixed[0] = 1
+		b[0] = 1
 	}
-	fixed = appendStr(fixed, render.Title)
-	s.out.send(serverMsgPrompt, fixed, []byte(text.String()))
+	b = appendStr(b, render.Title)
+	b = appendStr(b, string(render.Text))
+	b = le.AppendUint16(b, uint16(min(len(render.Styles), 0xffff)))
+	for _, st := range render.Styles[:min(len(render.Styles), 0xffff)] {
+		b = le.AppendUint32(b, uint32(st.Offset))
+		b = append(b, byte(st.Op.Kind))
+		switch st.Op.Kind {
+		case promptOpFgRgb, promptOpBgRgb:
+			b = append(b, st.Op.A[:]...)
+		case promptOpFgPalette, promptOpBgPalette, promptOpAttrOn, promptOpAttrOff:
+			b = append(b, st.Op.A[0])
+		case promptOpLinkStart:
+			b = appendStr(b, st.Op.URL)
+		}
+	}
+	s.out.send(serverMsgPrompt, b, nil)
 }
 
 // handleEdit runs a completion op on the frontend's line, in the session's

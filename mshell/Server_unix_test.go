@@ -55,6 +55,9 @@ type serverClient struct {
 	versions []uint32
 	prompt   string
 	title    string
+	// The last prompt's styles: each one's offset and kind, and the
+	// palette index or attribute it carries.
+	promptStyles [][3]int
 	// The directory blocks start in.
 	cwd string
 	// The last ops message's ops.
@@ -69,9 +72,32 @@ func (c *serverClient) note(e serverEvent) bool {
 		c.versions = append(c.versions, e.version)
 		return true
 	case serverMsgPrompt:
-		n := binary.LittleEndian.Uint32(e.data[1:])
-		c.title = string(e.data[5 : 5+n])
-		c.prompt = string(e.data[5+n:])
+		le := binary.LittleEndian
+		b := e.data[1:]
+		str := func() string {
+			n := le.Uint32(b)
+			v := string(b[4 : 4+n])
+			b = b[4+n:]
+			return v
+		}
+		c.title, c.prompt = str(), str()
+		c.promptStyles = nil
+		count := int(le.Uint16(b))
+		b = b[2:]
+		for range count {
+			st := [3]int{int(le.Uint32(b)), int(b[4]), -1}
+			b = b[5:]
+			switch promptOpKind(st[1]) {
+			case promptOpFgRgb, promptOpBgRgb:
+				b = b[3:]
+			case promptOpFgPalette, promptOpBgPalette, promptOpAttrOn, promptOpAttrOff:
+				st[2] = int(b[0])
+				b = b[1:]
+			case promptOpLinkStart:
+				str()
+			}
+			c.promptStyles = append(c.promptStyles, st)
+		}
 		return true
 	}
 	return false
@@ -602,8 +628,11 @@ func TestServerPromptAndCompletion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("setPrompt: %q, exit %d", out, code)
 	}
-	if !strings.Contains(c.prompt, "my prompt> ") || !strings.Contains(c.prompt, "\x1b[") || c.title != "title" {
-		t.Fatalf("prompt after setPrompt: %q, title %q", c.prompt, c.title)
+	// The prompt comes as text and typed styles, not escape sequences:
+	// red (palette 1) from its start, reset at its end.
+	want := [][3]int{{0, int(promptOpFgPalette), 1}, {len("my prompt> "), int(promptOpReset), -1}}
+	if c.prompt != "my prompt> " || !slices.Equal(c.promptStyles, want) || c.title != "title" {
+		t.Fatalf("prompt after setPrompt: %q, styles %v, title %q", c.prompt, c.promptStyles, c.title)
 	}
 
 	edit := func(request uint32, op editOpKind, line string, cursor int) (string, int, bool, []string) {

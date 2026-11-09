@@ -2,11 +2,11 @@
 //! prompt box (ai/gui-terminal.typ: one engine and one PTY per pane).
 
 use crate::keys::key_label;
-use crate::render::{rgba, Glyphs, Icon, Quad, BOLD, ITALIC};
+use crate::flow::{DecoKind, Flow, Style};
+use crate::render::{rgba, Glyphs, Icon, Quad, ShapedGlyph, BOLD, ITALIC, PROMPT};
 use crate::vt;
-use msh_client::{Engine, EngineHost, Event, FmMouse, FmView};
+use msh_client::{Engine, EngineHost, Event, FmMouse, FmView, Prompt, PromptAttr, PromptColor, PromptStyle};
 use msh_editor::edit::{EditOp, Line};
-use msh_editor::graphemes::clusters;
 use msh_editor::keys::KeyCode;
 use msh_editor::lexer::{Lexer, TokenKind};
 use msh_editor::resolver::{Config, Editor, Mode};
@@ -36,7 +36,9 @@ const COLORS: vt::Colors = vt::Colors { fg: FG, bg: CARD_BG, cursor: FG };
 const MARGIN: usize = 1;
 const CARD_GAP: usize = 1;
 /// The prompt box's inner left edge.
-const PROMPT_INSET: usize = 2;
+/// Around the prompt box's text, and the completion menu's, in lines of
+/// the prompt font.
+const PROMPT_PAD: f32 = 0.75;
 /// The most rows the completion menu shows.
 const MENU_ROWS: usize = 8;
 
@@ -72,6 +74,8 @@ impl Block {
 struct Menu {
     candidates: Vec<String>,
     selected: Option<usize>,
+    /// The widest candidate in the prompt font, measured once.
+    widest: Option<f32>,
 }
 
 /// What the editor's effects asked for while it ran a program.
@@ -132,7 +136,7 @@ fn effect(log: &RefCell<Effects>, engine: &mut Engine, op: &EditOp, line: &mut L
             if let Ok(r) = engine.edit(op, &line.text, line.cursor) {
                 line.text = r.line;
                 line.cursor = r.cursor;
-                e.completed = Some((r.cycling, Menu { candidates: r.candidates, selected: r.selected }));
+                e.completed = Some((r.cycling, Menu { candidates: r.candidates, selected: r.selected, widest: None }));
             }
             false
         }
@@ -155,8 +159,14 @@ pub struct Pane {
     pub rows: usize,
     cell: (u32, u32),
     /// The prompt as the engine rendered it, in an emulator of its own.
-    prompt: Option<vt::Term>,
-    prompt_text: Vec<u8>,
+    /// The prompt's lines, each its text and its runs of style.
+    prompt: Vec<(String, Vec<(usize, Style)>)>,
+    /// The prompt box laid out, and the line's runs of style: buffers
+    /// kept from frame to frame.
+    flow: Flow,
+    line_runs: Vec<(usize, Style)>,
+    /// The pane's size in pixels.
+    px: (u32, u32),
     pub title: Option<String>,
     menu: Menu,
     /// Rows scrolled up from the newest output.
@@ -203,8 +213,10 @@ impl Pane {
             cols: 80,
             rows: 24,
             cell: (8, 16),
-            prompt: None,
-            prompt_text: Vec::new(),
+            prompt: Vec::new(),
+            flow: Flow::default(),
+            line_runs: Vec::new(),
+            px: (640, 384),
             title: None,
             menu: Menu::default(),
             scroll: 0,
@@ -238,13 +250,11 @@ impl Pane {
         self.cols.saturating_sub(2 * MARGIN).max(10) as u16
     }
 
-    fn prompt_cols(&self) -> usize {
-        self.cols.saturating_sub(2 * PROMPT_INSET).max(10)
-    }
-
-    /// The pane's size. Programs get the cards' width and the pane's height
-    /// (a program on the alternate screen has the whole pane).
-    pub fn resize(&mut self, cols: usize, rows: usize, cell: (u32, u32)) {
+    /// The pane's size, in cells and in pixels. Programs get the cards'
+    /// width and the pane's height (a program on the alternate screen has
+    /// the whole pane).
+    pub fn resize(&mut self, cols: usize, rows: usize, cell: (u32, u32), px: (u32, u32)) {
+        self.px = px;
         if (cols, rows, cell) == (self.cols, self.rows, self.cell) {
             return;
         }
@@ -255,7 +265,6 @@ impl Pane {
         if let Some(i) = self.running {
             self.blocks[i].term.resize(oc, rows as u16, cw, ch);
         }
-        self.set_prompt();
         if self.fm.is_some() {
             self.size_fm();
         }
@@ -376,16 +385,6 @@ impl Pane {
         }
     }
 
-    /// Lays out the prompt text in its emulator, at the box's width.
-    fn set_prompt(&mut self) {
-        if self.prompt_text.is_empty() {
-            return;
-        }
-        let mut t = vt::Term::new(self.prompt_cols() as u16, 16, &COLORS);
-        t.write(&self.prompt_text);
-        self.prompt = Some(t);
-    }
-
     /// Handles an event from the engine; returns whether the pane closes.
     pub fn engine_event(&mut self, event: Event) -> bool {
         match event {
@@ -399,9 +398,8 @@ impl Pane {
                     }
                 }
             }
-            Event::Prompt { title, text } => {
-                self.prompt_text = text;
-                self.set_prompt();
+            Event::Prompt { title, prompt } => {
+                self.prompt = prompt_lines(&prompt);
                 if title.is_some() {
                     self.title = title;
                 }
@@ -594,7 +592,6 @@ impl Pane {
             return;
         }
         let (cols, rows) = (self.cols, self.rows);
-        let prompt_cols = self.prompt_cols();
 
         // A program on the alternate screen has the whole pane.
         if let Some(i) = self.running.filter(|&i| self.blocks[i].term.alternate_screen()) {
@@ -610,37 +607,91 @@ impl Pane {
         // The prompt box, where a terminal's prompt would be: just after the
         // output, at the top of a clean screen. Once the output fills the
         // pane, or while scrolled back, it stays at the bottom, as frozen
-        // panes do. It holds the rendered prompt, then the line; while a
-        // command runs, it says so, and keys go to the program.
-        let line = &self.editor.line;
-        let (prompt_x, prompt_y) = self.prompt.as_ref().map_or((0, 0), |p| {
-            let (x, y) = p.cursor();
-            (x as usize, y as usize)
-        });
-        let line_cells = clusters(&line.text).count();
-        let cursor_cells = clusters(&line.text[..line.cursor]).count();
-        let suggestion_cells = clusters(&self.suggestion).count();
+        // panes do. It holds the prompt, then the line; while a command
+        // runs, it says so, and keys go to the program. It is ours, so it is
+        // laid out in pixels, in the prompt font, as a GUI lays out text;
+        // the cards above are terminals, in cells.
+        let (cw, ch) = (cv.cell.0 as f32, cv.cell.1 as f32);
+        let (pane_w, pane_h) = (self.px.0 as f32, self.px.1 as f32);
+        let pm = glyphs.metrics(PROMPT);
+        let line_h = pm.line;
+        let pad = (line_h * PROMPT_PAD).round();
+        let text_w = (pane_w - 2.0 * pad).max(line_h);
+        // The prompt, the line and the history suggestion, as one flow.
+        let mut cursor = (0.0, 0usize, 0.0);
         let text_rows = if self.running.is_some() {
             1
         } else {
-            prompt_y + (prompt_x + line_cells + suggestion_cells + 1).div_ceil(prompt_cols)
+            let line = &self.editor.line;
+            let flow = &mut self.flow;
+            flow.start(text_w);
+            for (i, (text, runs)) in self.prompt.iter().enumerate() {
+                if i > 0 {
+                    flow.newline();
+                }
+                flow.add(glyphs, PROMPT, text, runs);
+            }
+            // The line, coloured as terminal msh colours it.
+            let errored = self.lexer.tokenize_into(&line.text, &mut self.tokens);
+            let names = self.cfg.as_ref().map(|c| &c.names);
+            let styles = if errored { Vec::new() } else { line_styles(&line.text, &self.tokens, self.line_kind == Some(true), names) };
+            let runs = &mut self.line_runs;
+            runs.clear();
+            runs.push((0, Style::plain(color(FG))));
+            for &(start, end, fg, underline) in &styles {
+                runs.push((start, Style { underline, ..Style::plain(color(fg.unwrap_or(FG))) }));
+                runs.push((end, Style::plain(color(FG))));
+            }
+            flow.marking(true);
+            flow.add(glyphs, PROMPT, &line.text, runs);
+            flow.mark_end(line.text.len());
+            flow.marking(false);
+            // The history suggestion, quiet, after the line.
+            flow.add(glyphs, PROMPT, &self.suggestion, &[(0, Style::plain(color(SUGGESTION)))]);
+            // The cursor: on its cluster, as wide; at the end, as wide as a
+            // space, on the next row when the row has no room.
+            let space = glyphs.width(PROMPT, " ");
+            let m = flow.marks.iter().find(|m| m.byte == line.cursor).copied();
+            cursor = match m {
+                Some(m) if m.w > 0.0 => (m.x, m.row, m.w),
+                Some(m) if m.x + space > text_w && m.x > 0.0 => (0.0, m.row + 1, space),
+                Some(m) => (m.x, m.row, space),
+                None => (flow.x, flow.row, space),
+            };
+            flow.row.max(cursor.1) + 1
         };
-        let box_rows = (2 + text_rows + self.message.is_some() as usize).min(rows);
-        let menu = &self.menu;
-        let menu_width = menu.candidates.iter().map(|c| c.chars().count()).max().unwrap_or(0) + 2;
-        let menu_cols = (prompt_cols / menu_width.max(1)).max(1);
+        let message_rows = self.message.is_some() as usize;
+        let box_h = 2.0 * pad + (text_rows + message_rows) as f32 * line_h;
+        // The completion menu, in the prompt font: columns as wide as the
+        // widest candidate.
+        let menu = &mut self.menu;
+        if menu.widest.is_none() && !menu.candidates.is_empty() {
+            menu.widest = Some(menu.candidates.iter().map(|c| glyphs.width(PROMPT, c)).fold(0.0, f32::max));
+        }
+        let col_w = menu.widest.unwrap_or(0.0) + 2.0 * pad;
+        let menu_cols = ((text_w + 2.0 * pad) / col_w.max(1.0)).floor().max(1.0) as usize;
         let menu_rows = menu.candidates.len().div_ceil(menu_cols).min(MENU_ROWS);
-        // The most rows the cards can have: all but the box and the menu.
-        let most = rows.saturating_sub(box_rows + menu_rows);
+        let menu_h = if menu_rows > 0 { menu_rows as f32 * line_h + pad } else { 0.0 };
+        // The most rows the cards can have: all the pane but the box and
+        // the menu.
+        let most = ((pane_h - box_h - menu_h) / ch).floor().max(0.0) as usize;
 
         // The cards. Cleared ones are above the view until scrolled to.
         let total: usize = self.blocks.iter().map(Block::rows).sum();
         let bottom_top = self.clear_rows.max(total.saturating_sub(most));
         self.scroll = self.scroll.min(bottom_top);
         let top = bottom_top - self.scroll;
-        // The cards' rows shown; the menu and the box follow them.
+        // The cards' rows shown; the menu and the box follow them, or, once
+        // the cards fill the pane, sit at its bottom.
         let area = total.saturating_sub(top).min(most);
-        let box_top = area + menu_rows;
+        let at_bottom = total.saturating_sub(top) >= most;
+        let menu_y = if at_bottom { (pane_h - box_h - menu_h).max(0.0) } else { area as f32 * ch };
+        let box_y = menu_y + menu_h;
+        // At the bottom, the cards (in whole rows) are moved down to meet
+        // the menu or the box: what is left of a row is above them, at the
+        // pane's top edge.
+        let cards_down = if at_bottom { (menu_y - area as f32 * ch).max(0.0).floor() as u32 } else { 0 };
+        cv.y0 += cards_down;
         let mut y = 0usize;
         for (bi, b) in self.blocks.iter_mut().enumerate() {
             let height = b.rows();
@@ -705,86 +756,68 @@ impl Pane {
             y += height;
         }
 
+        cv.y0 -= cards_down;
+
         // The completion menu, just above the prompt box.
         if menu_rows > 0 {
+            let menu = &self.menu;
             let all_rows = menu.candidates.len().div_ceil(menu_cols);
             let first_row = menu.selected.map_or(0, |s| (s % all_rows).saturating_sub(menu_rows - 1));
-            for r in 0..menu_rows {
-                cv.fill(0, area + r, cols, color(MENU_BG));
-            }
+            cv.fill_px(0.0, menu_y, pane_w, menu_h, color(MENU_BG));
+            let my = menu_y + pad / 2.0;
             for (i, c) in menu.candidates.iter().enumerate() {
                 let (col, row) = (i / all_rows, i % all_rows);
                 if row < first_row || row >= first_row + menu_rows {
                     continue;
                 }
-                let (x, wy) = (PROMPT_INSET + col * menu_width, area + row - first_row);
+                let (x, y) = (col as f32 * col_w, my + (row - first_row) as f32 * line_h);
                 if Some(i) == menu.selected {
-                    cv.fill(x.saturating_sub(1), wy, menu_width, color(SELECTED_BG));
+                    cv.fill_px(x + pad / 2.0, y, col_w - pad, line_h, color(SELECTED_BG));
                 }
-                cv.text(glyphs, x, wy, c, color(FG));
+                cv.text_in(glyphs, PROMPT, x + pad, y, line_h, c, color(FG), col_w - pad);
             }
         }
 
         // The prompt box.
         let box_bg = if focused { PROMPT_BG } else { PROMPT_BG_UNFOCUSED };
-        for r in box_top..box_top + box_rows {
-            cv.fill(0, r, cols, color(box_bg));
-        }
-        let text_top = box_top + 1;
+        cv.fill_px(0.0, box_y, pane_w, box_h, color(box_bg));
+        let (tx, ty) = (pad, box_y + pad);
         if let Some(i) = self.running {
-            let (cw, ch) = (cv.cell.0 as f32, cv.cell.1 as f32);
-            let (x, y) = (PROMPT_INSET as f32 * cw, text_top as f32 * ch);
-            let label = cv.ui_text(glyphs, x, y, ch, "running", color(DIM), cols as f32 * cw);
+            let label = cv.ui_text(glyphs, tx, ty, line_h, "running", color(DIM), text_w);
             let command: String = self.blocks[i].command.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
-            cv.ui_text(glyphs, x + label + cw, y, ch, &command, color(COMMAND), (cols - 2 * PROMPT_INSET) as f32 * cw - label - cw);
+            cv.ui_text(glyphs, tx + label + cw, ty, line_h, &command, color(COMMAND), text_w - label - cw);
             return;
         }
-        if let Some(p) = &mut self.prompt {
-            p.visit(0, prompt_y + 1, |r, c, cell| cv.cell(glyphs, PROMPT_INSET + c, text_top + r, cell, box_bg));
-        }
-        let at = |cell: usize| (PROMPT_INSET + (prompt_x + cell) % prompt_cols, text_top + prompt_y + (prompt_x + cell) / prompt_cols);
-        // The line, coloured as terminal msh colours it.
-        let errored = self.lexer.tokenize_into(&line.text, &mut self.tokens);
-        let names = self.cfg.as_ref().map(|c| &c.names);
-        let styles = if errored { Vec::new() } else { line_styles(&line.text, &self.tokens, self.line_kind == Some(true), names) };
-        let mut si = 0;
-        for (i, (s, _)) in clusters(&line.text).enumerate() {
-            while si < styles.len() && styles[si].1 <= s {
-                si += 1;
-            }
-            let (fg, underline) = match styles.get(si).filter(|st| st.0 <= s) {
-                Some(&(_, _, fg, u)) => (fg.unwrap_or(FG), u),
-                None => (FG, false),
-            };
-            let (x, row) = at(i);
-            cv.put(glyphs, x, row, line.text[s..].chars().next().unwrap_or(' '), color(fg));
-            if underline {
-                cv.underline(x, row, color(fg));
+        let flow = &self.flow;
+        let baseline = ((line_h - (pm.ascent + pm.descent)) / 2.0).round() + pm.ascent;
+        let t = (line_h / 16.0).round().max(1.0);
+        for d in &flow.decos {
+            let y = ty + d.row as f32 * line_h;
+            match d.kind {
+                DecoKind::Background => cv.fill_px(tx + d.x, y, d.w, line_h, d.color),
+                DecoKind::Underline => cv.line_px(tx + d.x, y + baseline + 2.0 * t, d.w, t, d.color),
+                DecoKind::Strike => cv.line_px(tx + d.x, y + baseline - pm.ascent * 0.3, d.w, t, d.color),
             }
         }
-        // The history suggestion, quiet, after the line.
-        for (i, (s, _)) in clusters(&self.suggestion).enumerate() {
-            let (x, row) = at(line_cells + i);
-            cv.put(glyphs, x, row, self.suggestion[s..].chars().next().unwrap_or(' '), color(SUGGESTION));
+        for p in &flow.placed {
+            cv.glyph(glyphs, p.glyph, tx + p.x, ty + p.row as f32 * line_h + baseline, p.color);
         }
         if focused {
-            let (cx, cy) = at(cursor_cells);
-            cv.cursor(cx, cy);
+            let (x, row, w) = cursor;
+            cv.box_cursor(tx + x, ty + row as f32 * line_h, w, line_h);
         }
         if let Some(m) = &self.message {
             let text: String = m.trim_end().chars().filter(|c| *c != '\n').collect();
-            cv.text(glyphs, PROMPT_INSET, text_top + text_rows, &text, color(DIM));
+            cv.text_in(glyphs, PROMPT, tx, ty + text_rows as f32 * line_h, line_h, &text, color(DIM), text_w);
         }
         // How the line will run: a stripe down the box's left edge, and a
-        // word at the right of the line, both quiet.
+        // word at the right of the cursor's row, both quiet.
         if let Some(command) = self.line_kind {
-            let (cw, ch) = (cv.cell.0 as f32, cv.cell.1 as f32);
             let (stripe, label) = if command { (KIND_COMMAND, "command") } else { (ACCENT, "mshell") };
-            cv.fill_px(0.0, box_top as f32 * ch, 3.0, box_rows as f32 * ch, color(stripe));
+            cv.fill_px(0.0, box_y, 3.0, box_h, color(stripe));
             let lw = glyphs.ui_width(label);
-            let (_, cy) = at(cursor_cells);
-            let x = cols as f32 * cw - cw - lw;
-            cv.ui_text(glyphs, x, cy as f32 * ch, ch, label, rgba(stripe[0], stripe[1], stripe[2], 0xb0), lw + 1.0);
+            let y = ty + cursor.1 as f32 * line_h;
+            cv.ui_text(glyphs, pane_w - pad - lw, y, line_h, label, rgba(stripe[0], stripe[1], stripe[2], 0xb0), lw + 1.0);
         }
     }
 }
@@ -992,6 +1025,76 @@ fn preview_name(line: &str) -> (String, bool) {
     }
 }
 
+/// The prompt's lines, each its text and its runs of style: its colours
+/// (the palette's are the GUI's, as a program's output's are) and
+/// attributes. Reverse swaps the colours; hidden text is drawn clear.
+fn prompt_lines(p: &Prompt) -> Vec<(String, Vec<(usize, Style)>)> {
+    let resolve = |c: PromptColor| match c {
+        PromptColor::Rgb(rgb) => Some(rgb),
+        PromptColor::Palette(i) if i < 16 => Some(ANSI[i as usize]),
+        PromptColor::Palette(i) => Some(xterm256(i)),
+        PromptColor::Default => None,
+    };
+    let bit = |a: PromptAttr| 1u8 << a as u8;
+    let (mut fg, mut bg, mut attrs): (Option<[u8; 3]>, Option<[u8; 3]>, u8) = (None, None, 0);
+    let style = |fg: Option<[u8; 3]>, bg: Option<[u8; 3]>, attrs: u8| {
+        let on = |a: PromptAttr| attrs & bit(a) != 0;
+        let (mut f, mut b) = (fg.unwrap_or(FG), bg);
+        if on(PromptAttr::Reverse) {
+            (f, b) = (b.unwrap_or(PROMPT_BG), Some(f));
+        }
+        let alpha = if on(PromptAttr::Hidden) {
+            0
+        } else if on(PromptAttr::Faint) {
+            0x80
+        } else {
+            0xff
+        };
+        Style {
+            color: rgba(f[0], f[1], f[2], alpha),
+            bg: b.map(color),
+            face: if on(PromptAttr::Bold) { BOLD } else { 0 } | if on(PromptAttr::Italic) { ITALIC } else { 0 },
+            underline: on(PromptAttr::Underline),
+            strike: on(PromptAttr::Strikethrough),
+        }
+    };
+    let mut lines = vec![(String::new(), vec![(0, style(fg, bg, attrs))])];
+    let mut next = 0;
+    // Each character, then the end: the styles at a byte take effect
+    // before it.
+    for (i, c) in p.text.char_indices().map(|(i, c)| (i, Some(c))).chain(std::iter::once((p.text.len(), None))) {
+        let mut changed = false;
+        while let Some((_, st)) = p.styles.get(next).filter(|(at, _)| *at as usize <= i) {
+            match st {
+                PromptStyle::Reset => (fg, bg, attrs) = (None, None, 0),
+                PromptStyle::Fg(c) => fg = resolve(*c),
+                PromptStyle::Bg(c) => bg = resolve(*c),
+                PromptStyle::On(a) => attrs |= bit(*a),
+                // Bold and faint go off together, as SGR 22 turns both off.
+                PromptStyle::Off(PromptAttr::Bold | PromptAttr::Faint) => attrs &= !(bit(PromptAttr::Bold) | bit(PromptAttr::Faint)),
+                PromptStyle::Off(a) => attrs &= !bit(*a),
+                PromptStyle::LinkStart(_) | PromptStyle::LinkEnd => {}
+            }
+            next += 1;
+            changed = true;
+        }
+        let (text, runs) = lines.last_mut().unwrap();
+        if changed {
+            let st = style(fg, bg, attrs);
+            match runs.last_mut() {
+                Some(last) if last.0 == text.len() => last.1 = st,
+                _ => runs.push((text.len(), st)),
+            }
+        }
+        match c {
+            None => {}
+            Some('\n') => lines.push((String::new(), vec![(0, style(fg, bg, attrs))])),
+            Some(c) => text.push(c),
+        }
+    }
+    lines
+}
+
 /// How terminal msh colours a command line's tokens (CommandPaint.go,
 /// commandStyleSpansInto), as byte ranges with a colour and whether they
 /// are underlined. On a command line the program is underlined in blue,
@@ -1167,12 +1270,6 @@ impl Canvas<'_> {
         }
     }
 
-    pub fn text(&mut self, glyphs: &mut Glyphs, col: usize, row: usize, s: &str, fg: u32) {
-        for (i, c) in s.chars().enumerate() {
-            self.put(glyphs, col + i, row, c, fg);
-        }
-    }
-
     pub fn fill(&mut self, col: usize, row: usize, width: usize, bg: u32) {
         if row < self.rows && col < self.cols {
             let (x, y) = self.cell_px(col, row);
@@ -1182,10 +1279,13 @@ impl Canvas<'_> {
     }
 
     /// A rectangle in pixels from the origin.
+    /// Its edges are rounded, not its size, so rectangles side by side
+    /// meet without a seam.
     pub fn fill_px(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) {
-        if w > 0.0 && h > 0.0 {
-            let (x, y) = (self.x0 + x.max(0.0) as u32, self.y0 + y.max(0.0) as u32);
-            self.push_solid(Quad::solid(x, y, w as u32, h as u32, color));
+        let (x0, y0) = (x.max(0.0).round(), y.max(0.0).round());
+        let (x1, y1) = ((x + w).round(), (y + h).round());
+        if x1 > x0 && y1 > y0 {
+            self.push_solid(Quad::solid(self.x0 + x0 as u32, self.y0 + y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32, color));
         }
     }
 
@@ -1200,14 +1300,51 @@ impl Canvas<'_> {
     /// Text in the UI font in a row of height `h` at (x, y) from the
     /// origin, centred on it, cut to `max` pixels; returns its width.
     pub fn ui_text(&mut self, glyphs: &mut Glyphs, x: f32, y: f32, h: f32, text: &str, color: u32, max: f32) -> f32 {
-        let m = glyphs.ui;
+        self.text_in(glyphs, crate::render::UI, x, y, h, text, color, max)
+    }
+
+    /// Text in a family (render::UI, MONO, PROMPT) in a row of height `h`
+    /// at (x, y) from the origin, centred on it, cut to `max` pixels;
+    /// returns its width.
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_in(&mut self, glyphs: &mut Glyphs, slot: u8, x: f32, y: f32, h: f32, text: &str, color: u32, max: f32) -> f32 {
+        let m = glyphs.metrics(slot);
         let baseline = y + ((h - (m.ascent + m.descent)) / 2.0).round() + m.ascent;
         let mut quads = Vec::new();
-        let w = glyphs.ui_text(&mut quads, self.x0 as f32 + x, self.y0 as f32 + baseline, text, color, max);
+        let w = glyphs.text(slot, &mut quads, self.x0 as f32 + x, self.y0 as f32 + baseline, text, color, max);
         for q in quads {
             self.push_glyph(q);
         }
         w
+    }
+
+    /// A shaped glyph, its cluster at x and its baseline at y, from the
+    /// origin.
+    pub fn glyph(&mut self, glyphs: &mut Glyphs, g: ShapedGlyph, x: f32, y: f32, color: u32) {
+        if let Some(q) = glyphs.glyph_quad(g, self.x0 as f32 + x, self.y0 as f32 + y, color) {
+            self.push_glyph(q);
+        }
+    }
+
+    /// A line over the glyphs (an underline, a line through), in pixels
+    /// from the origin.
+    pub fn line_px(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) {
+        if w > 0.0 && h > 0.0 {
+            self.push_glyph(Quad::solid(self.x0 + x.round() as u32, self.y0 + y.round() as u32, w.round().max(1.0) as u32, h as u32, color));
+        }
+    }
+
+    /// The prompt's cursor in pixels from the origin: a block that shows
+    /// the text through it, hollow while the window hasn't the keyboard.
+    pub fn box_cursor(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let (x, y, w, h) = (self.x0 + x.round() as u32, self.y0 + y.round() as u32, w.round().max(2.0) as u32, h.round() as u32);
+        if self.window_focused {
+            self.push_glyph(Quad::solid(x, y, w, h, rgba(FG[0], FG[1], FG[2], 0x90)));
+        } else {
+            for (qx, qy, qw, qh) in [(x, y, w, 1), (x, y + h - 1, w, 1), (x, y, 1, h), (x + w - 1, y, 1, h)] {
+                self.push_glyph(Quad::solid(qx, qy, qw, qh, color(FG)));
+            }
+        }
     }
 
     /// An icon `size` pixels square at (x, y) from the origin.
@@ -1217,20 +1354,6 @@ impl Canvas<'_> {
     }
 
     /// A line under a cell, as an underline.
-    fn underline(&mut self, col: usize, row: usize, color: u32) {
-        if col < self.cols && row < self.rows {
-            let (x, y) = self.cell_px(col, row);
-            let thick = (self.cell.1 / 16).max(1);
-            self.push_glyph(Quad::solid(x, y + self.cell.1 - 2 * thick, self.cell.0, thick, color));
-        }
-    }
-
-    /// The prompt's cursor: a block, hollow while the window hasn't the
-    /// keyboard.
-    fn cursor(&mut self, col: usize, row: usize) {
-        self.draw_cursor(col, row, vt::CursorShape::Block, FG);
-    }
-
     /// A program's cursor: in the shape and colour it set, blinking if it
     /// asked to. While the window hasn't the keyboard it is a still,
     /// hollow block, as terminals draw it.
