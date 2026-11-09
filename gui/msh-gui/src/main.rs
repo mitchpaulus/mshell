@@ -24,7 +24,8 @@
 //!
 //! Usage: msh-gui [MSH]   (MSH: the msh binary; default $MSH_BIN, then the
 //!                         repository's mshell/mshell, then msh on PATH)
-//! MSH_GUI_FONT and MSH_GUI_FONT_SIZE choose the font.
+//! MSH_GUI_FONT and MSH_GUI_FONT_SIZE choose the font; MSH_GUI_FONT_BOLD,
+//! _ITALIC and _BOLD_ITALIC its styles (else the files beside it).
 
 mod keys;
 mod layout;
@@ -37,16 +38,16 @@ use layout::{Direction, Layout, Rect};
 use msh_client::{Engine, Event};
 use msh_editor::keys::{KeyCode, MOD_ALT};
 use pane::{color, Canvas, Pane, ACCENT, DIM};
-use render::{Glyphs, Quad, Renderer};
+use render::{Glyphs, MonoFaces, Quad, Renderer};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
-use winit::window::{Window, WindowId};
+use winit::window::{UserAttentionType, Window, WindowId};
 
 // Gaps around and between panes, as a tiling window manager's, and the
 // focused pane's border, in pixels.
@@ -103,6 +104,8 @@ struct App {
     renderer: Option<Renderer>,
     glyphs: Option<Glyphs>,
     font: Vec<u8>,
+    /// Where the monospace font is: its bold and italic are beside it.
+    font_path: String,
     /// The font of the app's own text: proportional.
     ui_font: Vec<u8>,
     font_size: f32,
@@ -119,7 +122,20 @@ struct App {
     /// Engines' events were left waiting when the last drain's time ran
     /// out: the next frame drains more, once it is drawn.
     backlog: bool,
+    /// Blinking counts from here: a key starts it again, so the cursor
+    /// shows while you type.
+    blink_epoch: Instant,
+    /// The script's phase of blinking, fixed; the window's follows the
+    /// clock.
+    blink_fixed: Option<bool>,
+    window_focused: bool,
+    /// When to draw again though nothing comes (the next phase of
+    /// blinking, a bell's flash ending, a hold running out).
+    wake_at: Option<Instant>,
 }
+
+/// Each phase of blinking, shown or hidden.
+const BLINK: Duration = Duration::from_millis(600);
 
 /// How long a drain handles engines' events before the frame is drawn: a
 /// flood of output (cat /dev/random) shows as it comes, and keys still
@@ -129,6 +145,20 @@ const DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_millis(10);
 impl App {
     fn now(&self) -> i64 {
         self.start.elapsed().as_nanos() as i64
+    }
+
+    /// Whether blinking things show now.
+    fn blink_on(&self) -> bool {
+        match self.blink_fixed {
+            Some(on) => on,
+            None => !self.window_focused || (self.blink_epoch.elapsed().as_millis() / BLINK.as_millis()) % 2 == 0,
+        }
+    }
+
+    /// When the phase of blinking next changes.
+    fn next_blink(&self) -> Instant {
+        let phases = self.blink_epoch.elapsed().as_millis() / BLINK.as_millis() + 1;
+        self.blink_epoch + BLINK * phases as u32
     }
 
     fn redraw(&self) {
@@ -349,8 +379,16 @@ impl App {
         else {
             return false;
         };
-        if self.tabs[t].panes[p].engine_event(event) {
+        let pane = &mut self.tabs[t].panes[p];
+        if pane.engine_event(event) {
             return self.close(t, p);
+        }
+        // A bell while the window hasn't the keyboard: the desktop is
+        // asked to draw attention to it.
+        if std::mem::take(&mut pane.bell_unheard) && !self.window_focused {
+            if let Some(w) = &self.window {
+                w.request_user_attention(Some(UserAttentionType::Informational));
+            }
         }
         self.redraw();
         false
@@ -517,11 +555,13 @@ impl App {
         let cell = self.cell();
         let cols = (self.width / cell.0 as usize).max(1);
         let bar = self.bar_height() > 0;
+        let (blink_on, window_focused) = (self.blink_on(), self.window_focused);
+        let mut blinks = false;
         let Some(glyphs) = &mut self.glyphs else { return };
         // The bar: each tab's title or number, when there are tabs; and
         // the layout, when the tab has more than one pane.
         if bar {
-            let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, top: &mut self.top_quads, on_top: false, x0: 0, y0: 0, cols, rows: 1, cell };
+            let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, top: &mut self.top_quads, on_top: false, blink_on, window_focused, blinks: false, x0: 0, y0: 0, cols, rows: 1, cell };
             let h = cell.1 as f32;
             if self.tabs.len() > 1 {
                 for (i, (x, w, label)) in labels.iter().enumerate() {
@@ -570,11 +610,22 @@ impl App {
             }
             self.quads.push(Quad::solid(x, y, w, h, color(PANE_BG)));
             let pane = &mut self.tabs[self.tab].panes[i];
-            let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, top: &mut self.top_quads, on_top: false, x0: x, y0: y, cols: pane.cols, rows: pane.rows, cell };
+            let mut cv = Canvas { solid: &mut self.quads, glyph: &mut self.glyph_quads, top: &mut self.top_quads, on_top: false, blink_on, window_focused, blinks: false, x0: x, y0: y, cols: pane.cols, rows: pane.rows, cell };
             pane.compose(&mut cv, glyphs, i == focus);
+            blinks |= cv.blinks;
+            // The bell: the pane flashes.
+            if pane.flashing() {
+                self.top_quads.push(Quad::solid(x, y, w, h, pane::color_alpha(ACCENT, 0x30)));
+            }
         }
         self.quads.extend_from_slice(&self.glyph_quads);
         self.quads.extend_from_slice(&self.top_quads);
+        // When to draw again by itself: the next phase of what blinks
+        // (only while the window has the keyboard), a flash ending, a hold
+        // running out.
+        let blink = (blinks && self.window_focused && self.blink_fixed.is_none()).then(|| self.next_blink());
+        let panes = self.tabs[self.tab].panes.iter().filter_map(|p| p.wake_at());
+        self.wake_at = blink.into_iter().chain(panes).min();
     }
 }
 
@@ -595,7 +646,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
         let attrs = Window::default_attributes().with_title("msh").with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
         let window = Arc::new(el.create_window(attrs).expect("create_window"));
-        let glyphs = Glyphs::new(std::mem::take(&mut self.font), std::mem::take(&mut self.ui_font), self.font_size * window.scale_factor() as f32);
+        let glyphs = Glyphs::new(std::mem::take(&mut self.font), MonoFaces::beside(&self.font_path), std::mem::take(&mut self.ui_font), self.font_size * window.scale_factor() as f32);
         let renderer = Renderer::new(window.clone(), &glyphs);
         self.glyphs = Some(glyphs);
         self.renderer = Some(renderer);
@@ -616,6 +667,20 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
+    /// Woken at wake_at: the frame is drawn again.
+    fn new_events(&mut self, _: &ActiveEventLoop, cause: StartCause) {
+        if let StartCause::ResumeTimeReached { .. } = cause {
+            self.redraw();
+        }
+    }
+
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        el.set_control_flow(match self.wake_at {
+            Some(t) => ControlFlow::WaitUntil(t),
+            None => ControlFlow::Wait,
+        });
+    }
+
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => el.exit(),
@@ -624,7 +689,13 @@ impl ApplicationHandler<UserEvent> for App {
                 self.redraw();
             }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
+            WindowEvent::Focused(focused) => {
+                self.window_focused = focused;
+                self.blink_epoch = Instant::now();
+                self.redraw();
+            }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                self.blink_epoch = Instant::now();
                 if self.key_event(&event) {
                     el.exit();
                 }
@@ -706,6 +777,7 @@ fn main() {
         renderer: None,
         glyphs: None,
         font,
+        font_path: font_path.clone(),
         ui_font,
         font_size,
         width: 800,
@@ -717,6 +789,10 @@ fn main() {
         glyph_quads: Vec::new(),
         top_quads: Vec::new(),
         backlog: false,
+        blink_epoch: Instant::now(),
+        blink_fixed: None,
+        window_focused: true,
+        wake_at: None,
     };
     // The first pane's engine starts first: it loads init.msh while the
     // window opens.

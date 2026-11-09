@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use swash::scale::{Render, ScaleContext, Source};
 use swash::shape::ShapeContext;
-use swash::zeno::{Format, Mask, Transform};
+use swash::zeno::{Angle, Format, Mask, Transform};
 use swash::FontRef;
 use winit::window::Window;
 
@@ -116,9 +116,48 @@ struct Packer {
 
 const ATLAS: u32 = 2048;
 
+/// A monospace face's style: bold, italic, or both.
+pub const BOLD: u8 = 1;
+pub const ITALIC: u8 = 2;
+
+/// The faces of the monospace font beside the regular: files for bold,
+/// italic and bold italic, read on first use. A face without one is made
+/// from another, emboldened or slanted.
+pub struct MonoFaces {
+    paths: [Option<std::path::PathBuf>; 4],
+    data: [Option<Option<Vec<u8>>>; 4],
+}
+
+impl MonoFaces {
+    /// The faces beside a regular font file: each from its variable
+    /// (MSH_GUI_FONT_BOLD, _ITALIC, _BOLD_ITALIC), else the regular's name
+    /// with "-Regular" changed (NotoSansMono-Bold.ttf), when there is
+    /// such a file.
+    pub fn beside(regular: &str) -> MonoFaces {
+        let mut paths: [Option<std::path::PathBuf>; 4] = Default::default();
+        for (style, var, name) in [(BOLD, "MSH_GUI_FONT_BOLD", "-Bold"), (ITALIC, "MSH_GUI_FONT_ITALIC", "-Italic"), (BOLD | ITALIC, "MSH_GUI_FONT_BOLD_ITALIC", "-BoldItalic")] {
+            paths[style as usize] = match std::env::var(var) {
+                Ok(p) => Some(p.into()),
+                Err(_) => regular.contains("-Regular").then(|| regular.replacen("-Regular", name, 1).into()),
+            };
+        }
+        MonoFaces { paths, data: Default::default() }
+    }
+
+    /// Whether the face has a file of its own, read now if it wasn't.
+    fn has(&mut self, style: u8) -> bool {
+        let i = style as usize;
+        if self.data[i].is_none() {
+            self.data[i] = Some(self.paths[i].as_ref().and_then(|p| std::fs::read(p).ok()).filter(|d| FontRef::from_index(d, 0).is_some()));
+        }
+        self.data[i].as_ref().is_some_and(|d| d.is_some())
+    }
+}
+
 /// The atlas and what has been rasterised into it.
 pub struct Glyphs {
     mono_font: Vec<u8>,
+    faces: MonoFaces,
     ui_font: Vec<u8>,
     px: f32,
     pub cell: CellMetrics,
@@ -129,7 +168,8 @@ pub struct Glyphs {
     /// Rows of the atlas changed since the last upload.
     dirty: Option<(u32, u32)>,
     packer: Packer,
-    mono: HashMap<char, Region>,
+    /// By character and style (BOLD, ITALIC).
+    mono: HashMap<(char, u8), Region>,
     /// By font (0 the UI font, 1 the monospace font, its fallback) and
     /// glyph id.
     ui_glyphs: HashMap<(u8, u16), GlyphImage>,
@@ -142,7 +182,7 @@ pub struct Glyphs {
 }
 
 impl Glyphs {
-    pub fn new(mono_font: Vec<u8>, ui_font: Vec<u8>, px: f32) -> Glyphs {
+    pub fn new(mono_font: Vec<u8>, faces: MonoFaces, ui_font: Vec<u8>, px: f32) -> Glyphs {
         let cell = {
             let f = FontRef::from_index(&mono_font, 0).expect("not a font file");
             let m = f.metrics(&[]).scale(px);
@@ -160,6 +200,7 @@ impl Glyphs {
         };
         Glyphs {
             mono_font,
+            faces,
             ui_font,
             px,
             cell,
@@ -214,14 +255,45 @@ impl Glyphs {
 
     /// A character of the monospace font, in a cell-sized region.
     pub fn mono(&mut self, c: char) -> Region {
-        if let Some(&r) = self.mono.get(&c) {
+        self.mono_styled(c, 0)
+    }
+
+    /// A character of the monospace font in a style (BOLD, ITALIC), in a
+    /// cell-sized region: from the style's own file, or made from the
+    /// nearest that there is, emboldened and slanted as it lacks.
+    pub fn mono_styled(&mut self, c: char, style: u8) -> Region {
+        if let Some(&r) = self.mono.get(&(c, style)) {
             return r;
         }
         let (cw, ch) = (self.cell.w, self.cell.h);
         let mut cellbuf = vec![0u8; (cw * ch) as usize];
-        let font = FontRef::from_index(&self.mono_font, 0).unwrap();
-        let mut scaler = self.scale.builder(font).size(self.px).hint(true).build();
-        if let Some(img) = Render::new(&[Source::Outline]).format(Format::Alpha).render(&mut scaler, font.charmap().map(c)) {
+        // The face to draw from, and what it lacks of the style.
+        let base = [style, style & ITALIC, style & BOLD, 0].into_iter().find(|&s| s == 0 || self.faces.has(s)).unwrap_or(0);
+        let regular = FontRef::from_index(&self.mono_font, 0).unwrap();
+        let face = match base {
+            0 => regular,
+            s => self.faces.data[s as usize].as_ref().and_then(|d| d.as_deref()).and_then(|d| FontRef::from_index(d, 0)).unwrap_or(regular),
+        };
+        // A character the face lacks comes from the regular, made up to
+        // the style.
+        let (font, id, lacks) = match face.charmap().map(c) {
+            0 => (regular, regular.charmap().map(c), style),
+            id => (face, id, style & !base),
+        };
+        let mut scaler = self.scale.builder(font).size(self.px).hint(lacks & ITALIC == 0).build();
+        let mut render = Render::new(&[Source::Outline]);
+        render.format(Format::Alpha);
+        if lacks & BOLD != 0 {
+            render.embolden((self.px / 24.0).max(0.5));
+        }
+        if lacks & ITALIC != 0 {
+            // Slanted right (outlines are y-up), about the middle of the
+            // x-height, so the glyph stays in its cell.
+            let slant = Angle::from_degrees(12.0);
+            let shift = -slant.to_radians().tan() * self.cell.baseline as f32 * 0.3;
+            render.transform(Some(Transform::skew(slant, Angle::ZERO).then_translate(shift, 0.0)));
+        }
+        if let Some(img) = render.render(&mut scaler, id) {
             let p = img.placement;
             for y in 0..p.height as i32 {
                 let ty = self.cell.baseline - p.top + y;
@@ -238,7 +310,7 @@ impl Glyphs {
         }
         let r = self.alloc(cw, ch);
         self.blit(r, &cellbuf, cw);
-        self.mono.insert(c, r);
+        self.mono.insert((c, style), r);
         r
     }
 

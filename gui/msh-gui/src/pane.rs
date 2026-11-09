@@ -2,7 +2,7 @@
 //! prompt box (ai/gui-terminal.typ: one engine and one PTY per pane).
 
 use crate::keys::key_label;
-use crate::render::{rgba, Glyphs, Icon, Quad};
+use crate::render::{rgba, Glyphs, Icon, Quad, BOLD, ITALIC};
 use crate::vt;
 use msh_client::{Engine, EngineHost, Event, FmMouse, FmView};
 use msh_editor::edit::{EditOp, Line};
@@ -12,6 +12,7 @@ use msh_editor::lexer::{Lexer, TokenKind};
 use msh_editor::resolver::{Config, Editor, Mode};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 // The theme.
 pub const BG: [u8; 3] = [0x10, 0x10, 0x13];
@@ -39,12 +40,13 @@ const PROMPT_INSET: usize = 2;
 /// The most rows the completion menu shows.
 const MENU_ROWS: usize = 8;
 
-pub fn color([r, g, b]: [u8; 3]) -> u32 {
-    rgba(r, g, b, 0xff)
+/// A colour with an alpha.
+pub fn color_alpha([r, g, b]: [u8; 3], a: u8) -> u32 {
+    rgba(r, g, b, a)
 }
 
-fn cursor_color() -> u32 {
-    rgba(FG[0], FG[1], FG[2], 0x90)
+pub fn color([r, g, b]: [u8; 3]) -> u32 {
+    rgba(r, g, b, 0xff)
 }
 
 /// A command and its output.
@@ -173,6 +175,10 @@ pub struct Pane {
     /// fraction of a row not yet scrolled.
     fm_press: Option<FmPress>,
     fm_wheel: f32,
+    /// When a program last rang the bell, for the flash; and whether the
+    /// window has yet to hear of it.
+    bell_at: Option<Instant>,
+    pub bell_unheard: bool,
     /// How the line would run: Some(true) as a command line, Some(false) as
     /// mshell, None for an empty line; and the history suggestion after it.
     /// The engine answers both, for each change to the line.
@@ -209,6 +215,8 @@ impl Pane {
             fm_size: (0, 0),
             fm_press: None,
             fm_wheel: 0.0,
+            bell_at: None,
+            bell_unheard: false,
             line_kind: None,
             suggestion: String::new(),
             lexer: Lexer::editor(),
@@ -251,6 +259,19 @@ impl Pane {
         if self.fm.is_some() {
             self.size_fm();
         }
+    }
+
+    /// Whether the bell's flash shows now.
+    pub fn flashing(&self) -> bool {
+        self.bell_at.is_some_and(|t| t.elapsed() < BELL_FLASH)
+    }
+
+    /// When the pane must be drawn again though nothing comes: its bell's
+    /// flash ends, or its program's hold on the screen runs out.
+    pub fn wake_at(&self) -> Option<Instant> {
+        let flash = self.bell_at.map(|t| t + BELL_FLASH).filter(|&end| end > Instant::now());
+        let hold = self.running.and_then(|i| self.blocks[i].term.hold_ends());
+        [flash, hold].into_iter().flatten().min()
     }
 
     /// The file manager dialog's place in the pane, in pixels.
@@ -397,6 +418,10 @@ impl Pane {
                 };
                 let term = &mut self.blocks[i].term;
                 term.write(&bytes);
+                if term.take_bell() {
+                    self.bell_at = Some(Instant::now());
+                    self.bell_unheard = true;
+                }
                 // What it answered the program's queries goes back to it,
                 // after the output that asked.
                 let replies = term.take_replies();
@@ -577,7 +602,7 @@ impl Pane {
             term.scroll_to_bottom();
             let cursor = term.visit(0, rows, |r, c, cell| cv.cell(glyphs, MARGIN + c, r, cell, BG));
             if let Some(k) = cursor.filter(|_| focused) {
-                cv.term_cursor(MARGIN + k.x as usize, k.y as usize, k.shape);
+                cv.term_cursor(MARGIN + k.x as usize, k.y as usize, &k);
             }
             return;
         }
@@ -672,7 +697,7 @@ impl Pane {
                     if let Some(k) = cursor {
                         let row = content_y + (from - off) + k.y as usize;
                         if shown(row) {
-                            cv.term_cursor(MARGIN + k.x as usize, row - top, k.shape);
+                            cv.term_cursor(MARGIN + k.x as usize, row - top, &k);
                         }
                     }
                 }
@@ -949,6 +974,9 @@ enum FmPressOn {
     Child(String),
 }
 
+/// How long the bell's flash shows.
+const BELL_FLASH: Duration = Duration::from_millis(150);
+
 /// A second press this soon after the first, at its place, is a double
 /// press.
 const DOUBLE_PRESS_NS: i64 = 400_000_000;
@@ -1101,6 +1129,14 @@ pub struct Canvas<'a> {
     pub top: &'a mut Vec<Quad>,
     /// While set, quads go to `top`.
     pub on_top: bool,
+    /// The phase of blinking: whether blinking text and cursors show now.
+    pub blink_on: bool,
+    /// Whether the window has the keyboard: without it, cursors are hollow
+    /// and still.
+    pub window_focused: bool,
+    /// Set when something that blinks was drawn, so the frame is drawn
+    /// again at the next phase.
+    pub blinks: bool,
     pub x0: u32,
     pub y0: u32,
     pub cols: usize,
@@ -1189,23 +1225,38 @@ impl Canvas<'_> {
         }
     }
 
+    /// The prompt's cursor: a block, hollow while the window hasn't the
+    /// keyboard.
     fn cursor(&mut self, col: usize, row: usize) {
-        self.term_cursor(col, row, vt::CursorShape::Block);
+        self.draw_cursor(col, row, vt::CursorShape::Block, FG);
     }
 
-    /// A program's cursor, in the shape it set: a block shows the
-    /// character through it; the bar, underline and hollow block are
-    /// solid.
-    fn term_cursor(&mut self, col: usize, row: usize, shape: vt::CursorShape) {
+    /// A program's cursor: in the shape and colour it set, blinking if it
+    /// asked to. While the window hasn't the keyboard it is a still,
+    /// hollow block, as terminals draw it.
+    fn term_cursor(&mut self, col: usize, row: usize, k: &vt::Cursor) {
+        if k.blinking && self.window_focused {
+            self.blinks = true;
+            if !self.blink_on {
+                return;
+            }
+        }
+        self.draw_cursor(col, row, k.shape, k.color.unwrap_or(FG));
+    }
+
+    /// A cursor: a block shows the character through it; the bar,
+    /// underline and hollow block are solid.
+    fn draw_cursor(&mut self, col: usize, row: usize, shape: vt::CursorShape, rgb: [u8; 3]) {
         if col >= self.cols || row >= self.rows {
             return;
         }
+        let shape = if self.window_focused { shape } else { vt::CursorShape::HollowBlock };
         let (x, y) = self.cell_px(col, row);
         let (w, h) = self.cell;
         let line = (w / 8).max(2);
-        let c = color(FG);
+        let c = color(rgb);
         match shape {
-            vt::CursorShape::Block => self.push_glyph(Quad::solid(x, y, w, h, cursor_color())),
+            vt::CursorShape::Block => self.push_glyph(Quad::solid(x, y, w, h, rgba(rgb[0], rgb[1], rgb[2], 0x90))),
             vt::CursorShape::Bar => self.push_glyph(Quad::solid(x, y, line, h, c)),
             vt::CursorShape::Underline => self.push_glyph(Quad::solid(x, y + h - line, w, line, c)),
             vt::CursorShape::HollowBlock => {
@@ -1227,6 +1278,9 @@ impl Canvas<'_> {
         let t = (h / 16).max(1);
         if cell.strikethrough {
             self.push_glyph(Quad::solid(x, y + h / 2, w, t, fg));
+        }
+        if cell.overline {
+            self.push_glyph(Quad::solid(x, y, w, t, fg));
         }
         let c = cell.underline_color.map_or(fg, color);
         let base = y + h - 2 * t;
@@ -1262,17 +1316,35 @@ impl Canvas<'_> {
 
     /// A cell of an emulator, over `bg` where it has no background of its
     /// own.
+    /// Its text is in the cell's style (bold, italic), half seen when
+    /// faint, and not at all when concealed or in the hidden phase of
+    /// blinking; its lines (underline, strikethrough, overline) go with it.
     fn cell(&mut self, glyphs: &mut Glyphs, col: usize, row: usize, cell: &vt::Cell, bg: [u8; 3]) {
         let (fg, cell_bg) = if cell.inverse_default && cell.fg.is_none() && cell.bg.is_none() {
-            (color(bg), Some(color(FG)))
+            (bg, Some(color(FG)))
         } else {
-            (color(cell.fg.unwrap_or(FG)), cell.bg.map(color))
+            (cell.fg.unwrap_or(FG), cell.bg.map(color))
         };
         if let Some(b) = cell_bg {
             self.fill(col, row, 1, b);
         }
-        self.put(glyphs, col, row, cell.ch, fg);
-        if cell.underline != vt::Underline::None || cell.strikethrough {
+        if cell.invisible {
+            return;
+        }
+        if cell.blink {
+            self.blinks = true;
+            if !self.blink_on {
+                return;
+            }
+        }
+        let fg = rgba(fg[0], fg[1], fg[2], if cell.faint { 0x80 } else { 0xff });
+        let style = if cell.bold { BOLD } else { 0 } | if cell.italic { ITALIC } else { 0 };
+        if cell.ch != ' ' && col < self.cols && row < self.rows {
+            let r = glyphs.mono_styled(cell.ch, style);
+            let (x, y) = self.cell_px(col, row);
+            self.push_glyph(Quad { x, y, w: r.w, h: r.h, u: r.u, v: r.v, color: fg });
+        }
+        if cell.underline != vt::Underline::None || cell.strikethrough || cell.overline {
             self.decorations(col, row, cell, fg);
         }
     }

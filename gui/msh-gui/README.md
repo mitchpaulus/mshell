@@ -13,6 +13,9 @@ with your `init.msh`, so your bindings and abbreviations work at the prompt.
 `MSH_GUI_FONT` and `MSH_GUI_FONT_SIZE` pick the monospace font (default Noto Sans Mono, 15 px),
 for program output, the prompt and file previews;
 `MSH_GUI_UI_FONT` the proportional font of the app's own text (default Noto Sans), whose missing characters come from the monospace font.
+Bold and italic come from the files beside the monospace font (`NotoSansMono-Bold.ttf` beside `NotoSansMono-Regular.ttf`),
+or `MSH_GUI_FONT_BOLD`, `MSH_GUI_FONT_ITALIC` and `MSH_GUI_FONT_BOLD_ITALIC`; a style without a file is made from the nearest one,
+emboldened or slanted (Noto Sans Mono has no italic).
 
 - Not a terminal emulator: each command is a card (a header with the command, a status dot,
   its time and exit code, then its output, which alone runs in its own libghostty-vt terminal),
@@ -33,6 +36,11 @@ for program output, the prompt and file previews;
   A program on the alternate screen (`less`, `vim`, `htop`) gets the whole pane.
   The cursor takes the shape the program sets (block, bar, underline, hollow block: Neovim's modes),
   and underlines show in their five styles and colours (Neovim's spelling), as does strikethrough.
+  A cursor the program asks to blink blinks, but shows while you type; the program's cursor colour (OSC 12) is used.
+  While the window hasn't the keyboard, the cursor is a still, hollow block.
+  Text is bold, italic, faint, blinking, concealed or overlined as the program asks.
+  Synchronized output (mode 2026) is honoured: while a program redraws (Neovim does), the last frame stays, for up to a second.
+  The bell flashes the pane, and, when the window hasn't the keyboard, asks the desktop for attention.
 - Output is flow-controlled, as a terminal's is: a program writing without end (`cat /dev/random`) goes only as fast as
   the GUI draws it, memory stays bounded, frames keep coming, and Ctrl-C reaches it.
   A program that stops reading its input can't stall the engine or the GUI;
@@ -77,5 +85,5 @@ runs the app headless from a script of keys and writes the frame it would draw (
 ## Not yet
 
 Selection and copy, mouse reporting, image previews,
-resizing finished blocks, fallback fonts, wide characters and bold.
+resizing finished blocks, fallback fonts and wide characters.
 A cell shows its first code point, one cell wide.

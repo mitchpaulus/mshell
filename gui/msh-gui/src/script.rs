@@ -16,9 +16,12 @@
 //!   <wheel X Y N>   the wheel at pixel X, Y, N notches down (up when
 //!                   negative)
 //!   <back X Y>      the Back button at pixel X, Y
+//!   <blink off>     blinking text and cursors in their hidden phase
+//!                   (<blink on>, as at the start, in the shown one)
+//!   <focus off>     the window without the keyboard (<focus on>)
 //!   <sleep N>       N ms of real time, for the program to react
 
-use crate::render::{draw_cpu, Glyphs};
+use crate::render::{draw_cpu, Glyphs, MonoFaces};
 use crate::{App, UserEvent, BG, DRAIN_BUDGET};
 use msh_editor::keys::{KeyCode, MOD_ALT, MOD_CTRL};
 use std::sync::mpsc::Receiver;
@@ -34,6 +37,8 @@ enum Step {
     Click(f64, f64),
     Wheel(f64, f64, f32),
     Back(f64, f64),
+    Blink(bool),
+    Focus(bool),
 }
 
 /// TEXT with \r, \n and \xHH.
@@ -97,6 +102,14 @@ fn parse(script: &str) -> Result<Vec<Step>, String> {
                 let (x, y) = (x.parse().map_err(|_| usage())?, y.parse().map_err(|_| usage())?);
                 if name == "click" { Step::Click(x, y) } else { Step::Back(x, y) }
             }
+            "blink" | "focus" => {
+                let on = match arg {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err(format!("<{name} on> or <{name} off>")),
+                };
+                if name == "blink" { Step::Blink(on) } else { Step::Focus(on) }
+            }
             "wheel" => {
                 let usage = "<wheel X Y N>";
                 let mut it = arg.split(' ');
@@ -149,9 +162,11 @@ fn ready(app: &App) -> bool {
 
 pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols: u16, rows: u16) -> Result<(), String> {
     let steps = parse(script)?;
-    let glyphs = Glyphs::new(std::mem::take(&mut app.font), std::mem::take(&mut app.ui_font), app.font_size);
+    let glyphs = Glyphs::new(std::mem::take(&mut app.font), MonoFaces::beside(&app.font_path), std::mem::take(&mut app.ui_font), app.font_size);
     let (cw, ch) = (glyphs.cell.w, glyphs.cell.h);
     app.glyphs = Some(glyphs);
+    // Frames are the same each run: blinking things in their shown phase.
+    app.blink_fixed = Some(true);
     app.resize(cols as u32 * cw, rows as u32 * ch);
     pump(&mut app, &rx, ready)?;
     let mut now = 0i64;
@@ -192,6 +207,8 @@ pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols
                 app.pointer = (x, y);
                 app.back();
             }
+            Step::Blink(on) => app.blink_fixed = Some(on),
+            Step::Focus(on) => app.window_focused = on,
             Step::Sleep(ms) => {
                 let until = Instant::now() + Duration::from_millis(ms);
                 while let Some(left) = until.checked_duration_since(Instant::now()) {

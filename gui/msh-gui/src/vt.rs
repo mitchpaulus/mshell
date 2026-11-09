@@ -4,6 +4,11 @@
 
 use ghostty_vt_sys as g;
 use std::ptr;
+use std::time::{Duration, Instant};
+
+/// How long a program may hold the screen (synchronized output, mode
+/// 2026) before it is drawn anyway, as Ghostty does.
+const HOLD_MAX: Duration = Duration::from_secs(1);
 
 fn ok(r: g::GhosttyResult, what: &str) {
     assert!(r == g::GHOSTTY_SUCCESS, "{what}: GhosttyResult {r}");
@@ -25,6 +30,15 @@ pub struct Cell {
     /// The underline's own colour (SGR 58); None draws it in the text's.
     pub underline_color: Rgb,
     pub strikethrough: bool,
+    pub overline: bool,
+    pub bold: bool,
+    pub italic: bool,
+    /// Dim (SGR 2).
+    pub faint: bool,
+    /// Blinking text (SGR 5).
+    pub blink: bool,
+    /// Concealed (SGR 8): only the background shows.
+    pub invisible: bool,
 }
 
 /// An underline's style (SGR 4, and 4:1 to 4:5).
@@ -47,17 +61,26 @@ pub enum CursorShape {
     Underline,
 }
 
-/// The cursor where it is drawn: column and row of the viewport, and its
-/// shape.
+/// The cursor where it is drawn: column and row of the viewport, its
+/// shape, whether it blinks (DECSCUSR's odd shapes, mode 12), and its
+/// colour (OSC 12) when the program set one.
 #[derive(Clone, Copy, Debug)]
 pub struct Cursor {
     pub x: u16,
     pub y: u16,
     pub shape: CursorShape,
+    pub blinking: bool,
+    pub color: Rgb,
 }
 
+const STYLE_FLAG_BOLD: u16 = 1 << 0;
+const STYLE_FLAG_ITALIC: u16 = 1 << 1;
+const STYLE_FLAG_FAINT: u16 = 1 << 2;
+const STYLE_FLAG_BLINK: u16 = 1 << 3;
 const STYLE_FLAG_INVERSE: u16 = 1 << 4;
+const STYLE_FLAG_INVISIBLE: u16 = 1 << 5;
 const STYLE_FLAG_STRIKETHROUGH: u16 = 1 << 6;
+const STYLE_FLAG_OVERLINE: u16 = 1 << 7;
 const STYLE_UNDERLINE_MASK: u16 = 0b111 << g::GHOSTTY_STYLE_UNDERLINE_SHIFT;
 
 /// What the terminal's callbacks use, at a fixed address (their userdata).
@@ -66,6 +89,10 @@ struct Shared {
     /// reports, colours), in order, for the frontend to send to its PTY.
     replies: Vec<u8>,
     size: g::GhosttySizeReportSize,
+    /// Since when the program holds the screen (synchronized output).
+    held_since: Option<Instant>,
+    /// A BEL came since the last take_bell.
+    bell: bool,
 }
 
 unsafe extern "C" fn write_pty(_: g::GhosttyTerminal, userdata: *mut std::ffi::c_void, data: *const u8, len: usize) {
@@ -77,6 +104,17 @@ unsafe extern "C" fn report_size(_: g::GhosttyTerminal, userdata: *mut std::ffi:
     // SAFETY: userdata is the Term's Shared; out is valid.
     unsafe { *out = (*(userdata as *mut Shared)).size };
     true
+}
+
+unsafe extern "C" fn render_hold(_: g::GhosttyTerminal, userdata: *mut std::ffi::c_void, held: bool) {
+    // SAFETY: userdata is the Term's Shared.
+    let shared = unsafe { &mut *(userdata as *mut Shared) };
+    shared.held_since = held.then(Instant::now);
+}
+
+unsafe extern "C" fn bell(_: g::GhosttyTerminal, userdata: *mut std::ffi::c_void) {
+    // SAFETY: userdata is the Term's Shared.
+    unsafe { (*(userdata as *mut Shared)).bell = true };
 }
 
 unsafe extern "C" fn color_scheme(_: g::GhosttyTerminal, _: *mut std::ffi::c_void, out: *mut g::GhosttyColorScheme) -> bool {
@@ -111,7 +149,12 @@ unsafe impl Send for Term {}
 impl Term {
     pub fn new(cols: u16, rows: u16, colors: &Colors) -> Term {
         let mut t = Term {
-            shared: Box::new(Shared { replies: Vec::new(), size: g::GhosttySizeReportSize { rows, columns: cols, cell_width: 0, cell_height: 0 } }),
+            shared: Box::new(Shared {
+                replies: Vec::new(),
+                size: g::GhosttySizeReportSize { rows, columns: cols, cell_width: 0, cell_height: 0 },
+                held_since: None,
+                bell: false,
+            }),
             term: ptr::null_mut(),
             state: ptr::null_mut(),
             rows: ptr::null_mut(),
@@ -143,6 +186,8 @@ impl Term {
             set(g::GHOSTTY_TERMINAL_OPT_WRITE_PTY, write_pty as *const std::ffi::c_void);
             set(g::GHOSTTY_TERMINAL_OPT_SIZE, report_size as *const std::ffi::c_void);
             set(g::GHOSTTY_TERMINAL_OPT_COLOR_SCHEME, color_scheme as *const std::ffi::c_void);
+            set(g::GHOSTTY_TERMINAL_OPT_RENDER_HOLD, render_hold as *const std::ffi::c_void);
+            set(g::GHOSTTY_TERMINAL_OPT_BELL, bell as *const std::ffi::c_void);
             for (opt, [r, g_, b]) in [
                 (g::GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, colors.fg),
                 (g::GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, colors.bg),
@@ -159,6 +204,17 @@ impl Term {
     /// write to its PTY.
     pub fn take_replies(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.shared.replies)
+    }
+
+    /// Whether a BEL came since the last call.
+    pub fn take_bell(&mut self) -> bool {
+        std::mem::take(&mut self.shared.bell)
+    }
+
+    /// While the program holds the screen (synchronized output, mode
+    /// 2026), when the hold runs out and the screen is drawn anyway.
+    pub fn hold_ends(&self) -> Option<Instant> {
+        self.shared.held_since.map(|t| t + HOLD_MAX).filter(|&end| end > Instant::now())
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
@@ -226,10 +282,15 @@ impl Term {
     /// when it is visible there.
     pub fn visit(&mut self, from: usize, to: usize, mut f: impl FnMut(usize, usize, &Cell)) -> Option<Cursor> {
         let mut palette_read = false;
+        // While the program holds the screen, the last snapshot is drawn
+        // again: a half-made frame of Neovim's never shows.
+        let held = self.hold_ends().is_some();
         // SAFETY: all handles are live and owned by self; each out-pointer
         // points at the type its data kind documents.
         unsafe {
-            ok(g::ghostty_render_state_update(self.state, self.term), "render_state_update");
+            if !held {
+                ok(g::ghostty_render_state_update(self.state, self.term), "render_state_update");
+            }
             ok(
                 g::ghostty_render_state_get(
                     self.state,
@@ -328,6 +389,12 @@ impl Term {
                             underline,
                             underline_color,
                             strikethrough: style.flags & STYLE_FLAG_STRIKETHROUGH != 0,
+                            overline: style.flags & STYLE_FLAG_OVERLINE != 0,
+                            bold: style.flags & STYLE_FLAG_BOLD != 0,
+                            italic: style.flags & STYLE_FLAG_ITALIC != 0,
+                            faint: style.flags & STYLE_FLAG_FAINT != 0,
+                            blink: style.flags & STYLE_FLAG_BLINK != 0,
+                            invisible: style.flags & STYLE_FLAG_INVISIBLE != 0,
                         };
                         f(row, col, &cell);
                         col += 1;
@@ -350,7 +417,26 @@ impl Term {
                 g::GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW => CursorShape::HollowBlock,
                 _ => CursorShape::Block,
             };
-            (cursor.visible && cursor.viewport_has_value).then_some(Cursor { x: cursor.viewport_x, y: cursor.viewport_y, shape })
+            if !(cursor.visible && cursor.viewport_has_value) {
+                return None;
+            }
+            let mut has_color = false;
+            let mut rgb = g::GhosttyColorRgb::default();
+            g::ghostty_render_state_get(
+                self.state,
+                g::GHOSTTY_RENDER_STATE_DATA_COLOR_CURSOR_HAS_VALUE,
+                (&mut has_color as *mut bool).cast(),
+            );
+            if has_color {
+                g::ghostty_render_state_get(self.state, g::GHOSTTY_RENDER_STATE_DATA_COLOR_CURSOR, (&mut rgb as *mut g::GhosttyColorRgb).cast());
+            }
+            Some(Cursor {
+                x: cursor.viewport_x,
+                y: cursor.viewport_y,
+                shape,
+                blinking: cursor.blinking,
+                color: has_color.then_some([rgb.r, rgb.g, rgb.b]),
+            })
         }
     }
 
@@ -389,5 +475,82 @@ impl Drop for Term {
             g::ghostty_render_state_free(self.state);
             g::ghostty_terminal_free(self.term);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const COLORS: Colors = Colors { fg: [200, 200, 200], bg: [0, 0, 0], cursor: [200, 200, 200] };
+
+    /// The cells of the first row, and the cursor.
+    fn row(t: &mut Term) -> (Vec<(char, Underline, bool, bool, bool, bool, bool, bool, bool, Rgb)>, Option<Cursor>) {
+        let mut cells = Vec::new();
+        let cursor = t.visit(0, 1, |_, _, c| {
+            cells.push((c.ch, c.underline, c.bold, c.italic, c.faint, c.blink, c.invisible, c.overline, c.strikethrough, c.underline_color))
+        });
+        (cells, cursor)
+    }
+
+    #[test]
+    fn attributes() {
+        let mut t = Term::new(20, 3, &COLORS);
+        t.write(b"\x1b[1ma\x1b[0;3mb\x1b[0;2mc\x1b[0;5md\x1b[0;8me\x1b[0;53mf\x1b[0;9mg\x1b[0;4:3;58;2;1;2;3mh\x1b[0;4;58;5;1mi\x1b[0m");
+        let (cells, _) = row(&mut t);
+        let c = |i: usize| cells[i];
+        assert!(c(0).2 && !c(0).3, "bold");
+        assert!(c(1).3 && !c(1).2, "italic");
+        assert!(c(2).4, "faint");
+        assert!(c(3).5, "blink");
+        assert!(c(4).6, "invisible");
+        assert!(c(5).7, "overline");
+        assert!(c(6).8, "strikethrough");
+        assert_eq!((c(7).1, c(7).9), (Underline::Curly, Some([1, 2, 3])));
+        // A palette underline colour: index 1, red.
+        assert_eq!(c(8).1, Underline::Single);
+        assert!(c(8).9.is_some_and(|[r, g, b]| r > g && r > b), "palette underline colour {:?}", c(8).9);
+        assert_eq!(c(9).1, Underline::None);
+    }
+
+    #[test]
+    fn cursor_shape_and_blink() {
+        let mut t = Term::new(20, 3, &COLORS);
+        for (seq, shape, blinking) in [
+            (&b"\x1b[2 q"[..], CursorShape::Block, false),
+            (b"\x1b[5 q", CursorShape::Bar, true),
+            (b"\x1b[6 q", CursorShape::Bar, false),
+            (b"\x1b[3 q", CursorShape::Underline, true),
+        ] {
+            t.write(seq);
+            let k = row(&mut t).1.expect("a cursor");
+            assert_eq!((k.shape, k.blinking), (shape, blinking), "{seq:?}");
+        }
+        // A cursor colour the program sets (OSC 12).
+        t.write(b"\x1b]12;rgb:ff/00/00\x1b\\");
+        assert_eq!(row(&mut t).1.unwrap().color, Some([255, 0, 0]));
+    }
+
+    #[test]
+    fn synchronized_output_holds_the_frame() {
+        let mut t = Term::new(20, 3, &COLORS);
+        t.write(b"one");
+        assert_eq!(row(&mut t).0[0].0, 'o');
+        // Held: what is written meanwhile doesn't show until the hold ends.
+        t.write(b"\x1b[?2026h\r\x1b[2Ktwo");
+        assert!(t.hold_ends().is_some());
+        assert_eq!(row(&mut t).0[0].0, 'o');
+        t.write(b"\x1b[?2026l");
+        assert!(t.hold_ends().is_none());
+        assert_eq!(row(&mut t).0[0].0, 't');
+    }
+
+    #[test]
+    fn bell() {
+        let mut t = Term::new(20, 3, &COLORS);
+        assert!(!t.take_bell());
+        t.write(b"\x07");
+        assert!(t.take_bell());
+        assert!(!t.take_bell());
     }
 }
