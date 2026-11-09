@@ -3,14 +3,25 @@
 The mshell GUI, first version (`ai/gui-terminal.typ`, step 5 of "Suggested order of work"):
 one window, one pane of blocks, and the prompt edited locally.
 
+From `gui/`:
+
 ```
-../mshell/build.sh            # msh with `msh server` (from the repository root: mshell/build.sh)
 msh ghostty-vt-sys/fetch.msh  # once per OS: builds libghostty-vt into gui/third_party/ (Zig 0.17.x, ~5 min)
-cargo run --release -p msh-gui
+msh msh-gui/run.msh           # builds msh into gui/target/msh-engine/, then cargo run --release -p msh-gui with it
 ```
 
-It starts `msh server` (from `$MSH_BIN`, else the repository's `mshell/mshell`, else `msh` on `PATH`),
+`run.msh` passes its arguments on to msh-gui.
+It starts `msh server` (the msh given as an argument, else `$MSH_BIN`, else the repository's `mshell/mshell`
+(`mshell/msh.exe` on Windows), else `msh` on `PATH`),
 with your `init.msh`, so your bindings and abbreviations work at the prompt.
+
+On Windows, `msh server` runs on a pseudoconsole from Microsoft's ConPTY (`conpty.dll` and `OpenConsole.exe`),
+which msh-gui ships beside `msh-gui.exe` and names to the engine in `MSH_CONPTY`; msh alone never needs it.
+`msh msh-gui/fetch-conpty.msh` downloads the pinned package, checks it and unpacks it into `gui/third_party/`,
+where msh-gui and the engine's tests (`go test` in `mshell/`, `Server_windows_test.go`) find it;
+`run.msh` does this when it isn't there.
+`ai/windows-server-experiments.md` has why the ConPTY built into Windows won't do.
+
 `MSH_GUI_FONT` and `MSH_GUI_FONT_SIZE` pick the monospace font (default Noto Sans Mono, 15 px),
 for program output and file previews;
 `MSH_GUI_UI_FONT` the proportional font of the app's own text (default Noto Sans);
