@@ -42,6 +42,10 @@ for program output, the prompt and file previews;
   Its logic stays in the engine, so its keymap, `fmBindingAdd` bindings, quotations and previews are terminal msh's;
   the engine sends the view and the dialog sends the keys (`mshell/FileManagerGUI.go`).
   Entries have vector icons (a folder, a page), drawn from path data with swash's rasteriser.
+  The mouse acts on the press, not the release: a press on an entry puts the cursor on it (Ctrl-press selects it too),
+  and a second press there soon after opens it (`fmOpen`);
+  a press on a name in a directory's preview opens that directory with the cursor on the name, and a second opens the name.
+  The wheel scrolls the listing (or the help), the cursor kept in view, and the Back button goes to the parent.
   When it hands the terminal to a program (an editor), the dialog hides and the program runs in the pane.
 - Tabs hold panes, each with its own engine, laid out as a tiling window manager does.
   The window's keys come before the editor's and a program's:
@@ -65,6 +69,6 @@ runs the app headless from a script of keys and writes the frame it would draw (
 
 ## Not yet
 
-Selection and copy, mouse reporting, the mouse in the file manager, image previews,
+Selection and copy, mouse reporting, image previews,
 resizing finished blocks, fallback fonts, wide characters and bold.
 A cell shows its first code point, one cell wide.

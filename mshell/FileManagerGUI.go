@@ -11,7 +11,16 @@ package main
 //	0x0A fm_input   u8 kind, then by kind: 0 key: u32 key, u32 the key the
 //	                legacy encoding sent with ESC (0: none); 1 paste: the
 //	                text (rest); 2 resize: u16 cols, u16 rows of the dialog;
-//	                3 close.
+//	                3 close; 4 mouse: u8 action, i32 n, u32 name length,
+//	                name, child (rest). The actions: 0 point (the cursor to
+//	                entry n, named name), 1 open (point, then fmOpen), 2
+//	                toggle (point, then fmToggle), 3 into (entry n, the
+//	                cursor's directory, is opened, and the cursor goes to
+//	                child, a name in its preview), 4 scroll (n rows down,
+//	                up when negative), 5 parent (fmParent). A name is as
+//	                the view had it; an action whose entry is no longer
+//	                there does nothing. In a question or on the prompt line
+//	                the mouse does nothing.
 //
 // Engine to frontend:
 //
@@ -44,6 +53,16 @@ const (
 	fmInputPaste  = 1
 	fmInputResize = 2
 	fmInputClose  = 3
+	fmInputMouse  = 4
+)
+
+const (
+	fmMousePoint = iota
+	fmMouseOpen
+	fmMouseToggle
+	fmMouseInto
+	fmMouseScroll
+	fmMouseParent
 )
 
 type fmGUIInput struct {
@@ -52,6 +71,11 @@ type fmGUIInput struct {
 	escOf      KeyCode
 	text       string
 	cols, rows int
+	// A mouse action: what, its entry or rows, and the names.
+	mouse      byte
+	n          int
+	name       string
+	child      string
 }
 
 // fmGUI connects file managers to msh server's frontend.
@@ -107,8 +131,83 @@ func (fm *FileManager) guiNextInput() bool {
 		fm.adjustScroll()
 	case fmInputClose:
 		return true
+	case fmInputMouse:
+		return fm.guiMouse(in)
 	}
 	return false
+}
+
+// guiMouse runs a mouse action from the frontend. It reports whether the
+// file manager should end.
+func (fm *FileManager) guiMouse(in fmGUIInput) bool {
+	if fm.mode == fmModeInsert {
+		return false
+	}
+	// A press ends a key sequence that was waiting for more.
+	fm.keys.clear()
+	fm.popup = false
+	if in.mouse == fmMouseScroll {
+		fm.scrollRows(in.n)
+		return false
+	}
+	if fm.mode == fmModeHelp {
+		return false
+	}
+	fm.statusMsg = ""
+	if in.mouse == fmMouseParent {
+		return fm.runOp(fmOp{kind: fmOpParent}, 0) == fmEnd
+	}
+	// The entry the view showed, if it is still there.
+	if in.n < 0 || in.n >= len(fm.entries) || terminalSafeText(fm.entries[in.n].Name(), false) != in.name {
+		return false
+	}
+	switch in.mouse {
+	case fmMouseInto:
+		if in.n != fm.cursor || !fm.entries[in.n].IsDir() {
+			return false
+		}
+		if fm.runOp(fmOp{kind: fmOpOpen}, 0) == fmEnd {
+			return true
+		}
+		for i, e := range fm.entries {
+			if terminalSafeText(e.Name(), false) == in.child {
+				fm.cursor = i
+				fm.adjustScroll()
+				break
+			}
+		}
+		return false
+	case fmMousePoint, fmMouseOpen, fmMouseToggle:
+		fm.cursor = in.n
+		fm.adjustScroll()
+	default:
+		return false
+	}
+	switch in.mouse {
+	case fmMouseOpen:
+		return fm.runOp(fmOp{kind: fmOpOpen}, 0) == fmEnd
+	case fmMouseToggle:
+		fm.toggleCurrent()
+	}
+	return false
+}
+
+// scrollRows scrolls the listing, or the help, n rows down (up when n is
+// negative). The cursor stays in view: it moves with the edge it would
+// pass.
+func (fm *FileManager) scrollRows(n int) {
+	if fm.mode == fmModeHelp {
+		last := max(0, len(fm.helpLines())-fm.helpRows())
+		fm.helpOffset = min(max(fm.helpOffset+n, 0), last)
+		return
+	}
+	visible := fm.visibleRows()
+	if visible <= 0 || len(fm.entries) == 0 {
+		return
+	}
+	fm.offset = min(max(fm.offset+n, 0), max(0, len(fm.entries)-visible))
+	fm.cursor = min(max(fm.cursor, fm.offset), fm.offset+visible-1)
+	fm.clampCursor()
 }
 
 // guiQuestionKey reads the key that answers a question from the frontend.
@@ -127,6 +226,8 @@ func (fm *FileManager) guiQuestionKey() (KeyCode, bool) {
 			fm.render()
 		case fmInputPaste:
 			return 0, false
+		case fmInputMouse:
+			// A question is answered with a key.
 		case fmInputClose:
 			return 0, false
 		}

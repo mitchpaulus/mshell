@@ -16,7 +16,9 @@
 //!   Alt-'            next layout: everything, columns, right halves,
 //!                    right thirds
 //! A click on a tab shows it, on a pane focuses it; the wheel scrolls the
-//! pane under the pointer.
+//! pane under the pointer. In the file manager's dialog, presses act at
+//! once (Pane::fm_press), the wheel scrolls the listing, and the Back
+//! button goes to the parent directory.
 //!
 //! Usage: msh-gui [MSH]   (MSH: the msh binary; default $MSH_BIN, then the
 //!                         repository's mshell/mshell, then msh on PATH)
@@ -226,8 +228,9 @@ impl App {
             .collect()
     }
 
-    /// A click: on a tab, shows it; on a pane, focuses it.
-    fn click(&mut self) {
+    /// A click: on a tab, shows it; on a pane, focuses it, and in its file
+    /// manager's dialog acts on what it is on. `now` in ns.
+    fn click(&mut self, now: i64) {
         let (px, py) = (self.pointer.0 as usize, self.pointer.1 as usize);
         if py < self.bar_height() {
             let x = px as f32;
@@ -240,7 +243,52 @@ impl App {
         if let Some(i) = self.pane_at(px, py) {
             self.tabs[self.tab].focus = i;
             self.layout();
+            let (x, y) = self.in_pane(i);
+            let ctrl = self.mods.control_key();
+            let pane = &mut self.tabs[self.tab].panes[i];
+            if pane.fm.is_some() {
+                pane.fm_press(x, y, now, ctrl);
+            }
         }
+    }
+
+    /// The Back button: in a file manager's dialog, the parent directory.
+    fn back(&mut self) {
+        let (px, py) = (self.pointer.0 as usize, self.pointer.1 as usize);
+        if let Some(i) = self.pane_at(px, py) {
+            let pane = &mut self.tabs[self.tab].panes[i];
+            if pane.fm.is_some() {
+                let _ = pane.engine.fm_mouse(msh_client::FmMouse::Parent, 0, "", "");
+            }
+        }
+    }
+
+    /// The wheel over the pane under the pointer: it scrolls back through
+    /// the blocks, or its file manager's listing. Positive is up.
+    fn wheel(&mut self, delta: MouseScrollDelta) {
+        let (px, py) = (self.pointer.0 as usize, self.pointer.1 as usize);
+        let Some(i) = self.pane_at(px, py) else { return };
+        let cell_h = self.cell().1 as f32;
+        let p = &mut self.tabs[self.tab].panes[i];
+        if p.fm.is_some() {
+            let rows = match delta {
+                MouseScrollDelta::LineDelta(_, y) => y * 3.0,
+                MouseScrollDelta::PixelDelta(d) => d.y as f32 / p.fm_row(),
+            };
+            p.fm_wheel(-rows);
+            return;
+        }
+        let lines = match delta {
+            MouseScrollDelta::LineDelta(_, y) => y * 3.0,
+            MouseScrollDelta::PixelDelta(d) => d.y as f32 / cell_h,
+        };
+        p.scroll = (p.scroll as i64 + lines.round() as i64).max(0) as usize;
+    }
+
+    /// The pointer in the pixels of a pane of the tab shown.
+    fn in_pane(&self, i: usize) -> (f32, f32) {
+        let r = self.rects()[i].expect("a pane shown");
+        ((self.pointer.0 - r.x as f64) as f32, (self.pointer.1 - r.y as f64) as f32)
     }
 
     /// The shown pane under a pixel.
@@ -533,21 +581,16 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::CursorMoved { position, .. } => self.pointer = (position.x, position.y),
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
-                self.click();
+                let now = self.now();
+                self.click(now);
+                self.redraw();
+            }
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Back, .. } => {
+                self.back();
                 self.redraw();
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let cell_h = self.cell().1 as f32;
-                let lines = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y * 3.0,
-                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / cell_h,
-                };
-                // The pane under the pointer scrolls.
-                let (px, py) = (self.pointer.0 as usize, self.pointer.1 as usize);
-                if let Some(i) = self.pane_at(px, py) {
-                    let p = &mut self.tabs[self.tab].panes[i];
-                    p.scroll = (p.scroll as i64 + lines.round() as i64).max(0) as usize;
-                }
+                self.wheel(delta);
                 self.redraw();
             }
             WindowEvent::RedrawRequested => {

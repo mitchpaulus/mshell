@@ -20,6 +20,11 @@ func (s *server) fmInput(p []byte) {
 	case in.kind == fmInputResize && len(p) >= 5:
 		in.cols, in.rows = int(le.Uint16(p[1:])), int(le.Uint16(p[3:]))
 	case in.kind == fmInputClose:
+	case in.kind == fmInputMouse && len(p) >= 10 && uint64(le.Uint32(p[6:])) <= uint64(len(p)-10):
+		in.mouse, in.n = p[1], int(int32(le.Uint32(p[2:])))
+		name := p[10:]
+		n := le.Uint32(p[6:])
+		in.name, in.child = string(name[:n]), string(name[n:])
 	default:
 		s.protocolError("malformed fm_input")
 	}

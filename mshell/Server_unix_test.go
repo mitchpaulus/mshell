@@ -771,6 +771,110 @@ func TestServerFileManagerGUI(t *testing.T) {
 	}
 }
 
+// The mouse in the file manager: entries are pointed at, opened, toggled
+// and scrolled by what the view showed, and stale ones do nothing.
+func TestServerFileManagerGUIMouse(t *testing.T) {
+	c := startServer(t)
+	le := binary.LittleEndian
+	dir := t.TempDir()
+	for _, d := range []string{"sub/inner", "sub/x"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 30 {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%02d", i)), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type view struct {
+		names  []string
+		cursor int
+	}
+	next := func() view {
+		t.Helper()
+		for {
+			e := c.next()
+			if e.kind == serverMsgFmView {
+				_, names, cursor := decodeFmView(t, e.data)
+				return view{names, cursor}
+			}
+			if e.kind == serverMsgBlockFinished {
+				t.Fatalf("block finished before a view")
+			}
+		}
+	}
+	// The views until one is as wanted: previews loading send more.
+	until := func(what string, ok func(view) bool) {
+		t.Helper()
+		for v := next(); !ok(v); v = next() {
+			t.Logf("%s: %q, cursor %d", what, v.names, v.cursor)
+		}
+	}
+	mouse := func(action byte, n int, name, child string) {
+		p := append([]byte{fmInputMouse, action}, le.AppendUint32(nil, uint32(int32(n)))...)
+		p = le.AppendUint32(p, uint32(len(name)))
+		c.send(serverMsgFmInput, append(append(p, name...), child...))
+	}
+	c.run(1, "'"+dir+"' mshFileManager")
+	c.started(1)
+	next()
+	// 10 rows: a header, 8 entries, the summary.
+	c.send(serverMsgFmInput, append([]byte{fmInputResize}, append(le.AppendUint16(nil, 80), le.AppendUint16(nil, 10)...)...))
+	until("resize", func(v view) bool { return len(v.names) == 8 && v.names[0] == "sub" && v.cursor == 0 })
+	mouse(fmMousePoint, 3, "f02", "")
+	until("point", func(v view) bool { return v.cursor == 3 })
+	// A name that is not the entry's: the view was stale, and the cursor
+	// stays, so j takes it to 4.
+	mouse(fmMousePoint, 5, "f02", "")
+	c.send(serverMsgFmInput, append([]byte{fmInputKey}, append(le.AppendUint32(nil, uint32('j')), 0, 0, 0, 0)...))
+	until("stale point, j", func(v view) bool { return v.cursor == 4 || v.cursor == 6 })
+	// Scrolling keeps the cursor in view; past the end it stops.
+	mouse(fmMouseScroll, 6, "", "")
+	until("scroll", func(v view) bool { return v.names[0] == "f05" && v.cursor == 0 })
+	mouse(fmMouseScroll, 100, "", "")
+	until("scroll to the end", func(v view) bool { return v.names[0] == "f22" && v.names[7] == "f29" && v.cursor == 0 })
+	mouse(fmMouseScroll, -100, "", "")
+	until("scroll to the top", func(v view) bool { return v.names[0] == "sub" && v.cursor == 7 })
+	// Into: the cursor's directory opens, at the child clicked in its
+	// preview; only for the entry under the cursor.
+	mouse(fmMousePoint, 0, "sub", "")
+	until("point at sub", func(v view) bool { return v.cursor == 0 })
+	mouse(fmMouseInto, 1, "f00", "x")
+	mouse(fmMouseInto, 0, "sub", "x")
+	until("into", func(v view) bool { return len(v.names) == 2 && v.names[0] == "inner" && v.cursor == 1 })
+	// Parent, and open, which enters a directory.
+	mouse(fmMouseParent, 0, "", "")
+	until("parent", func(v view) bool { return v.names[0] == "sub" && v.cursor == 0 })
+	mouse(fmMouseOpen, 0, "sub", "")
+	until("open", func(v view) bool { return len(v.names) == 2 && v.names[0] == "inner" && v.cursor == 0 })
+	// Toggle selects the entry, under the cursor: the clipboard status
+	// counts it.
+	mouse(fmMouseToggle, 1, "x", "")
+	for {
+		e := c.next()
+		if e.kind != serverMsgFmView {
+			continue
+		}
+		b := e.data[1:]
+		b = b[4+le.Uint32(b):]
+		clip := string(b[4 : 4+le.Uint32(b)])
+		if _, _, cursor := decodeFmView(t, e.data); cursor == 1 && strings.Contains(clip, "SELECTED 1") {
+			break
+		}
+	}
+	c.send(serverMsgFmInput, []byte{fmInputClose})
+	for {
+		e := c.next()
+		if e.kind == serverMsgFmView && e.data[0]&1 == 0 {
+			break
+		}
+	}
+	if _, code := c.rest(1); code != 0 {
+		t.Fatalf("file manager block: exit %d", code)
+	}
+}
+
 func TestServerHistory(t *testing.T) {
 	c := startServer(t)
 	le := binary.LittleEndian

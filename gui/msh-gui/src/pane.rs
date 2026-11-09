@@ -4,7 +4,7 @@
 use crate::keys::key_label;
 use crate::render::{rgba, Glyphs, Icon, Quad};
 use crate::vt;
-use msh_client::{Engine, EngineHost, Event, FmView};
+use msh_client::{Engine, EngineHost, Event, FmMouse, FmView};
 use msh_editor::edit::{EditOp, Line};
 use msh_editor::graphemes::clusters;
 use msh_editor::keys::KeyCode;
@@ -169,6 +169,10 @@ pub struct Pane {
     /// last given it.
     pub fm: Option<FmView>,
     fm_size: (u16, u16),
+    /// The dialog's last press, for a double press, and the wheel's
+    /// fraction of a row not yet scrolled.
+    fm_press: Option<FmPress>,
+    fm_wheel: f32,
     /// How the line would run: Some(true) as a command line, Some(false) as
     /// mshell, None for an empty line; and the history suggestion after it.
     /// The engine answers both, for each change to the line.
@@ -203,6 +207,8 @@ impl Pane {
             pending_ops: HashMap::new(),
             fm: None,
             fm_size: (0, 0),
+            fm_press: None,
+            fm_wheel: 0.0,
             line_kind: None,
             suggestion: String::new(),
             lexer: Lexer::editor(),
@@ -255,8 +261,87 @@ impl Pane {
     }
 
     /// The dialog's row height: roomier than a cell.
-    fn fm_row(&self) -> f32 {
+    pub fn fm_row(&self) -> f32 {
         (self.cell.1 as f32 * 1.4).round()
+    }
+
+    /// Where the dialog's parts are, for drawing it and for the mouse.
+    fn fm_layout(&self) -> FmLayout {
+        let (x0, y0, w, h) = self.fm_rect();
+        let row = self.fm_row();
+        FmLayout { x0, y0, w, h, row, body: y0 + row, rows: ((h / row) as usize).saturating_sub(2), left: (w * 0.42).round() }
+    }
+
+    /// What is under a point of the pane, in pixels, in the dialog.
+    fn fm_hit(&self, x: f32, y: f32) -> Option<FmHit> {
+        let v = self.fm.as_ref()?;
+        let l = self.fm_layout();
+        if v.help || x < l.x0 || x >= l.x0 + l.w || y < l.body {
+            return None;
+        }
+        let i = ((y - l.body) / l.row) as usize;
+        if i >= l.rows {
+            return None;
+        }
+        if x < l.x0 + l.left {
+            return (i < v.entries.len()).then_some(FmHit::Entry(i));
+        }
+        let child = v.preview.get(i).filter(|_| v.preview_dir).map(|line| preview_name(line).0)?;
+        Some(FmHit::Child(child))
+    }
+
+    /// A press in the file manager's dialog, at a point of the pane in
+    /// pixels, `now` in ns. It acts as it comes, not on the release: on an
+    /// entry the cursor goes to it (with Ctrl, it is selected or not too),
+    /// and pressed again soon after, it opens; on a directory's entry in
+    /// the preview, the directory opens with the cursor on it, and pressed
+    /// again soon after, it opens too.
+    pub fn fm_press(&mut self, x: f32, y: f32, now: i64, ctrl: bool) {
+        let Some(v) = &self.fm else { return };
+        let hit = self.fm_hit(x, y);
+        // The second press of a double: on what the first was.
+        if let Some(last) = self.fm_press.take() {
+            if !ctrl && now - last.at < DOUBLE_PRESS_NS && (x - last.x).abs() <= 4.0 && (y - last.y).abs() <= 4.0 {
+                let (n, name) = match last.on {
+                    FmPressOn::Entry(n, name) => (n, name),
+                    // The child is under the cursor now.
+                    FmPressOn::Child(child) => match v.entries.iter().position(|e| e.cursor && e.name == child) {
+                        Some(i) => (v.offset as i32 + i as i32, child),
+                        None => return,
+                    },
+                };
+                let _ = self.engine.fm_mouse(FmMouse::Open, n, &name, "");
+                return;
+            }
+        }
+        let on = match hit {
+            Some(FmHit::Entry(i)) => {
+                let (n, name) = (v.offset as i32 + i as i32, v.entries[i].name.clone());
+                let action = if ctrl { FmMouse::Toggle } else { FmMouse::Point };
+                let _ = self.engine.fm_mouse(action, n, &name, "");
+                FmPressOn::Entry(n, name)
+            }
+            Some(FmHit::Child(child)) => {
+                let Some(i) = v.entries.iter().position(|e| e.cursor) else { return };
+                let _ = self.engine.fm_mouse(FmMouse::Into, v.offset as i32 + i as i32, &v.entries[i].name, &child);
+                FmPressOn::Child(child)
+            }
+            None => return,
+        };
+        if !ctrl {
+            self.fm_press = Some(FmPress { x, y, at: now, on });
+        }
+    }
+
+    /// The wheel in the file manager's dialog: `rows` down, up when
+    /// negative, fractions kept for the next.
+    pub fn fm_wheel(&mut self, rows: f32) {
+        self.fm_wheel += rows;
+        let n = self.fm_wheel.trunc();
+        self.fm_wheel -= n;
+        if n != 0.0 {
+            let _ = self.engine.fm_mouse(FmMouse::Scroll, n as i32, "", "");
+        }
     }
 
     /// Tells the file manager the dialog's size, when it changed: rows of
@@ -686,8 +771,7 @@ impl Pane {
     /// The app's own text is in the UI font; the preview, which shows files,
     /// is monospace.
     fn compose_fm(&mut self, cv: &mut Canvas, glyphs: &mut Glyphs, focused: bool) {
-        let (x0, y0, w, h) = self.fm_rect();
-        let row = self.fm_row();
+        let FmLayout { x0, y0, w, h, row, body, rows, left } = self.fm_layout();
         let (cw, ch) = (self.cell.0 as f32, self.cell.1 as f32);
         let Some(v) = &self.fm else { return };
         let pad = 10.0;
@@ -697,14 +781,11 @@ impl Pane {
         let clip_w = glyphs.ui_width(&v.clipboard);
         cv.ui_text(glyphs, x0 + w - pad - clip_w, y0, row, &v.clipboard, color(CLIP), clip_w + 1.0);
         cv.ui_text(glyphs, x0 + pad, y0, row, &v.header, color(FG), w - 3.0 * pad - clip_w);
-        let body = y0 + row;
-        let rows = ((h / row) as usize).saturating_sub(2);
         if v.help {
             for (i, line) in v.preview.iter().take(rows).enumerate() {
                 cv.ui_text(glyphs, x0 + pad, body + i as f32 * row, row, line.trim_start(), color(FG), w - 2.0 * pad);
             }
         } else {
-            let left = (w * 0.42).round();
             let icon = (row * 0.62).round() as u32;
             for (i, e) in v.entries.iter().take(rows).enumerate() {
                 let y = body + i as f32 * row;
@@ -752,12 +833,8 @@ impl Pane {
                     cv.ui_text(glyphs, px, body, row, "empty", color(DIM), room);
                 }
                 for (i, line) in v.preview.iter().take(rows).enumerate() {
-                    let text: String = sgr_spans(line).into_iter().map(|(t, _)| t).collect();
-                    let name = text.trim_start();
-                    let (name, dir) = match name.strip_suffix('/') {
-                        Some(n) => (n, true),
-                        None => (name, false),
-                    };
+                    let (name, dir) = preview_name(line);
+                    let name = name.as_str();
                     let y = body + i as f32 * row;
                     let iy = y + ((row - icon as f32) / 2.0).round();
                     if dir {
@@ -834,6 +911,56 @@ impl Pane {
             }
             cv.on_top = false;
         }
+    }
+}
+
+/// Where the file manager dialog's parts are, in pixels of the pane: its
+/// rectangle, the row height, where the body starts and the rows it has,
+/// and the width of the entries' column.
+struct FmLayout {
+    x0: f32,
+    y0: f32,
+    w: f32,
+    h: f32,
+    row: f32,
+    body: f32,
+    rows: usize,
+    left: f32,
+}
+
+/// What a point of the dialog is on: an entry shown (by its row), or a name
+/// in a directory's preview.
+enum FmHit {
+    Entry(usize),
+    Child(String),
+}
+
+/// A press in the dialog: where, when, and what it was on (an entry of the
+/// listing by its index and name, or a name in the preview).
+struct FmPress {
+    x: f32,
+    y: f32,
+    at: i64,
+    on: FmPressOn,
+}
+
+enum FmPressOn {
+    Entry(i32, String),
+    Child(String),
+}
+
+/// A second press this soon after the first, at its place, is a double
+/// press.
+const DOUBLE_PRESS_NS: i64 = 400_000_000;
+
+/// A line of a directory's preview: the name, and whether it is a
+/// directory's (" name", " name/", coloured).
+fn preview_name(line: &str) -> (String, bool) {
+    let text: String = sgr_spans(line).into_iter().map(|(t, _)| t).collect();
+    let name = text.trim_start();
+    match name.strip_suffix('/') {
+        Some(n) => (n.to_string(), true),
+        None => (name.to_string(), false),
     }
 }
 

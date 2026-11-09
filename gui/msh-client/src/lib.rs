@@ -396,6 +396,18 @@ impl Engine {
         self.send(MSG_FM_INPUT, &p, &[])
     }
 
+    /// A mouse action in the file manager (FileManagerGUI.go): on entry
+    /// `n` of the listing, named `name` as the view had it, and for
+    /// [`FmMouse::Into`] the name `child` in its preview; for
+    /// [`FmMouse::Scroll`], `n` rows down.
+    pub fn fm_mouse(&mut self, action: FmMouse, n: i32, name: &str, child: &str) -> io::Result<()> {
+        let mut p = vec![4u8, action as u8];
+        p.extend_from_slice(&n.to_le_bytes());
+        p.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        p.extend_from_slice(name.as_bytes());
+        self.send(MSG_FM_INPUT, &p, child.as_bytes())
+    }
+
     pub fn fm_close(&mut self) -> io::Result<()> {
         self.send(MSG_FM_INPUT, &[3], &[])
     }
@@ -732,6 +744,22 @@ fn op_member(op: &EditOp) -> Option<&'static str> {
         EditOp::LastArg => "editLastArg",
         _ => return None,
     })
+}
+
+/// What a press or the wheel does in the file manager.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FmMouse {
+    /// The cursor to the entry.
+    Point = 0,
+    /// The cursor to the entry, then fmOpen.
+    Open = 1,
+    /// The cursor to the entry, then fmToggle.
+    Toggle = 2,
+    /// The entry, the cursor's directory, opens, at the child.
+    Into = 3,
+    Scroll = 4,
+    /// fmParent.
+    Parent = 5,
 }
 
 /// The file manager's view (FileManagerGUI.go).

@@ -11,7 +11,11 @@
 //!   <idle N>        N ms more between this key and the next (for timings)
 //!   <input TEXT>    TEXT, raw, to the running program's PTY (\r, \n, \xHH)
 //!   <scroll N>      the view N rows up from the bottom
-//!   <click X Y>     a click at pixel X, Y
+//!   <click X Y>     a click at pixel X, Y (at the script's time: two
+//!                   with no <idle> between are a double click)
+//!   <wheel X Y N>   the wheel at pixel X, Y, N notches down (up when
+//!                   negative)
+//!   <back X Y>      the Back button at pixel X, Y
 //!   <sleep N>       N ms of real time, for the program to react
 
 use crate::render::{draw_cpu, Glyphs};
@@ -28,6 +32,8 @@ enum Step {
     Sleep(u64),
     Scroll(usize),
     Click(f64, f64),
+    Wheel(f64, f64, f32),
+    Back(f64, f64),
 }
 
 /// TEXT with \r, \n and \xHH.
@@ -85,9 +91,18 @@ fn parse(script: &str) -> Result<Vec<Step>, String> {
             "sleep" => Step::Sleep(arg.parse().map_err(|_| "<sleep N>")?),
             "input" => Step::Input(unescape(arg)?),
             "scroll" => Step::Scroll(arg.parse().map_err(|_| "<scroll N>")?),
-            "click" => {
-                let (x, y) = arg.split_once(' ').ok_or("<click X Y>")?;
-                Step::Click(x.parse().map_err(|_| "<click X Y>")?, y.parse().map_err(|_| "<click X Y>")?)
+            "click" | "back" => {
+                let usage = || format!("<{name} X Y>");
+                let (x, y) = arg.split_once(' ').ok_or_else(usage)?;
+                let (x, y) = (x.parse().map_err(|_| usage())?, y.parse().map_err(|_| usage())?);
+                if name == "click" { Step::Click(x, y) } else { Step::Back(x, y) }
+            }
+            "wheel" => {
+                let usage = "<wheel X Y N>";
+                let mut it = arg.split(' ');
+                let mut num = || it.next().and_then(|v| v.parse::<f64>().ok()).ok_or(usage);
+                let (x, y, n) = (num()?, num()?, num()?);
+                Step::Wheel(x, y, n as f32)
             }
             _ if name.len() == 3 && (name.starts_with("C-") || name.starts_with("A-")) => {
                 let c = name.chars().nth(2).unwrap();
@@ -167,7 +182,15 @@ pub fn run(mut app: App, rx: Receiver<UserEvent>, script: &str, dump: &str, cols
             }
             Step::Click(x, y) => {
                 app.pointer = (x, y);
-                app.click();
+                app.click(now);
+            }
+            Step::Wheel(x, y, n) => {
+                app.pointer = (x, y);
+                app.wheel(winit::event::MouseScrollDelta::LineDelta(0.0, -n));
+            }
+            Step::Back(x, y) => {
+                app.pointer = (x, y);
+                app.back();
             }
             Step::Sleep(ms) => {
                 let until = Instant::now() + Duration::from_millis(ms);
