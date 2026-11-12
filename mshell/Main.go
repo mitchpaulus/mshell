@@ -5143,6 +5143,8 @@ func defaultAppCommand(path string, goos string) (string, []string, error) {
 	}
 }
 
+// runAttachedCommand runs a program with the terminal attached, as an
+// editor needs.
 var runAttachedCommand = func(name string, args []string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Stdin = os.Stdin
@@ -5151,30 +5153,238 @@ var runAttachedCommand = func(name string, args []string) error {
 	return cmd.Run()
 }
 
+// defaultOpenerTimeout is how long msh waits for the default opener.
+const defaultOpenerTimeout = 10 * time.Second
+
+var errDefaultOpenerTimedOut = errors.New("default opener timed out")
+
+// runDefaultOpener runs the platform's default opener and returns what it
+// wrote to stderr. Stderr goes to a temporary file rather than a pipe: a
+// program the opener starts in the background keeps the opener's stderr,
+// and waiting on a pipe would wait for that program to exit.
+var runDefaultOpener = func(name string, args []string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultOpenerTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = nil
+
+	stderrFile, tempErr := os.CreateTemp("", "msh-opener-*.txt")
+	if tempErr == nil {
+		defer os.Remove(stderrFile.Name())
+		defer stderrFile.Close()
+		cmd.Stderr = stderrFile
+	}
+
+	err := cmd.Run()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = errDefaultOpenerTimedOut
+	}
+
+	output := ""
+	if tempErr == nil {
+		if _, seekErr := stderrFile.Seek(0, io.SeekStart); seekErr == nil {
+			data, _ := io.ReadAll(io.LimitReader(stderrFile, 8192))
+			output = string(data)
+		}
+	}
+	return output, err
+}
+
+// openFileError says why a file could not be opened: what msh tried, how
+// each attempt went, and what the user can do about it.
+type openFileError struct {
+	steps []string
+	hint  string
+}
+
+func (e *openFileError) Error() string {
+	text := strings.Join(e.steps, "\n")
+	if e.hint != "" {
+		text += "\n" + e.hint
+	}
+	return text
+}
+
+// describeStartFailure says why program could not be started. label
+// names the program in the message, for example "The editor in EDITOR
+// (nvim)".
+func describeStartFailure(label string, program string, err error) string {
+	// An *exec.Error means the program was not found before starting it.
+	// Any other error came from the system when starting it.
+	var lookErr *exec.Error
+	if errors.As(err, &lookErr) {
+		switch {
+		case errors.Is(err, exec.ErrNotFound):
+			return fmt.Sprintf("%s was not found on PATH.", label)
+		case errors.Is(err, os.ErrNotExist):
+			return fmt.Sprintf("%s does not exist.", label)
+		case errors.Is(err, os.ErrPermission):
+			return fmt.Sprintf("%s is not executable.", label)
+		default:
+			return fmt.Sprintf("%s could not be found: %s", label, lookErr.Err)
+		}
+	}
+
+	// A program named by a path is not looked up first, so a missing or
+	// non-executable file shows up here, when starting it.
+	if !strings.ContainsAny(program, `/\`) {
+		if resolved, err := exec.LookPath(program); err == nil {
+			program = resolved
+		}
+	}
+	info, statErr := os.Stat(program)
+	switch {
+	case errors.Is(statErr, os.ErrNotExist):
+		return fmt.Sprintf("%s does not exist.", label)
+	case statErr == nil && info.IsDir():
+		return fmt.Sprintf("%s is a directory, not a program.", label)
+	case statErr == nil && runtime.GOOS != "windows" && info.Mode()&0111 == 0:
+		return fmt.Sprintf("%s is not executable.", label)
+	}
+
+	reason := err
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		reason = pathErr.Err
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Sprintf("%s exists, but could not be started: %s. If it is a script, the interpreter on its #! line may be missing.", label, reason)
+	}
+	return fmt.Sprintf("%s could not be started: %s.", label, reason)
+}
+
+// indentOutput indents each line of a program's output under a step.
+func indentOutput(output string) string {
+	lines := strings.Split(strings.TrimRight(output, "\r\n \t"), "\n")
+	for i, line := range lines {
+		lines[i] = "    " + strings.TrimRight(line, "\r")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// xdgOpenExitMeaning says what an xdg-open exit status means, from the
+// xdg-open manual.
+func xdgOpenExitMeaning(code int) string {
+	switch code {
+	case 1:
+		return "xdg-open rejected its arguments."
+	case 2:
+		return "xdg-open could not find the file."
+	case 3:
+		return "xdg-open found no program it could use to open this kind of file."
+	case 4:
+		return "xdg-open started a program to open the file, and that program failed."
+	case 5:
+		return "xdg-open does not have permission to read the file."
+	default:
+		return ""
+	}
+}
+
+// openPathInEditorOrDefaultApp opens path in EDITOR. When EDITOR is not
+// set, or its program cannot be started, it opens path with the
+// platform's default opener. An editor that starts and then fails is
+// reported as is: the default opener is not tried after it.
 func openPathInEditorOrDefaultApp(path string) error {
+	failure := &openFileError{}
+
 	editor := strings.TrimSpace(os.Getenv("EDITOR"))
-	if editor != "" {
-		if err := runAttachedCommand(editor, []string{path}); err == nil {
+	editorHint := ""
+	if editor == "" {
+		failure.steps = append(failure.steps, "EDITOR is not set, so msh tried the system's default opener.")
+		editorHint = "To fix this, set EDITOR to the editor you use (for example, nvim), or open the file yourself."
+	} else {
+		err := runAttachedCommand(editor, []string{path})
+		if err == nil {
 			return nil
 		}
+
+		label := fmt.Sprintf("The editor in EDITOR (%s)", editor)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			failure.steps = append(failure.steps, fmt.Sprintf("%s started, but failed: %s.", label, exitErr))
+			failure.hint = "The editor's own messages, if it printed any, are above."
+			return failure
+		}
+
+		failure.steps = append(failure.steps, describeStartFailure(label, editor, err))
+		if fields := strings.Fields(editor); len(fields) > 1 {
+			if _, lookErr := exec.LookPath(fields[0]); lookErr == nil {
+				failure.steps = append(failure.steps, fmt.Sprintf("msh runs EDITOR as one program name and does not split arguments off it, so it looked for a program named '%s' rather than running %s with arguments.", editor, fields[0]))
+			}
+		}
+		failure.steps = append(failure.steps, "msh then tried the system's default opener.")
+		editorHint = "To fix this, set EDITOR to the name of an editor on PATH or to the full path of one, or open the file yourself."
 	}
 
 	command, args, err := defaultAppCommand(path, runtime.GOOS)
 	if err != nil {
-		return err
+		failure.steps = append(failure.steps, err.Error()+".")
+		failure.hint = editorHint
+		return failure
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Stdin = nil
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("default opener timed out")
-		}
-		return err
+	output, err := runDefaultOpener(command, args)
+	if err == nil {
+		return nil
 	}
-	return nil
+
+	var exitErr *exec.ExitError
+	switch {
+	case errors.Is(err, errDefaultOpenerTimedOut):
+		failure.steps = append(failure.steps, fmt.Sprintf("The default opener (%s) did not finish within %s, so msh stopped it.", command, defaultOpenerTimeout))
+	case errors.As(err, &exitErr):
+		failure.steps = append(failure.steps, fmt.Sprintf("The default opener (%s) failed: %s.", command, exitErr))
+		if command == "xdg-open" {
+			if meaning := xdgOpenExitMeaning(exitErr.ExitCode()); meaning != "" {
+				failure.steps = append(failure.steps, meaning)
+			}
+		}
+	default:
+		failure.steps = append(failure.steps, describeStartFailure(fmt.Sprintf("The default opener (%s)", command), command, err))
+		if command == "xdg-open" && errors.Is(err, exec.ErrNotFound) {
+			failure.steps = append(failure.steps, "xdg-open usually comes in the xdg-utils package.")
+		}
+	}
+
+	if strings.TrimSpace(output) != "" {
+		failure.steps = append(failure.steps, fmt.Sprintf("%s printed:\n%s", command, indentOutput(output)))
+	}
+
+	// xdg-open only starts graphical programs when one of these is set.
+	ranOpener := exitErr != nil || errors.Is(err, errDefaultOpenerTimedOut)
+	if command == "xdg-open" && ranOpener && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+		failure.steps = append(failure.steps, "Neither DISPLAY nor WAYLAND_DISPLAY is set, so xdg-open cannot start a graphical program. A shell started outside the desktop session, for example through sudo, su, or ssh, often lacks them. In WSL, WSLg sets them.")
+	}
+
+	failure.hint = editorHint
+	return failure
+}
+
+// printOpenFileError reports that the file at path, described by
+// description (for example "user init file for v0.14.0"), could not be
+// opened for editing.
+func printOpenFileError(description string, path string, err error) {
+	fmt.Fprintf(os.Stderr, "Error: could not open the %s: %s\n", description, path)
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+		if _, dirErr := os.Stat(filepath.Dir(path)); errors.Is(dirErr, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "  The file does not exist yet, and neither does its directory %s.\n", filepath.Dir(path))
+		} else {
+			fmt.Fprintln(os.Stderr, "  The file does not exist yet.")
+		}
+	}
+
+	var openErr *openFileError
+	if !errors.As(err, &openErr) {
+		fmt.Fprintf(os.Stderr, "  %s\n", err)
+		return
+	}
+	for _, step := range openErr.steps {
+		fmt.Fprintf(os.Stderr, "  %s\n", step)
+	}
+	if openErr.hint != "" {
+		fmt.Fprintln(os.Stderr, openErr.hint)
+	}
 }
 
 func binAddCommand(nameArg string, pathArg string) int {
@@ -5305,7 +5515,7 @@ func binEditCommand() int {
 	}
 
 	if err := openPathInEditorOrDefaultApp(path); err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening bin map file: %s\n", err)
+		printOpenFileError("bin map file", path, err)
 		return 1
 	}
 
@@ -5324,7 +5534,7 @@ func editInitCommand() int {
 	}
 
 	if err := openPathInEditorOrDefaultApp(initSpec.path); err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening init file: %s\n", err)
+		printOpenFileError(initSpec.description, initSpec.path, err)
 		return 1
 	}
 

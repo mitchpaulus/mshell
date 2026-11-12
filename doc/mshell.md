@@ -324,7 +324,7 @@ Process substitution is done using the `psub` operator.
 - When `VER` is present, the version-specific `init.msh` is required.
 - When `VER` is present, `MSHSTDLIB` and `MSHINIT` are cleared so startup comes from the versioned locations.
 - `MSHSTDLIB` and `MSHINIT` only override startup for interactive use and scripts without `VER`.
-- `msh edit init` opens the current init file path using `$EDITOR`; if `$EDITOR` is unavailable, it falls back to the platform default opener (`xdg-open` on Linux, `open` on macOS, `Start-Process` via PowerShell on Windows).
+- `msh edit init` opens the current init file path using `$EDITOR`; if `$EDITOR` is not set or cannot be started, it falls back to the platform default opener (`xdg-open` on Linux, `open` on macOS, `Start-Process` via PowerShell on Windows).
 
 ## Tilde Substitution
 

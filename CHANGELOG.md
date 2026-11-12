@@ -129,6 +129,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- When `msh edit init` or `msh bin edit` cannot open the file, the error names the file and says what was tried and why each attempt failed:
+  `EDITOR` not set, not found, not executable, or exited with an error, and the default opener (`xdg-open`, `open`, or PowerShell) missing, timing out, or failing, with its output.
+  An editor that starts and then fails is reported, instead of also running the default opener.
 - Tab completion matches a word anywhere in a candidate when nothing starts with it, so `ctl` finds `systemctl`.
   Lowercase words ignore case everywhere, and a word with an uppercase letter prefers candidates with the same case.
   Only the best kind of match is offered, and a word starting with `-` still only matches from the start.
