@@ -104,7 +104,26 @@ func TestCoreChecker(t *testing.T) {
 		{`true if 5 else "x" parseJson end drop`, true, ""},
 		{`true if [1] else "x" parseJson end drop`, true, ""},
 		{`[1] xs! true if @xs else "x" parseJson end drop`, false, "no common type"},
-		{`true if 1 else end`, false, "differing sizes"},
+		{`true if 1 else end`, false, "differing sizes:\n" +
+			"  1 arm leaves 1 value:\n    the `if` branch (line 1): (int)\n" +
+			"  1 arm leaves 0 values:\n    the missing `else` (line 1)"},
+		// Only the arm whose stack size differs from most is named; arms
+		// that never reach the end are counted apart.
+		{"\"a\" match\n \"1\": 1,\n \"2\": 1 exit,\n \"3\": 1 2,\n _: 1\nend", false, "differing sizes:\n" +
+			"  2 arms leave 1 value\n" +
+			"  1 arm leaves 2 values:\n    the arm `\"3\"` (line 4): (int int)\n" +
+			"  1 other arm never reaches the end of the `match`"},
+		// At most three arms are named for one size, and four sizes listed.
+		{`"a" match "1": , "2": , "3": , "4": , "5": , "6": 1, "7": 1, "8": 1, "9": 1, "10": 1 2, "11": 1 2 3, "12": 1 2 3 4, _: 1 2 3 4 5 end`, false,
+			"differing sizes:\n  5 arms leave 0 values\n" +
+				"  4 arms leave 1 value:\n    the arm `\"6\"` (line 1): (int)\n    the arm `\"7\"` (line 1): (int)\n" +
+				"    the arm `\"8\"` (line 1): (int)\n    … and 1 more\n" +
+				"  1 arm leaves 2 values:\n    the arm `\"10\"` (line 1): (int int)\n" +
+				"  1 arm leaves 3 values:\n    the arm `\"11\"` (line 1): (int int int)\n" +
+				"  … and 2 more arms with 2 other sizes"},
+		// A long pattern is cut at its end, a long stack at its bottom.
+		{`[1 2] match [aVeryLongNameNumberOne aVeryLongNameNumberTwo ...rest]: "a" "b" [1] {"k": [1.0 2.0]} [[["x"]]] 2 3 4 5 6 7 8 9, _: 1 end`, false,
+			"the arm `[aVeryLongNameNumberOne aVeryLongNameNu…` (line 1): …act {k: [float]} [[[str]]] int int int int int int int int)"},
 		// else if conditions run on the stack the earlier ones left.
 		{`1 false if 2 else* 3 4 = *if 5 else 6 end + wl`, true, ""},
 		{`false if 1 else* "a" *if 2 else 3 end drop`, false, "expected"},

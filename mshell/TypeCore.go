@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 )
 
 // The type checker: the checker described in ai/type-core-calculus.typ
@@ -2557,8 +2558,7 @@ func (c *coreChecker) joinArms(arms []savedRun, tok Token) {
 	for _, a := range live[1:] {
 		if a.end-a.start != n {
 			c.errs = append(c.errs, TypeError{Kind: TErrBranchStackSize, Pos: tok,
-				Hint: "one arm leaves " + strconv.Itoa(n) + " value(s) " + c.formatSlots(c.saved[first.start:first.end]) +
-					", another leaves " + strconv.Itoa(a.end-a.start) + " " + c.formatSlots(c.saved[a.start:a.end])})
+				Hint: c.branchSizeHint(live, len(arms)-len(live), tok)})
 			c.abandoned = true
 			return
 		}
@@ -2607,6 +2607,113 @@ func (c *coreChecker) joinArms(arms []savedRun, tok Token) {
 		}
 	}
 	c.noteOrigins(live, tok)
+}
+
+// Limits on the text of a branch stack size error.
+const (
+	// branchSizeMaxGroups is how many different stack sizes get a line.
+	branchSizeMaxGroups = 4
+	// branchSizeMaxArms is how many arms are named under one stack size.
+	branchSizeMaxArms = 3
+	// branchSizeMaxName and branchSizeMaxTypes are the longest arm name
+	// and type list printed, in characters.
+	branchSizeMaxName  = 40
+	branchSizeMaxTypes = 60
+)
+
+// cutText shortens s to at most max characters, ending it with "…".
+func cutText(s string, max int) string {
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	return string([]rune(s)[:max-1]) + "…"
+}
+
+// cutTextStart shortens s to at most max characters, keeping its end and
+// starting it with "…".
+func cutTextStart(s string, max int) string {
+	n := utf8.RuneCountInString(s)
+	if n <= max {
+		return s
+	}
+	return "…" + string([]rune(s)[n-max+1:])
+}
+
+func countOf(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return strconv.Itoa(n) + " " + many
+}
+
+// branchSizeHint is the text of the error for arms that end with stacks
+// of different sizes. It has one line for each stack size, with how many
+// arms end with it:
+//
+//	6 arms leave 0 values
+//	1 arm leaves 1 value:
+//	  the arm `"-b"` (line 45): (Result[datetime str])
+//	3 other arms never reach the end of the `match`
+//
+// The arms are named under every size except the one most arms share,
+// each with the stack it leaves; a long stack keeps its top. When no one
+// size has the most arms, the arms of every size are named. live
+// is the arms that reach the end, skipped how many do not.
+func (c *coreChecker) branchSizeHint(live []savedRun, skipped int, tok Token) string {
+	type group struct {
+		size int
+		arms []savedRun
+	}
+	var groups []group
+	for _, a := range live {
+		size := a.end - a.start
+		i := slices.IndexFunc(groups, func(g group) bool { return g.size == size })
+		if i < 0 {
+			groups = append(groups, group{size: size})
+			i = len(groups) - 1
+		}
+		groups[i].arms = append(groups[i].arms, a)
+	}
+	// Most arms first; arms stay in source order within a size.
+	slices.SortStableFunc(groups, func(x, y group) int { return len(y.arms) - len(x.arms) })
+	usual := len(groups[0].arms) > len(groups[1].arms)
+	var b strings.Builder
+	for gi, g := range groups {
+		if gi == branchSizeMaxGroups {
+			rest := 0
+			for _, h := range groups[gi:] {
+				rest += len(h.arms)
+			}
+			b.WriteString("\n  … and " + countOf(rest, "more arm", "more arms") + " with " +
+				countOf(len(groups)-gi, "other size", "other sizes"))
+			break
+		}
+		b.WriteString("\n  " + countOf(len(g.arms), "arm leaves ", "arms leave ") + countOf(g.size, "value", "values"))
+		named := g.arms[0].label != "" || g.arms[0].pat != nil
+		if (gi == 0 && usual) || !named {
+			continue
+		}
+		b.WriteString(":")
+		for ai, a := range g.arms {
+			if ai == branchSizeMaxArms {
+				b.WriteString("\n    … and " + countOf(len(g.arms)-ai, "more", "more"))
+				break
+			}
+			name := a.label
+			if a.pat != nil {
+				name = "the arm `" + cutText(formatPatternSnippet(a.pat), branchSizeMaxName) + "`"
+			}
+			b.WriteString("\n    " + name + " (line " + strconv.Itoa(a.line) + ")")
+			if g.size > 0 {
+				b.WriteString(": " + cutTextStart(c.formatSlots(c.saved[a.start:a.end]), branchSizeMaxTypes))
+			}
+		}
+	}
+	if skipped > 0 {
+		b.WriteString("\n  " + countOf(skipped, "other arm never reaches", "other arms never reach") +
+			" the end of the `" + tok.Lexeme + "`")
+	}
+	return b.String()
 }
 
 // coreOrigin is a join that made a union: which arm left which type in
