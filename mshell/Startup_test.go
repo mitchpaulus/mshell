@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mitchpaulus/mshell/lib"
 )
 
 func newStartupTestContext() (MShellStack, ExecuteContext, EvalState) {
@@ -17,20 +19,56 @@ func newStartupTestContext() (MShellStack, ExecuteContext, EvalState) {
 	return stack, context, state
 }
 
-func TestGetStartupPathsUsesVersionDirectories(t *testing.T) {
-	dataHome := t.TempDir()
+// stdLibDefCount is how many definitions the built-in standard library has.
+func stdLibDefCount(t *testing.T) int {
+	t.Helper()
+	file, err := parseStdLib()
+	if err != nil {
+		t.Fatalf("parseStdLib() error = %v", err)
+	}
+	if len(file.Definitions) == 0 {
+		t.Fatalf("the built-in standard library has no definitions")
+	}
+	return len(file.Definitions)
+}
+
+// writeVersionedInit writes source as the init file for version under a new
+// XDG_CONFIG_HOME, and returns its path.
+func writeVersionedInit(t *testing.T, version string, source string) string {
+	t.Helper()
 	configHome := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	configDir := filepath.Join(configHome, "msh", version)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(configDir) error = %v", err)
+	}
+	initPath := filepath.Join(configDir, "init.msh")
+	if err := os.WriteFile(initPath, []byte(source), 0644); err != nil {
+		t.Fatalf("WriteFile(initPath) error = %v", err)
+	}
+	return initPath
+}
+
+func startupStringVariable(t *testing.T, context ExecuteContext, name string) string {
+	t.Helper()
+	value, ok := context.Variables[name]
+	if !ok {
+		t.Fatalf("expected the %s variable to be set", name)
+	}
+	str, ok := value.(MShellString)
+	if !ok {
+		t.Fatalf("%s variable type = %T, want MShellString", name, value)
+	}
+	return str.Content
+}
+
+func TestGetInitPathUsesVersionDirectory(t *testing.T) {
+	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 
-	stdlibPath, initPath, err := getStartupPaths("v1.2.3")
+	initPath, err := getInitPath("v1.2.3")
 	if err != nil {
-		t.Fatalf("getStartupPaths() error = %v", err)
-	}
-
-	expectedStdlibPath := filepath.Join(dataHome, "msh", "v1.2.3", "std.msh")
-	if stdlibPath != expectedStdlibPath {
-		t.Fatalf("stdlibPath = %q, want %q", stdlibPath, expectedStdlibPath)
+		t.Fatalf("getInitPath() error = %v", err)
 	}
 
 	expectedInitPath := filepath.Join(configHome, "msh", "v1.2.3", "init.msh")
@@ -39,79 +77,52 @@ func TestGetStartupPathsUsesVersionDirectories(t *testing.T) {
 	}
 }
 
-func TestGetStartupFileSpecsUsesIndependentEnvironmentOverrides(t *testing.T) {
-	t.Setenv("MSHSTDLIB", "/tmp/custom-std.msh")
-	t.Setenv("MSHINIT", "")
+func TestGetInitFileSpecUsesEnvironmentOverride(t *testing.T) {
+	t.Setenv("MSHINIT", "/tmp/custom-init.msh")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	dataHome := t.TempDir()
-	configHome := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dataHome)
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-
-	_, defaultInitPath, err := getStartupPaths("v9.9.9")
-	if err != nil {
-		t.Fatalf("getStartupPaths() error = %v", err)
-	}
-
-	stdlibSpec, initSpec, err := getStartupFileSpecs(startupLoadOptions{
+	initSpec, err := getInitFileSpec(startupLoadOptions{
 		version:           "v9.9.9",
 		allowEnvOverrides: true,
 		requireInit:       false,
 	})
 	if err != nil {
-		t.Fatalf("getStartupFileSpecs() error = %v", err)
+		t.Fatalf("getInitFileSpec() error = %v", err)
 	}
 
-	if stdlibSpec.path != "/tmp/custom-std.msh" {
-		t.Fatalf("stdlibSpec.path = %q, want %q", stdlibSpec.path, "/tmp/custom-std.msh")
+	if initSpec.path != "/tmp/custom-init.msh" {
+		t.Fatalf("initSpec.path = %q, want %q", initSpec.path, "/tmp/custom-init.msh")
 	}
 
-	if stdlibSpec.envVar != "MSHSTDLIB" {
-		t.Fatalf("stdlibSpec.envVar = %q, want %q", stdlibSpec.envVar, "MSHSTDLIB")
+	if initSpec.envVar != "MSHINIT" {
+		t.Fatalf("initSpec.envVar = %q, want %q", initSpec.envVar, "MSHINIT")
 	}
 
-	if initSpec.path != defaultInitPath {
-		t.Fatalf("initSpec.path = %q, want %q", initSpec.path, defaultInitPath)
-	}
-
-	if initSpec.envVar != "" {
-		t.Fatalf("initSpec.envVar = %q, want empty string", initSpec.envVar)
+	if !initSpec.required {
+		t.Fatalf("an init file named by MSHINIT must be required")
 	}
 }
 
-func TestGetStartupFileSpecsIgnoresEnvironmentOverridesWhenDisabled(t *testing.T) {
-	t.Setenv("MSHSTDLIB", "/tmp/custom-std.msh")
+func TestGetInitFileSpecIgnoresEnvironmentOverrideWhenDisabled(t *testing.T) {
 	t.Setenv("MSHINIT", "/tmp/custom-init.msh")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	dataHome := t.TempDir()
-	configHome := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dataHome)
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-
-	defaultStdlibPath, defaultInitPath, err := getStartupPaths("v1.2.3")
+	defaultInitPath, err := getInitPath("v1.2.3")
 	if err != nil {
-		t.Fatalf("getStartupPaths() error = %v", err)
+		t.Fatalf("getInitPath() error = %v", err)
 	}
 
-	stdlibSpec, initSpec, err := getStartupFileSpecs(startupLoadOptions{
+	initSpec, err := getInitFileSpec(startupLoadOptions{
 		version:           "v1.2.3",
 		allowEnvOverrides: false,
 		requireInit:       true,
 	})
 	if err != nil {
-		t.Fatalf("getStartupFileSpecs() error = %v", err)
-	}
-
-	if stdlibSpec.path != defaultStdlibPath {
-		t.Fatalf("stdlibSpec.path = %q, want %q", stdlibSpec.path, defaultStdlibPath)
+		t.Fatalf("getInitFileSpec() error = %v", err)
 	}
 
 	if initSpec.path != defaultInitPath {
 		t.Fatalf("initSpec.path = %q, want %q", initSpec.path, defaultInitPath)
-	}
-
-	if stdlibSpec.envVar != "" {
-		t.Fatalf("stdlibSpec.envVar = %q, want empty string", stdlibSpec.envVar)
 	}
 
 	if initSpec.envVar != "" {
@@ -119,35 +130,11 @@ func TestGetStartupFileSpecsIgnoresEnvironmentOverridesWhenDisabled(t *testing.T
 	}
 }
 
-func TestLoadStartupDefinitionsLoadsVersionedStdlibAndInit(t *testing.T) {
-	t.Setenv("MSHSTDLIB", "")
+func TestLoadStartupDefinitionsLoadsBuiltInStdLibAndVersionedInit(t *testing.T) {
 	t.Setenv("MSHINIT", "")
-
-	dataHome := t.TempDir()
-	configHome := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dataHome)
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-
 	version := "v9.9.9"
-	stdlibDir := filepath.Join(dataHome, "msh", version)
-	if err := os.MkdirAll(stdlibDir, 0755); err != nil {
-		t.Fatalf("MkdirAll(stdlibDir) error = %v", err)
-	}
-
-	configDir := filepath.Join(configHome, "msh", version)
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		t.Fatalf("MkdirAll(configDir) error = %v", err)
-	}
-
-	stdlibPath := filepath.Join(stdlibDir, "std.msh")
-	if err := os.WriteFile(stdlibPath, []byte("\"from-stdlib\" stdlibSource!\n"), 0644); err != nil {
-		t.Fatalf("WriteFile(stdlibPath) error = %v", err)
-	}
-
-	initPath := filepath.Join(configDir, "init.msh")
-	if err := os.WriteFile(initPath, []byte("\"from-init\" startup!\n"), 0644); err != nil {
-		t.Fatalf("WriteFile(initPath) error = %v", err)
-	}
+	// The init file calls a standard library definition.
+	writeVersionedInit(t, version, "def initDef (-- str) \"from-init\" end\n[1 2 3] len str startup!\n")
 
 	stack, context, state := newStartupTestContext()
 
@@ -160,59 +147,69 @@ func TestLoadStartupDefinitionsLoadsVersionedStdlibAndInit(t *testing.T) {
 		t.Fatalf("loadStartupDefinitions() error = %v", err)
 	}
 
-	if len(definitions) != 0 {
-		t.Fatalf("len(definitions) = %d, want 0", len(definitions))
+	if want := stdLibDefCount(t) + 1; len(definitions) != want {
+		t.Fatalf("len(definitions) = %d, want %d", len(definitions), want)
 	}
 
-	startupValue, ok := context.Variables["startup"]
-	if !ok {
-		t.Fatalf("expected startup variable to be set by init")
+	if got := startupStringVariable(t, context, "startup"); got != "3" {
+		t.Fatalf("startup variable = %q, want %q", got, "3")
 	}
 
-	startupStr, ok := startupValue.(MShellString)
-	if !ok {
-		t.Fatalf("startup variable type = %T, want MShellString", startupValue)
+	if len(state.StartupTypeErrors) != 0 {
+		t.Fatalf("startup type errors: %v", state.StartupTypeErrors)
 	}
-
-	if startupStr.Content != "from-init" {
-		t.Fatalf("startup variable = %q, want %q", startupStr.Content, "from-init")
-	}
-
-	stdlibValue, ok := context.Variables["stdlibSource"]
-	if !ok {
-		t.Fatalf("expected stdlibSource variable to be set by stdlib")
-	}
-
-	stdlibStr, ok := stdlibValue.(MShellString)
-	if !ok {
-		t.Fatalf("stdlibSource variable type = %T, want MShellString", stdlibValue)
-	}
-
-	if stdlibStr.Content != "from-stdlib" {
-		t.Fatalf("stdlibSource variable = %q, want %q", stdlibStr.Content, "from-stdlib")
+	if errs := state.StartupBase.StartupErrors(); len(errs) != 0 {
+		t.Fatalf("startup errors: %v", errs)
 	}
 }
 
-func TestLoadStartupDefinitionsRequiresInitForExplicitVersion(t *testing.T) {
-	t.Setenv("MSHSTDLIB", "")
+// A file at the place the standard library used to be read from, and
+// MSHSTDLIB, are not read: the standard library is the one in the binary.
+func TestLoadStartupDefinitionsIgnoresStdLibFiles(t *testing.T) {
 	t.Setenv("MSHINIT", "")
-
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	dataHome := t.TempDir()
-	configHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
-	t.Setenv("XDG_CONFIG_HOME", configHome)
 
 	version := "v9.9.9"
 	stdlibDir := filepath.Join(dataHome, "msh", version)
 	if err := os.MkdirAll(stdlibDir, 0755); err != nil {
 		t.Fatalf("MkdirAll(stdlibDir) error = %v", err)
 	}
+	source := []byte("\"from-file\" stdlibSource!\n")
+	if err := os.WriteFile(filepath.Join(stdlibDir, "std.msh"), source, 0644); err != nil {
+		t.Fatalf("WriteFile(std.msh) error = %v", err)
+	}
+	envPath := filepath.Join(t.TempDir(), "std.msh")
+	if err := os.WriteFile(envPath, source, 0644); err != nil {
+		t.Fatalf("WriteFile(envPath) error = %v", err)
+	}
+	t.Setenv("MSHSTDLIB", envPath)
 
-	stdlibPath := filepath.Join(stdlibDir, "std.msh")
-	if err := os.WriteFile(stdlibPath, []byte("\"from-stdlib\" startup!\n"), 0644); err != nil {
-		t.Fatalf("WriteFile(stdlibPath) error = %v", err)
+	stack, context, state := newStartupTestContext()
+
+	definitions, err := loadStartupDefinitions(startupLoadOptions{
+		version:           version,
+		allowEnvOverrides: true,
+	}, &stack, context, &state)
+	if err != nil {
+		t.Fatalf("loadStartupDefinitions() error = %v", err)
 	}
 
+	if want := stdLibDefCount(t); len(definitions) != want {
+		t.Fatalf("len(definitions) = %d, want %d", len(definitions), want)
+	}
+	if _, ok := context.Variables["stdlibSource"]; ok {
+		t.Fatalf("a std.msh file was run; only the built-in standard library should load")
+	}
+}
+
+func TestLoadStartupDefinitionsRequiresInitForExplicitVersion(t *testing.T) {
+	t.Setenv("MSHINIT", "")
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	version := "v9.9.9"
 	stack, context, state := newStartupTestContext()
 
 	_, err := loadStartupDefinitions(startupLoadOptions{
@@ -224,35 +221,30 @@ func TestLoadStartupDefinitionsRequiresInitForExplicitVersion(t *testing.T) {
 		t.Fatalf("loadStartupDefinitions() error = nil, want missing init error")
 	}
 
-	if !strings.Contains(err.Error(), filepath.Join(configHome, "msh", version, "init.msh")) {
+	initPath := filepath.Join(configHome, "msh", version, "init.msh")
+	if !strings.Contains(err.Error(), initPath) {
 		t.Fatalf("loadStartupDefinitions() error = %q, want missing init path", err.Error())
+	}
+
+	message := formatStartupErrorMessage(err, "script.msh", version, 1, 1)
+	for _, want := range []string{"Create an init.msh at " + initPath, "remove the VER directive"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the startup error message does not contain %q:\n%s", want, message)
+		}
+	}
+	if strings.Contains(message, "MSHSTDLIB") || strings.Contains(message, "std.msh") {
+		t.Errorf("the startup error message tells of a standard library file:\n%s", message)
 	}
 }
 
 func TestLoadStartupDefinitionsAllowsMissingInitForImplicitVersion(t *testing.T) {
-	t.Setenv("MSHSTDLIB", "")
 	t.Setenv("MSHINIT", "")
-
-	dataHome := t.TempDir()
-	configHome := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dataHome)
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-
-	version := "v9.9.9"
-	stdlibDir := filepath.Join(dataHome, "msh", version)
-	if err := os.MkdirAll(stdlibDir, 0755); err != nil {
-		t.Fatalf("MkdirAll(stdlibDir) error = %v", err)
-	}
-
-	stdlibPath := filepath.Join(stdlibDir, "std.msh")
-	if err := os.WriteFile(stdlibPath, []byte("\"from-stdlib\" stdlibSource!\n"), 0644); err != nil {
-		t.Fatalf("WriteFile(stdlibPath) error = %v", err)
-	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	stack, context, state := newStartupTestContext()
 
 	definitions, err := loadStartupDefinitions(startupLoadOptions{
-		version:           version,
+		version:           "v9.9.9",
 		allowEnvOverrides: true,
 		requireInit:       false,
 	}, &stack, context, &state)
@@ -260,131 +252,113 @@ func TestLoadStartupDefinitionsAllowsMissingInitForImplicitVersion(t *testing.T)
 		t.Fatalf("loadStartupDefinitions() error = %v", err)
 	}
 
-	if len(definitions) != 0 {
-		t.Fatalf("len(definitions) = %d, want 0", len(definitions))
+	if want := stdLibDefCount(t); len(definitions) != want {
+		t.Fatalf("len(definitions) = %d, want %d", len(definitions), want)
 	}
 
 	if _, ok := context.Variables["startup"]; ok {
 		t.Fatalf("expected startup variable to remain unset without init")
 	}
+}
 
-	stdlibValue, ok := context.Variables["stdlibSource"]
-	if !ok {
-		t.Fatalf("expected stdlibSource variable to be set by stdlib")
+// The init file is the program when it is the script being run: it is not
+// also loaded as a startup file, which would define its names twice.
+func TestLoadStartupDefinitionsLeavesOutInitWhenItIsTheScript(t *testing.T) {
+	t.Setenv("MSHINIT", "")
+	version := "v9.9.9"
+	initPath := writeVersionedInit(t, version, "def initDef (-- str) \"from-init\" end\n")
+
+	stack, context, state := newStartupTestContext()
+
+	definitions, err := loadStartupDefinitions(startupLoadOptions{
+		version:           version,
+		allowEnvOverrides: true,
+		script:            initPath,
+	}, &stack, context, &state)
+	if err != nil {
+		t.Fatalf("loadStartupDefinitions() error = %v", err)
 	}
 
-	stdlibStr, ok := stdlibValue.(MShellString)
-	if !ok {
-		t.Fatalf("stdlibSource variable type = %T, want MShellString", stdlibValue)
-	}
-
-	if stdlibStr.Content != "from-stdlib" {
-		t.Fatalf("stdlibSource variable = %q, want %q", stdlibStr.Content, "from-stdlib")
+	if want := stdLibDefCount(t); len(definitions) != want {
+		t.Fatalf("len(definitions) = %d, want %d", len(definitions), want)
 	}
 }
 
-func TestStdLibDefinitionsUsesCurrentVersionStartupFilesWithEnvOverrides(t *testing.T) {
-	dataHome := t.TempDir()
-	configHome := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dataHome)
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-
-	versionDirData := filepath.Join(dataHome, "msh", mshellVersion)
-	if err := os.MkdirAll(versionDirData, 0755); err != nil {
-		t.Fatalf("MkdirAll(versionDirData) error = %v", err)
+// --is-std-lib names the file the built-in standard library is built from.
+// When that file is the script, it is the program: neither the built-in
+// standard library, which has the same definitions, nor the init file is
+// loaded. Any other script gets both.
+func TestLoadStartupDefinitionsLeavesOutStartupFilesForStdLibSource(t *testing.T) {
+	t.Setenv("MSHINIT", "")
+	version := "v9.9.9"
+	writeVersionedInit(t, version, "def initDef (-- str) \"from-init\" end\n")
+	stdLibSource := filepath.Join(t.TempDir(), "std.msh")
+	if err := os.WriteFile(stdLibSource, []byte(lib.Std), 0644); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(t.TempDir(), "other.msh")
+	if err := os.WriteFile(other, []byte("1 wl\n"), 0644); err != nil {
+		t.Fatal(err)
 	}
 
-	versionDirConfig := filepath.Join(configHome, "msh", mshellVersion)
-	if err := os.MkdirAll(versionDirConfig, 0755); err != nil {
-		t.Fatalf("MkdirAll(versionDirConfig) error = %v", err)
+	for _, tc := range []struct {
+		script string
+		want   int
+	}{
+		{stdLibSource, 0},
+		{other, stdLibDefCount(t) + 1},
+	} {
+		stack, context, state := newStartupTestContext()
+		definitions, err := loadStartupDefinitions(startupLoadOptions{
+			version:           version,
+			allowEnvOverrides: true,
+			script:            tc.script,
+			stdLibSource:      stdLibSource,
+		}, &stack, context, &state)
+		if err != nil {
+			t.Fatalf("loadStartupDefinitions() error = %v", err)
+		}
+		if len(definitions) != tc.want {
+			t.Errorf("script %s: len(definitions) = %d, want %d", filepath.Base(tc.script), len(definitions), tc.want)
+		}
 	}
+}
 
-	if err := os.WriteFile(filepath.Join(versionDirData, "std.msh"), []byte("\"from-versioned-stdlib\" stdlibSource!\n"), 0644); err != nil {
-		t.Fatalf("WriteFile(versioned stdlib) error = %v", err)
-	}
+func TestStdLibDefinitionsUsesCurrentVersionInitWithEnvOverride(t *testing.T) {
+	t.Setenv("MSHINIT", "")
+	writeVersionedInit(t, mshellVersion, "\"from-versioned-init\" startup!\n")
 
-	if err := os.WriteFile(filepath.Join(versionDirConfig, "init.msh"), []byte("\"from-versioned-init\" startup!\n"), 0644); err != nil {
-		t.Fatalf("WriteFile(versioned init) error = %v", err)
-	}
-
-	overrideDir := t.TempDir()
-	overrideStdlibPath := filepath.Join(overrideDir, "std.msh")
-	overrideInitPath := filepath.Join(overrideDir, "init.msh")
-	if err := os.WriteFile(overrideStdlibPath, []byte("\"from-env-stdlib\" stdlibSource!\n"), 0644); err != nil {
-		t.Fatalf("WriteFile(override stdlib) error = %v", err)
-	}
-
+	overrideInitPath := filepath.Join(t.TempDir(), "init.msh")
 	if err := os.WriteFile(overrideInitPath, []byte("\"from-env-init\" startup!\n"), 0644); err != nil {
 		t.Fatalf("WriteFile(override init) error = %v", err)
 	}
 
-	t.Setenv("MSHSTDLIB", overrideStdlibPath)
+	stack, context, state := newStartupTestContext()
+	if _, err := stdLibDefinitions(&stack, context, &state); err != nil {
+		t.Fatalf("stdLibDefinitions() error = %v", err)
+	}
+	if got := startupStringVariable(t, context, "startup"); got != "from-versioned-init" {
+		t.Fatalf("startup variable = %q, want %q", got, "from-versioned-init")
+	}
+
 	t.Setenv("MSHINIT", overrideInitPath)
+	stack, context, state = newStartupTestContext()
+	if _, err := stdLibDefinitions(&stack, context, &state); err != nil {
+		t.Fatalf("stdLibDefinitions() error = %v", err)
+	}
+	if got := startupStringVariable(t, context, "startup"); got != "from-env-init" {
+		t.Fatalf("startup variable = %q, want %q", got, "from-env-init")
+	}
+}
+
+func TestStdLibDefinitionsAddsCompletionDefinitionsToState(t *testing.T) {
+	t.Setenv("MSHINIT", "")
+	writeVersionedInit(t, mshellVersion, "def __demoCompletion { 'complete': ['demo'] } ([str] -- [str])\n    ['--flag']\nend\n")
 
 	stack, context, state := newStartupTestContext()
 
 	if _, err := stdLibDefinitions(&stack, context, &state); err != nil {
 		t.Fatalf("stdLibDefinitions() error = %v", err)
-	}
-
-	startupValue, ok := context.Variables["startup"]
-	if !ok {
-		t.Fatalf("expected startup variable to be set")
-	}
-
-	startupStr, ok := startupValue.(MShellString)
-	if !ok {
-		t.Fatalf("startup variable type = %T, want MShellString", startupValue)
-	}
-
-	if startupStr.Content != "from-env-init" {
-		t.Fatalf("startup variable = %q, want %q", startupStr.Content, "from-env-init")
-	}
-
-	stdlibValue, ok := context.Variables["stdlibSource"]
-	if !ok {
-		t.Fatalf("expected stdlibSource variable to be set")
-	}
-
-	stdlibStr, ok := stdlibValue.(MShellString)
-	if !ok {
-		t.Fatalf("stdlibSource variable type = %T, want MShellString", stdlibValue)
-	}
-
-	if stdlibStr.Content != "from-env-stdlib" {
-		t.Fatalf("stdlibSource variable = %q, want %q", stdlibStr.Content, "from-env-stdlib")
-	}
-}
-
-func TestStdLibDefinitionsAddsCompletionDefinitionsToState(t *testing.T) {
-	t.Setenv("MSHSTDLIB", "")
-	t.Setenv("MSHINIT", "")
-
-	dataHome := t.TempDir()
-	configHome := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dataHome)
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-
-	versionDirData := filepath.Join(dataHome, "msh", mshellVersion)
-	if err := os.MkdirAll(versionDirData, 0755); err != nil {
-		t.Fatalf("MkdirAll(versionDirData) error = %v", err)
-	}
-
-	stdlibPath := filepath.Join(versionDirData, "std.msh")
-	stdlibSource := "def __demoCompletion { 'complete': ['demo'] } ([str] -- [str])\n    ['--flag']\nend\n"
-	if err := os.WriteFile(stdlibPath, []byte(stdlibSource), 0644); err != nil {
-		t.Fatalf("WriteFile(stdlibPath) error = %v", err)
-	}
-
-	stack, context, state := newStartupTestContext()
-
-	definitions, err := stdLibDefinitions(&stack, context, &state)
-	if err != nil {
-		t.Fatalf("stdLibDefinitions() error = %v", err)
-	}
-
-	if len(definitions) != 1 {
-		t.Fatalf("len(definitions) = %d, want 1", len(definitions))
 	}
 
 	completionDefs := state.CompletionDefinitions["demo"]
@@ -395,19 +369,19 @@ func TestStdLibDefinitionsAddsCompletionDefinitionsToState(t *testing.T) {
 	if completionDefs[0].Name != "__demoCompletion" {
 		t.Fatalf("completionDefs[0].Name = %q, want %q", completionDefs[0].Name, "__demoCompletion")
 	}
+
+	// The built-in standard library's completions are there too.
+	if len(state.CompletionDefinitions["git"]) == 0 {
+		t.Fatalf("the standard library's completion for git is not registered")
+	}
 }
 
 func TestEnvWithoutStartupOverridesRemovesOnlyStartupVars(t *testing.T) {
-	t.Setenv("MSHSTDLIB", "/tmp/custom-std.msh")
 	t.Setenv("MSHINIT", "/tmp/custom-init.msh")
 	t.Setenv("KEEP_ME", "1")
 
 	filteredEnv := envWithoutStartupOverrides()
 	filteredJoined := strings.Join(filteredEnv, "\n")
-
-	if strings.Contains(filteredJoined, "MSHSTDLIB=") {
-		t.Fatalf("filtered env still contains MSHSTDLIB: %q", filteredJoined)
-	}
 
 	if strings.Contains(filteredJoined, "MSHINIT=") {
 		t.Fatalf("filtered env still contains MSHINIT: %q", filteredJoined)
@@ -415,6 +389,40 @@ func TestEnvWithoutStartupOverridesRemovesOnlyStartupVars(t *testing.T) {
 
 	if !strings.Contains(filteredJoined, "KEEP_ME=1") {
 		t.Fatalf("filtered env missing KEEP_ME: %q", filteredJoined)
+	}
+}
+
+// TestBuiltInStdLibChecks checks the bodies of the built-in standard
+// library's definitions. A run does not (NewCoreBase): they are the same
+// in every run of a binary, so they are checked here, once for each build.
+func TestBuiltInStdLibChecks(t *testing.T) {
+	// Parsed as a file of its own, the definitions are not stdLibTokenFile's,
+	// so NewCoreBase checks their bodies.
+	file, err := parseMShellInput(lib.Std, &TokenFile{"lib/std.msh"})
+	if err != nil {
+		t.Fatalf("lib/std.msh does not parse: %v", err)
+	}
+	base := NewCoreBase(file.Definitions, declarationItems(file.Items))
+	for _, e := range base.StartupErrors() {
+		t.Error(e)
+	}
+
+	// The standard library a run loads has the same definitions, and
+	// NewCoreBase reports no errors for them.
+	builtIn, err := parseStdLib()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(builtIn.Definitions) != len(file.Definitions) {
+		t.Fatalf("parseStdLib() has %d definitions, want %d", len(builtIn.Definitions), len(file.Definitions))
+	}
+	for i := range builtIn.Definitions {
+		if builtIn.Definitions[i].File != stdLibTokenFile {
+			t.Fatalf("definition %s is not in stdLibTokenFile", builtIn.Definitions[i].Name)
+		}
+	}
+	if errs := NewCoreBase(builtIn.Definitions, declarationItems(builtIn.Items)).StartupErrors(); len(errs) != 0 {
+		t.Fatalf("the built-in standard library has errors: %v", errs)
 	}
 }
 
@@ -439,17 +447,11 @@ func TestLoadStartupDefinitionsChecksTopLevel(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			t.Setenv("XDG_DATA_HOME", dir)
 			t.Setenv("XDG_CONFIG_HOME", dir)
-			stdPath := filepath.Join(dir, "std.msh")
 			initPath := filepath.Join(dir, "init.msh")
-			if err := os.WriteFile(stdPath, []byte("def double (int -- int) 2 * end\n"), 0644); err != nil {
-				t.Fatal(err)
-			}
 			if err := os.WriteFile(initPath, []byte(tc.init), 0644); err != nil {
 				t.Fatal(err)
 			}
-			t.Setenv("MSHSTDLIB", stdPath)
 			t.Setenv("MSHINIT", initPath)
 
 			stack, context, state := newStartupTestContext()
@@ -474,5 +476,26 @@ func TestLoadStartupDefinitionsChecksTopLevel(t *testing.T) {
 				t.Errorf("%q checks = %v, want %v", tc.next, ok, tc.nextOk)
 			}
 		})
+	}
+}
+
+// TestNewCoreBaseChecksOnlyOtherFilesBodies: NewCoreBase does not check
+// the body of a definition in the built-in standard library's file, and
+// checks the same definition in any other file.
+func TestNewCoreBaseChecksOnlyOtherFilesBodies(t *testing.T) {
+	source := "def wrongBody (int -- int) \"x\" end\n"
+	builtIn, err := parseMShellInput(source, stdLibTokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := NewCoreBase(builtIn.Definitions, nil).StartupErrors(); len(errs) != 0 {
+		t.Errorf("a body in the built-in standard library was checked: %v", errs)
+	}
+	other, err := parseMShellInput(source, &TokenFile{"init.msh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := NewCoreBase(other.Definitions, nil).StartupErrors(); len(errs) != 1 {
+		t.Errorf("a body in init.msh: %d errors, want 1: %v", len(errs), errs)
 	}
 }

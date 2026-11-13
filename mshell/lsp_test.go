@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"github.com/mitchpaulus/mshell/lib"
 	"go.lsp.dev/protocol"
 )
 
@@ -2373,6 +2374,153 @@ func TestDeclarationInStartupFile(t *testing.T) {
 	// file's declarations are not its own.
 	if got := declarationAt(t, s, fileURI(stdPath), "green\n", 0, 1); len(got) != 0 {
 		t.Errorf("the standard library itself: %v", got)
+	}
+}
+
+// TestDeclarationInBuiltInStdLib: the standard library is in the binary,
+// so the declaration of one of its names is in a copy of its text that the
+// first such request writes to a temporary file. A document that is that
+// copy is the standard library itself: it is checked alone, so its
+// definitions do not collide with the built-in ones.
+func TestDeclarationInBuiltInStdLib(t *testing.T) {
+	t.Setenv("MSHINIT", filepath.Join(t.TempDir(), "no-init.msh"))
+	files, _, err := loadStartupFilesForLSP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || !files[0].stdLib {
+		t.Fatalf("startup files: %d, want only the built-in standard library", len(files))
+	}
+	s := &lspServer{startupFiles: files}
+	s.stdlibDefs, s.startupDecls = joinStartupFiles(files)
+	other := fileURI(filepath.Join(t.TempDir(), "other.msh"))
+
+	// A document that is not the standard library defines one of its names.
+	if diags := s.computeDiagnostics(other, "def chunk ( -- int) 1 end\n"); len(diags) != 1 {
+		t.Fatalf("a document defining chunk: %+v", diags)
+	}
+	if s.stdLibCopy != "" {
+		t.Fatalf("the copy %s was written before any declaration request", s.stdLibCopy)
+	}
+
+	got := declarationAt(t, s, other, "chunk\n", 0, 1)
+	if len(got) != 1 {
+		t.Fatalf("declaration of chunk: %v", got)
+	}
+	copyPath := s.stdLibCopy
+	if copyPath == "" || filepath.Base(copyPath) != "std.msh" {
+		t.Fatalf("the copy's path is %q", copyPath)
+	}
+	copyURI := fileURI(copyPath)
+	var line, start, end int
+	if _, err := fmt.Sscanf(strings.TrimPrefix(got[0], string(copyURI)+" "), "%d:%d-%d", &line, &start, &end); err != nil {
+		t.Fatalf("declaration %q is not in %s: %v", got[0], copyURI, err)
+	}
+	written, err := os.ReadFile(copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != lib.Std {
+		t.Fatalf("the copy differs from the built-in standard library")
+	}
+	if text := strings.Split(lib.Std, "\n")[line]; !strings.HasPrefix(text, "def chunk ") || text[start:end] != "chunk" {
+		t.Fatalf("the declaration is at line %d, %q", line, text)
+	}
+
+	// The same file again, and the copy checks as the standard library.
+	if again := declarationAt(t, s, other, "chunk\n", 0, 1); len(again) != 1 || again[0] != got[0] {
+		t.Fatalf("second declaration request: %v, want %v", again, got)
+	}
+	if diags := s.computeDiagnostics(copyURI, lib.Std); len(diags) != 0 {
+		t.Fatalf("the copy of the standard library: %+v", diags)
+	}
+
+	s.removeStdLibCopy()
+	if _, err := os.Stat(copyPath); !os.IsNotExist(err) {
+		t.Fatalf("the copy is still there after the server stopped: %v", err)
+	}
+}
+
+// TestTreatAsStdLibCommand: a file named std.msh that defines the built-in
+// standard library's names is offered a code action on those definitions,
+// and the command it sends makes the server check that document alone, as
+// the standard library. Other documents still get the built-in one.
+func TestTreatAsStdLibCommand(t *testing.T) {
+	t.Setenv("MSHINIT", filepath.Join(t.TempDir(), "no-init.msh"))
+	files, _, err := loadStartupFilesForLSP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &lspServer{startupFiles: files, out: bufio.NewWriter(io.Discard)}
+	s.stdlibDefs, s.startupDecls = joinStartupFiles(files)
+	dir := t.TempDir()
+	std, other := fileURI(filepath.Join(dir, "std.msh")), fileURI(filepath.Join(dir, "other.msh"))
+	redefines := "def chunk ( -- int) 1 end\n"
+	actionsAt := func(uri protocol.DocumentURI, text string) []protocol.CodeAction {
+		s.documents = map[protocol.DocumentURI]*lspDocument{uri: newLSPDocument(text)}
+		var out []protocol.CodeAction
+		for _, a := range s.codeActions(protocol.CodeActionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Range:        protocol.Range{Start: protocol.Position{Character: 4}, End: protocol.Position{Character: 5}},
+		}) {
+			if a.Command != nil {
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+
+	// The definition collides in both files; only std.msh gets the offer.
+	if diags := s.computeDiagnostics(other, redefines); len(diags) != 1 {
+		t.Fatalf("other.msh: %+v", diags)
+	}
+	if got := actionsAt(other, redefines); len(got) != 0 {
+		t.Fatalf("other.msh is offered %+v", got)
+	}
+	if diags := s.computeDiagnostics(std, lib.Std); len(diags) == 0 {
+		t.Fatalf("std.msh has no errors before the command")
+	}
+	got := actionsAt(std, redefines)
+	if len(got) != 1 || got[0].Title != treatAsStdLibTitle || got[0].Command.Command != treatAsStdLibCommand ||
+		len(got[0].Command.Arguments) != 1 || got[0].Command.Arguments[0] != string(std) {
+		t.Fatalf("std.msh is offered %+v", got)
+	}
+
+	for _, bad := range []protocol.ExecuteCommandParams{
+		{Command: "mshell.other", Arguments: []any{string(std)}},
+		{Command: treatAsStdLibCommand},
+		{Command: treatAsStdLibCommand, Arguments: []any{5}},
+	} {
+		if err := s.executeCommand(bad); err == nil {
+			t.Errorf("executeCommand(%+v) gave no error", bad)
+		}
+	}
+
+	// The open document is checked again, as a new document.
+	before := newLSPDocument(lib.Std)
+	s.documents = map[protocol.DocumentURI]*lspDocument{std: before}
+	if err := s.executeCommand(protocol.ExecuteCommandParams{Command: got[0].Command.Command, Arguments: got[0].Command.Arguments}); err != nil {
+		t.Fatal(err)
+	}
+	after := s.documents[std]
+	if after == before || after.Text != before.Text {
+		t.Fatalf("the open document was not replaced by one to check again")
+	}
+	if diags := s.checked(std, after).diags; len(diags) != 0 {
+		t.Fatalf("std.msh after the command: %d errors, first %+v", len(diags), diags[0])
+	}
+	if got := actionsAt(std, redefines); len(got) != 0 {
+		t.Fatalf("std.msh is still offered %+v", got)
+	}
+	// A type error in the standard library's own body is still reported.
+	if diags := s.computeDiagnostics(std, "def wrongBody (int -- int) \"x\" end\n"); len(diags) != 1 {
+		t.Fatalf("a wrong body in std.msh: %+v", diags)
+	}
+	if diags := s.computeDiagnostics(other, redefines); len(diags) != 1 {
+		t.Fatalf("other.msh after the command: %+v", diags)
+	}
+	if diags := s.computeDiagnostics(other, "[1 2 3] 2 chunk len wl\n"); len(diags) != 0 {
+		t.Fatalf("other.msh using the standard library: %+v", diags)
 	}
 }
 

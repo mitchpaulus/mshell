@@ -306,24 +306,19 @@ Process substitution is done using the `psub` operator.
 
 ## Startup Files
 
-`msh` loads startup files before running code.
+`msh` loads the standard library and then the user init file before running code.
 
-- Startup files are always version-specific.
-- The standard library is loaded from
-  `$XDG_DATA_HOME/msh/<version>/std.msh` on Linux/macOS
-  (falling back to `~/.local/share/msh/<version>/std.msh`)
-  or `%LOCALAPPDATA%\msh\<version>\std.msh` on Windows.
-- The user init file is loaded from
+- The standard library is built into the `msh` binary. It is not read from a file, and it cannot be replaced.
+- The user init file is version-specific. It is loaded from
   `$XDG_CONFIG_HOME/msh/<version>/init.msh` on Linux/macOS
   (falling back to `~/.config/msh/<version>/init.msh`)
   or `%LOCALAPPDATA%\msh\<version>\init.msh` on Windows.
-- The standard library is required at the resolved path.
 - For scripts without `VER`, `msh` uses the current executable version.
 - For scripts without `VER` and interactive use, missing `init.msh` is allowed unless `MSHINIT` is explicitly set.
 - If a script declares `VER "vX.Y.Z"` and the current executable is a different version, `msh` looks for `msh-vX.Y.Z` on `PATH` and re-executes the script with that binary.
 - When `VER` is present, the version-specific `init.msh` is required.
-- When `VER` is present, `MSHSTDLIB` and `MSHINIT` are cleared so startup comes from the versioned locations.
-- `MSHSTDLIB` and `MSHINIT` only override startup for interactive use and scripts without `VER`.
+- When `VER` is present, `MSHINIT` is cleared so the init file comes from the versioned location.
+- `MSHINIT` only overrides the init file for interactive use and scripts without `VER`.
 - `msh edit init` opens the current init file path using `$EDITOR`; if `$EDITOR` is not set or cannot be started, it falls back to the platform default opener (`xdg-open` on Linux, `open` on macOS, `Start-Process` via PowerShell on Windows).
 
 ## Tilde Substitution
@@ -740,7 +735,7 @@ r'a' str        # "a"
 
 Every script is type-checked before it runs; if the check fails, nothing runs.
 `msh --type-check-only script.msh` checks and exits.
-The checker checks every def body and the top-level code, and the standard library's and startup file's defs too, on every run: code that calls a startup def with a type error is refused, and a script that does not call it runs with a warning.
+The checker checks every def body and the top-level code, and the startup file's defs too, on every run: code that calls a startup def with a type error is refused, and a script that does not call it runs with a warning.
 The startup files' top-level code is checked before it runs, and the script is checked from the stack and variables it leaves, with their types.
 Startup top-level code that does not check is not run, and then no script runs.
 It only accepts or rejects: no word behaves differently because of it.

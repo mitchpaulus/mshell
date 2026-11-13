@@ -7,7 +7,6 @@ cd "$(dirname "$0")" || exit 1
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-export MSHSTDLIB="$(realpath ../lib/std.msh)"
 export MSHINIT="$TMP/init.msh"
 MSH="${MSH:-$(realpath ../mshell/mshell)}"
 
