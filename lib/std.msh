@@ -30,10 +30,6 @@ def toCsvCell (str -- str)
     end
 end
 
-def toCsv ([[str]] -- str)
-    map. map. toCsvCell end "," join end unlines
-end
-
 def enumerate ([a] -- [{"item": a, "index": int }])
     dup len seq (a!, i! { "item": @a, "index": @i } as {"item": a, "index": int}) zip
 end
@@ -108,22 +104,6 @@ def dropWhile ([T] (T -- bool) -- [T])
         @dropWhile-idx 1 + dropWhile-idx!
     ) loop
     @list @dropWhile-idx skip
-end
-
-def linearSearch ([T] (T -- bool) -- Maybe[T])
-    list!, quote!
-    none linearSearch-result!
-    0 linearSearch-idx!
-    (
-        @linearSearch-idx @list len >= (break) iff
-        @list @linearSearch-idx nth linearSearch-item!
-        @linearSearch-item @quote x if
-            @linearSearch-item just linearSearch-result!
-            break
-        end
-        @linearSearch-idx 1 + linearSearch-idx!
-    ) loop
-    @linearSearch-result
 end
 
 def linearSearchIndex ([T] (T -- bool) -- Maybe[int])
@@ -453,12 +433,25 @@ def parseHex (str -- Maybe[int]) 16 fromBase end
 def parseOctal (str -- Maybe[int]) 8 fromBase end
 def parseBin (str -- Maybe[int]) 2 fromBase end
 
+# Edit the line in $EDITOR (vi when unset), for a key binding:
+# {keys: [r'g' keyCtrl], action: [(editInEditor) editRunOps] bindingOps} bindingAdd
+# The edited text replaces the line; it is not run. An editor that fails leaves the line as it was.
+def editInEditor (EditState -- new Maybe[[EditOp]])
+    s!
+    '.msh' tempFileExt f!
+    @s :before? @s :after? + @f writeFile
+    "EDITOR" getEnv "vi" maybe wsplit [@f str] + ? code!
+    @f readFile chomp text!
+    @f rm
+    @code 0 = if [@text '' editSetLine] just else none end
+end
+
 # COMPLETIONS {{{
 # msh {{{
 def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
     ['-h' '--help' '--html' '--lex' '--parse' '--type-check-only' '--version' '-c' '-'] options!
-    ['lsp' 'bin' 'edit' 'completions'] subcommands!
+    ['lsp' 'bin' 'edit' 'completions' 'keys' 'fm'] subcommands!
 
     @input len 0 > if
         @input :0: first!
@@ -780,6 +773,11 @@ def __gitCompletion { 'complete': ['git'] } ([str] -- [str])
 
                 @refCommands (@subcmd =) any if
                     @completions ['git' 'for-each-ref' '--format=%(refname:short)' 'refs/heads' 'refs/remotes' 'refs/tags'] * ; lines extend completions!
+                end
+
+                # checkout/switch with a bare remote branch name creates a local tracking branch.
+                ['checkout' 'switch'] (@subcmd =) any if
+                    @completions ['git' 'for-each-ref' '--format=%(refname:lstrip=3)' 'refs/remotes'] * ; lines ('HEAD' = not) filter extend completions!
                 end
 
                 @fileCommands (@subcmd =) any if
@@ -1401,6 +1399,233 @@ def __cargoCompletion { 'complete': ['cargo'] } ([str] -- [str])
         end
     else
         __cargoSubcommands ['--list' '--explain' '-C'] extend __cargoCommonOptions extend
+    end
+end
+# }}}
+# typst {{{
+# Options that take a value, so the token after one is not a file or the subcommand.
+def __typstValueOptions ( -- new [str])
+    [
+        '--color' '--cert' '-f' '--format' '--root' '--input' '--font-path'
+        '--package-path' '--package-cache-path' '--creation-timestamp' '--pages'
+        '--pdf-standard' '--ppi' '--deps' '--deps-format' '-j' '--jobs' '--features'
+        '--diagnostic-format' '--timings' '--port' '--field' '--target' '--in' '--backup-path'
+    ]
+end
+
+# Options shared by every subcommand that compiles a document.
+def __typstWorldOptions ( -- new [str])
+    [
+        '--root' '--input' '--font-path' '--ignore-system-fonts' '--ignore-embedded-fonts'
+        '--package-path' '--package-cache-path' '--creation-timestamp'
+        '-j' '--jobs' '--features' '--diagnostic-format'
+    ]
+end
+
+def __typstCompileOptions ( -- [str])
+    __typstWorldOptions [
+        '-f' '--format' '--pretty' '--pages' '--pdf-standard' '--no-pdf-tags' '--ppi'
+        '--deps' '--deps-format' '--open' '--timings'
+    ] extend
+end
+
+def __typstOptionsForSubcmd (str -- [str])
+    match
+        'compile' : __typstCompileOptions,
+        'watch' : __typstCompileOptions ['--no-serve' '--no-reload' '--port'] extend,
+        'query' : __typstWorldOptions ['--field' '--one' '--format' '--pretty' '--target'] extend,
+        'eval' : __typstWorldOptions ['--in' '--target' '--format' '--pretty'] extend,
+        'init' : ['--package-path' '--package-cache-path'],
+        'fonts' : ['--font-path' '--ignore-system-fonts' '--ignore-embedded-fonts' '--variants'],
+        'update' : ['--force' '--revert' '--backup-path'],
+        'info' : ['-f' '--format' '--pretty'],
+        _ : [],
+    end ['-h' '--help'] extend
+end
+
+# The value given to an option on the command line, as `--opt value` or `--opt=value`.
+def __typstOptionValue ([str] str -- Maybe[str])
+    opt! input!
+    @input len seq findMap. i!
+        @input @i nth tok!
+        @tok @opt = if
+            @i 1 + @input len < if @input @i 1 + nth just else none end
+        else* @tok $"{@opt}=" startsWith *if
+            @tok @opt len 1 + skip just
+        else
+            none
+        end
+    end
+end
+
+# Where typst keeps packages: the local ones, then the downloaded ones.
+# An option on the command line wins over the environment variable,
+# which wins over the system's data and cache directories.
+def __typstPackageRoots ([str] -- new [str])
+    input!
+    'HOME' getEnv '' maybe home!
+    runtime match
+        'windows' : 'APPDATA' getEnv '' maybe,
+        'darwin' : $"{@home}/Library/Application Support",
+        _ : 'XDG_DATA_HOME' getEnv $"{@home}/.local/share" maybe,
+    end dataDir!
+    runtime match
+        'windows' : 'LOCALAPPDATA' getEnv '' maybe,
+        'darwin' : $"{@home}/Library/Caches",
+        _ : 'XDG_CACHE_HOME' getEnv $"{@home}/.cache" maybe,
+    end cacheDir!
+    [
+        @input '--package-path' __typstOptionValue ('TYPST_PACKAGE_PATH' getEnv) orElse
+        $"{@dataDir}/typst/packages" maybe
+        @input '--package-cache-path' __typstOptionValue ('TYPST_PACKAGE_CACHE_PATH' getEnv) orElse
+        $"{@cacheDir}/typst/packages" maybe
+    ]
+end
+
+# Whether a package version directory holds a template: its typst.toml has a [template] table.
+def __typstIsTemplate (path -- bool)
+    dir!
+    $"{@dir}/typst.toml" toPath manifest!
+    @manifest isFile if
+        @manifest parseToml match
+            ok d : @d 'template' in,
+            err e : false,
+        end
+    else
+        false
+    end
+end
+
+# The templates `typst init` can start from, as `@namespace/name` and `@namespace/name:version`.
+# Packages live at <root>/<namespace>/<name>/<version>.
+def __typstTemplates ([str] -- new [str])
+    __typstPackageRoots (toPath isDir) filter
+    (lsDir (isDir) filter) map concat   # namespaces
+    (lsDir (isDir) filter) map concat   # names
+    (lsDir (isDir) filter) map concat   # versions
+    (__typstIsTemplate) filter
+    (verDir!
+        $"@{@verDir dirname dirname basename}/{@verDir dirname basename}" spec!
+        [@spec $"{@spec}:{@verDir basename}"]
+    ) map concat
+    uniq sortV
+end
+
+# The labels written in a Typst file, like `<intro>`, for a `typst query` selector.
+def __typstLabels (str -- new [str])
+    file! @file toPath isFile match true: @file readFile '<[A-Za-z_][A-Za-z0-9_.:-]*>' reFindAll (:0:) map uniq, _: [] end
+end
+
+def __typstCompletion { 'complete': ['typst'] } ([str] -- CompletionResult)
+    input!
+    __typstValueOptions valueOptions!
+    ['compile' 'watch' 'init' 'query' 'eval' 'fonts' 'update' 'completions' 'info' 'help'] subcommands!
+
+    # Find the subcommand and the arguments after it that are not options.
+    # `--open` takes a viewer only when the next word is not an option,
+    # and after `--` every word is an argument.
+    "" subcmd!
+    [] positionals!
+    false skipNext!
+    false optionalNext!
+    false optionsDone!
+    @input each. tok!
+        @skipNext if
+            false skipNext!
+        else* @optionalNext @tok "-" startsWith not and *if
+            false optionalNext!
+        else* @optionsDone not @tok '--' = and *if
+            false optionalNext!
+            true optionsDone!
+        else* @optionsDone not @tok "-" startsWith and @tok '-' = not and *if
+            false optionalNext!
+            @valueOptions (@tok =) any skipNext!
+            @tok '--open' = optionalNext!
+        else* @subcmd len 0 = *if
+            false optionalNext!
+            @tok subcmd!
+        else
+            false optionalNext!
+            @positionals @tok append drop
+        end
+    end
+
+    @subcmd match
+        'c' : 'compile',
+        'w' : 'watch',
+        _   : @subcmd,
+    end subcmd!
+    @subcmd __typstOptionsForSubcmd options!
+    @optionsDone if [] options! end
+    @positionals len positional!
+    @input len 0 > if @input :-1: else "" end last!
+
+    @skipNext if
+        # Complete the value of the option just typed.
+        @last match
+            '--color' : { 'values': ['auto' 'always' 'never'] },
+            '--cert' : { 'preferredFiles': ['*.pem' '*.crt' '*.cer'] },
+            '-f' '--format' :
+                ['compile' 'watch'] (@subcmd =) any if
+                    { 'values': ['pdf' 'png' 'svg' 'html' 'bundle'] }
+                else
+                    { 'values': ['json' 'yaml'] }
+                end,
+            '--root' '--font-path' '--package-path' '--package-cache-path' : { 'dirs': true },
+            '--pdf-standard' : { 'values': [
+                '1.4' '1.5' '1.6' '1.7' '2.0' 'a-1b' 'a-1a' 'a-2b' 'a-2u' 'a-2a'
+                'a-3b' 'a-3u' 'a-3a' 'a-4' 'a-4f' 'a-4e' 'ua-1'
+            ] },
+            '--deps-format' : { 'values': ['json' 'zero' 'make'] },
+            '--features' : { 'values': ['html' 'bundle' 'a11y-extras'] },
+            '--diagnostic-format' : { 'values': ['human' 'short'] },
+            '--target' : { 'values': ['paged' 'html' 'bundle'] },
+            '--field' : { 'values': ['value' 'label' 'body' 'level' 'caption' 'numbering' 'supplement' 'kind'] },
+            '--in' : { 'values': ['-'], 'preferredFiles': ['*.typ'] },
+            '--deps' : { 'values': ['-'], 'files': ['*'] },
+            '--timings' '--backup-path' : { 'files': ['*'] },
+            # Free-form values: --input, --pages, --ppi, --jobs, --port, --creation-timestamp
+            _ : { 'values': [] },
+        end
+    else* @optionalNext *if
+        # Right after `--open`, a word that is not an option is taken as the viewer.
+        { 'values': @options, 'binaries': true } as CompletionResult
+    else* @subcmd len 0 = *if
+        { 'values': @subcommands ['--color' '--cert' '-h' '--help' '-V' '--version'] extend }
+    else
+        @subcmd match
+            'compile' 'watch' : @positional match
+                0 : { 'values': @options ['-'] extend, 'preferredFiles': ['*.typ'] },
+                1 : { 'values': @options ['-'] extend, 'preferredFiles': ['*.pdf' '*.png' '*.svg' '*.html'] } as CompletionResult,
+                _ : { 'values': @options },
+            end,
+            'query' : @positional match
+                0 : { 'values': @options ['-'] extend, 'preferredFiles': ['*.typ'] },
+                1 : { 'values': @options
+                        @positionals :0: __typstLabels extend
+                        [
+                            'heading' 'figure' 'figure.caption' 'metadata' 'math.equation'
+                            'footnote' 'table' 'image' 'list' 'enum' 'link' 'quote' 'raw'
+                            'cite' 'ref' 'bibliography' 'outline'
+                        ] extend
+                    } as CompletionResult,
+                _ : { 'values': @options },
+            end,
+            'init' : @positional match
+                0 : { 'values': @options @input __typstTemplates extend },
+                1 : { 'values': @options, 'dirs': true } as CompletionResult,
+                _ : { 'values': @options },
+            end,
+            'completions' : @positional match
+                0 : { 'values': ['bash' 'elvish' 'fish' 'powershell' 'zsh'] },
+                _ : { 'values': [] },
+            end,
+            'help' : @positional match
+                0 : { 'values': ['compile' 'watch' 'init' 'query' 'eval' 'fonts' 'update' 'completions' 'info' 'help'] },
+                _ : { 'values': [] },
+            end,
+            _ : { 'values': @options },
+        end
     end
 end
 # }}}

@@ -3,7 +3,6 @@ package main
 import (
 	"slices"
 	"strconv"
-	"strings"
 )
 
 // match in the core checker (ai/type-core-calculus.typ, "Unknown contents
@@ -60,6 +59,8 @@ func (c *coreChecker) patternKind(tok Token) (valueKind, bool) {
 			return valueKind{code: uint32(TidPath)}, true
 		case "datetime":
 			return valueKind{code: uint32(TidDateTime)}, true
+		case "rune":
+			return valueKind{code: uint32(TidRune)}, true
 		case "quotation":
 			return valueKind{code: kindQuote}, true
 		case "maybe":
@@ -169,6 +170,10 @@ type coreArm struct {
 	// least length; -1 when the arm is not a list pattern.
 	listLen  int
 	listRest bool
+	// listTests is set when a list pattern also tests what is in its
+	// positions (a literal, an enum member, a nested pattern), so it does
+	// not match every list of its lengths.
+	listTests bool
 	// member is 1 + the position of the enum member a member pattern
 	// matches, in the enum memberEnum, or 0.
 	member     int
@@ -463,7 +468,7 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 			a.boolLit = 1
 		case p.Type == FALSE:
 			a.boolLit = 2
-		case p.Type == INTEGER, p.Type == FLOAT, p.Type == STRING, p.Type == SINGLEQUOTESTRING, p.Type == PATH:
+		case p.Type == INTEGER, p.Type == FLOAT, p.Type == STRING, p.Type == SINGLEQUOTESTRING, p.Type == PATH, p.Type == RUNE:
 			// A value pattern tests equality; it narrows nothing.
 		default:
 			k, ok := c.patternKind(*p)
@@ -480,65 +485,192 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 	case *MShellParseList:
 		elem := c.listElem(c.narrowKind(&a, valueKind{code: kindList}, p.StartToken))
 		a.listLen = len(p.Items)
-		for _, item := range p.Items {
-			tok, ok := item.(*Token)
-			if !ok || tok.Type != LITERAL {
-				return c.badPattern(p.StartToken, "a list pattern holds names, `_` and one `...rest`")
-			}
-			switch {
-			case tok.Lexeme == "_":
-			case tok.Lexeme == "..._":
-				a.listRest, a.listLen = true, a.listLen-1
-			case strings.HasPrefix(tok.Lexeme, "..."):
-				a.listRest, a.listLen = true, a.listLen-1
-				// The rest is a new list of the same elements.
-				rest := *tok
-				rest.Lexeme = tok.Lexeme[3:]
-				lt := TidBottom
-				if elem != TidBottom {
-					lt = c.arena.MakeList(elem)
-				}
-				c.bind(&a, rest, lt)
-			default:
-				c.bind(&a, *tok, elem)
-			}
+		if slices.ContainsFunc(p.Items, isSpreadToken) {
+			a.listRest, a.listLen = true, a.listLen-1
 		}
+		tests, ok := c.listPattern(&a, p, elem)
+		if !ok {
+			return coreArm{}, false
+		}
+		a.listTests = tests
 	case *MShellParseDict:
 		rec := c.narrowKind(&a, valueKind{code: kindDict}, p.StartToken)
-		for _, kv := range p.Items {
-			if len(kv.Value) != 1 {
-				return c.badPattern(p.StartToken, "a dict pattern's value is one name")
-			}
-			tok, ok := kv.Value[0].(*Token)
-			if !ok || tok.Type != LITERAL {
-				return c.badPattern(p.StartToken, "a dict pattern's value is one name")
-			}
-			ft, open := TidBottom, false
-			if rec != TidBottom {
-				f := c.arena.records[c.arena.nodes[rec].Extra].FieldAt(c.names.Intern(kv.Key))
-				switch f.Status {
-				case FieldRequired, FieldOptional, FieldDeletable:
-					ft = f.Type
-				case FieldOpen:
-					ft, open = TidUnknown, true
-				case FieldAbsent:
-					// In a match this arm is dead; after `=>` it always fails.
-					if c.assertive {
-						c.errs = append(c.errs, TypeError{Kind: TErrInvalidMatchPattern, Pos: p.StartToken,
-							Hint: "this pattern never matches: " + c.format(rec) + " has no key '" + kv.Key + "'"})
-					}
-				}
-			}
-			c.bind(&a, *tok, ft)
-			if open && tok.Lexeme != "_" {
-				b := &a.binds[len(a.binds)-1]
-				b.open, b.rec, b.key = true, rec, c.names.Intern(kv.Key)
-			}
+		if !c.dictPattern(&a, p, rec) {
+			return coreArm{}, false
 		}
 	default:
 		return c.badPattern(at, "")
 	}
 	return a, true
+}
+
+// listPattern reads the positions of a list pattern whose elements have
+// type elem (TidBottom when the list never matches), adding the names it
+// binds to a. tests is set when a position tests the element.
+func (c *coreChecker) listPattern(a *coreArm, p *MShellParseList, elem TypeId) (tests, ok bool) {
+	for _, item := range p.Items {
+		if isSpreadToken(item) {
+			// The rest is a new list of the same elements.
+			rest := *item.(*Token)
+			rest.Lexeme = rest.Lexeme[3:]
+			lt := TidBottom
+			if elem != TidBottom {
+				lt = c.arena.MakeList(elem)
+			}
+			c.bindOnce(a, rest, lt)
+			continue
+		}
+		t, ok := c.innerPattern(a, item, elem)
+		if !ok {
+			return false, false
+		}
+		tests = tests || t
+	}
+	return tests, true
+}
+
+// dictPattern reads the values of a dict pattern on the record type rec
+// (TidBottom when the dict never matches), adding the names it binds to a.
+func (c *coreChecker) dictPattern(a *coreArm, p *MShellParseDict, rec TypeId) bool {
+	for _, kv := range p.Items {
+		if len(kv.Value) != 1 {
+			c.badPattern(p.StartToken, "a dict pattern's value is one item")
+			return false
+		}
+		ft, open := TidBottom, false
+		if rec != TidBottom {
+			f := c.arena.records[c.arena.nodes[rec].Extra].FieldAt(c.names.Intern(kv.Key))
+			switch f.Status {
+			case FieldRequired, FieldOptional, FieldDeletable:
+				ft = f.Type
+			case FieldOpen:
+				ft, open = TidUnknown, true
+			case FieldAbsent:
+				// In a match this arm is dead; after `=>` it always fails.
+				if c.assertive {
+					c.errs = append(c.errs, TypeError{Kind: TErrInvalidMatchPattern, Pos: p.StartToken,
+						Hint: "this pattern never matches: " + c.format(rec) + " has no key '" + kv.Key + "'"})
+				}
+			}
+		}
+		n := len(a.binds)
+		if _, ok := c.innerPattern(a, kv.Value[0], ft); !ok {
+			return false
+		}
+		if open && len(a.binds) == n+1 {
+			if tok, ok := kv.Value[0].(*Token); ok && tok.Type == LITERAL {
+				// The name reads a field the record does not declare.
+				b := &a.binds[n]
+				b.open, b.rec, b.key = true, rec, c.names.Intern(kv.Key)
+			}
+		}
+	}
+	return true
+}
+
+// innerPattern reads one position of a list pattern, or one value of a
+// dict pattern, on a value of type t (TidBottom when the enclosing pattern
+// never matches), adding the names it binds to a. tests is set when it can
+// fail on a value of type t.
+func (c *coreChecker) innerPattern(a *coreArm, item MShellParseItem, t TypeId) (tests, ok bool) {
+	switch p := item.(type) {
+	case *MShellParseList:
+		lt := c.innerKind(a, t, valueKind{code: kindList}, p)
+		elem := TidBottom
+		if lt != TidBottom {
+			elem = c.listElem(lt)
+		}
+		if _, ok := c.listPattern(a, p, elem); !ok {
+			return false, false
+		}
+		return true, true
+	case *MShellParseDict:
+		rec := c.innerKind(a, t, valueKind{code: kindDict}, p)
+		return true, c.dictPattern(a, p, rec)
+	case *Token:
+		if k, ok := c.literalKind(*p); ok {
+			c.innerKind(a, t, k, p)
+			return true, true
+		}
+		if p.Type != LITERAL {
+			break
+		}
+		if p.Lexeme == "_" {
+			return false, true
+		}
+		// An enum member without payload values tests the element; any
+		// other word is a name, as at run time.
+		if ct := c.ctorNamed(p.Lexeme); ct != nil && len(c.arena.EnumDecl(ct.enum).Ctors[ct.idx].Payload) == 0 {
+			c.innerKind(a, t, valueKind{code: kindEnum, enum: ct.enum}, p)
+			return true, true
+		}
+		c.bindOnce(a, *p, t)
+		return false, true
+	}
+	c.badPattern(item.GetStartToken(), "a position in a list pattern, or a value in a dict pattern, is a name, `_`, "+
+		"a literal value, an enum member without payload values, or a nested list or dict pattern")
+	return false, false
+}
+
+// innerKind is the member of t of kind k, for a pattern inside a list or
+// dict pattern. When t has no such member the pattern never matches, which
+// is an error; when t's contents are not known, it is a type of kind k
+// whose abstract types are added to a. It is TidBottom when t is.
+func (c *coreChecker) innerKind(a *coreArm, t TypeId, k valueKind, item MShellParseItem) TypeId {
+	if t == TidBottom {
+		return TidBottom
+	}
+	m, found, unknown := c.memberOfKind(t, k)
+	switch {
+	case unknown:
+		ut, abstracts := c.unknownOfKind(k)
+		a.abstracts = append(a.abstracts, abstracts...)
+		return ut
+	case found:
+		return m
+	}
+	c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: item.GetStartToken(),
+		Hint: "`" + formatPatternItem(item) + "` never matches: the value in this position is " + c.format(t)})
+	return TidBottom
+}
+
+// literalKind is the kind of value a literal in a pattern equals.
+func (c *coreChecker) literalKind(tok Token) (valueKind, bool) {
+	switch tok.Type {
+	case INTEGER:
+		return valueKind{code: uint32(TidInt)}, true
+	case FLOAT:
+		return valueKind{code: uint32(TidFloat)}, true
+	case STRING, SINGLEQUOTESTRING:
+		return valueKind{code: uint32(TidStr)}, true
+	case TRUE, FALSE:
+		return valueKind{code: uint32(TidBool)}, true
+	case PATH:
+		return valueKind{code: uint32(TidPath)}, true
+	case RUNE:
+		return valueKind{code: uint32(TidRune)}, true
+	case LITERAL:
+		switch tok.Lexeme {
+		case "null":
+			return valueKind{code: uint32(TidNull)}, true
+		case "none":
+			return valueKind{code: kindEnum, enum: EnumMaybe}, true
+		}
+	}
+	return valueKind{}, false
+}
+
+// bindOnce records a binding of a list or dict pattern; a name bound twice
+// is an error.
+func (c *coreChecker) bindOnce(a *coreArm, tok Token, t TypeId) {
+	for _, b := range a.binds {
+		if b.tok.Lexeme == tok.Lexeme {
+			c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
+				Hint: "a destructuring pattern cannot bind '" + tok.Lexeme + "' more than once"})
+			return
+		}
+	}
+	c.bind(a, tok, t)
 }
 
 // memberPattern reads an enum member pattern, `circle r` or `empty`: the
@@ -665,6 +797,10 @@ func (c *coreChecker) exhaustive(arms []coreArm, t TypeId) bool {
 				fa = true
 			}
 		}
+		// Maybe[⊥], the type of none, holds only none, so it needs no just arm.
+		if none && c.arena.EnumArgs(m)[0] == TidBottom {
+			just = true
+		}
 		if !covered && !(just && none) && !(tr && fa) && !(k.code == kindList && listsCover(arms)) {
 			return false
 		}
@@ -693,7 +829,7 @@ func (c *coreChecker) membersCover(arms []coreArm, idx uint32) bool {
 func listsCover(arms []coreArm) bool {
 	least := -1
 	for _, a := range arms {
-		if a.listLen >= 0 && a.listRest && (least < 0 || a.listLen < least) {
+		if a.listLen >= 0 && a.listRest && !a.listTests && (least < 0 || a.listLen < least) {
 			least = a.listLen
 		}
 	}
@@ -703,7 +839,7 @@ func listsCover(arms []coreArm) bool {
 	for n := 0; n < least; n++ {
 		found := false
 		for _, a := range arms {
-			if a.listLen == n && !a.listRest {
+			if a.listLen == n && !a.listRest && !a.listTests {
 				found = true
 			}
 		}

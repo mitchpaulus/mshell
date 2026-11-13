@@ -1,163 +1,163 @@
-5 6 7 -> none
-5 6 10 -> none
-5 6 16 -> none
-5 6 46 -> none
-5 6 Nov -> none
-5 6 2027 -> none
-5 09 7 -> none
-5 09 10 -> none
-5 09 16 -> none
-5 09 46 -> none
-5 09 Nov -> none
-5 09 2027 -> none
-5 15 7 -> none
-5 15 Nov -> none
-5 45 7 -> none
-5 45 10 -> none
-5 45 16 -> none
-5 45 46 -> none
-5 45 Nov -> none
-5 45 2027 -> none
-5 Oct 7 -> none
-5 Oct Nov -> none
-5 2026 7 -> none
-5 2026 10 -> none
-5 2026 16 -> none
-5 2026 46 -> none
-5 2026 Nov -> none
-5 2026 2027 -> none
-08 6 10 -> none
-08 6 16 -> none
-08 6 46 -> none
-08 6 Nov -> none
-08 6 2027 -> none
-08 09 10 -> none
-08 09 16 -> none
-08 09 46 -> none
-08 09 Nov -> none
-08 09 2027 -> none
-08 15 7 -> none
-08 15 Nov -> none
-08 45 7 -> none
-08 45 10 -> none
-08 45 16 -> none
-08 45 46 -> none
-08 45 Nov -> none
-08 45 2027 -> none
-08 Oct 10 -> none
-08 Oct 16 -> none
-08 Oct Nov -> none
-08 2026 7 -> none
-08 2026 10 -> none
-08 2026 16 -> none
-08 2026 46 -> none
-08 2026 Nov -> none
-08 2026 2027 -> none
-14 6 10 -> none
-14 6 16 -> none
-14 6 Nov -> none
-14 09 10 -> none
-14 09 16 -> none
-14 09 Nov -> none
-14 15 7 -> none
-14 15 10 -> none
-14 15 16 -> none
-14 15 46 -> none
-14 15 Nov -> none
-14 15 2027 -> none
-14 45 7 -> none
-14 45 10 -> none
-14 45 16 -> none
-14 45 46 -> none
-14 45 Nov -> none
-14 45 2027 -> none
-14 Oct 10 -> none
-14 Oct 16 -> none
-14 Oct Nov -> none
-14 2026 7 -> none
-14 2026 10 -> none
-14 2026 16 -> none
-14 2026 46 -> none
-14 2026 Nov -> none
-14 2026 2027 -> none
-44 6 46 -> none
-44 6 Nov -> none
-44 6 2027 -> none
-44 09 46 -> none
-44 09 Nov -> none
-44 09 2027 -> none
-44 15 7 -> none
-44 15 10 -> none
-44 15 16 -> none
-44 15 46 -> none
-44 15 Nov -> none
-44 15 2027 -> none
-44 45 7 -> none
-44 45 10 -> none
-44 45 16 -> none
-44 45 46 -> none
-44 45 Nov -> none
-44 45 2027 -> none
-44 Oct 46 -> none
-44 Oct Nov -> none
-44 Oct 2027 -> none
-44 2026 7 -> none
-44 2026 10 -> none
-44 2026 16 -> none
-44 2026 46 -> none
-44 2026 Nov -> none
-44 2026 2027 -> none
-Sep 6 7 -> none
-Sep 6 Nov -> none
-Sep 09 7 -> none
-Sep 09 Nov -> none
-Sep 15 7 -> none
-Sep 15 Nov -> none
-Sep 45 7 -> none
-Sep 45 10 -> none
-Sep 45 16 -> none
-Sep 45 46 -> none
-Sep 45 Nov -> none
-Sep 45 2027 -> none
-Sep Oct 7 -> none
-Sep Oct 10 -> none
-Sep Oct 16 -> none
-Sep Oct 46 -> none
-Sep Oct Nov -> none
-Sep Oct 2027 -> none
-Sep 2026 7 -> none
-Sep 2026 10 -> none
-Sep 2026 16 -> none
-Sep 2026 46 -> none
-Sep 2026 Nov -> none
-Sep 2026 2027 -> none
-2025 6 46 -> none
-2025 6 Nov -> none
-2025 6 2027 -> none
-2025 09 46 -> none
-2025 09 Nov -> none
-2025 09 2027 -> none
-2025 15 7 -> none
-2025 15 10 -> none
-2025 15 16 -> none
-2025 15 46 -> none
-2025 15 Nov -> none
-2025 15 2027 -> none
-2025 45 7 -> none
-2025 45 10 -> none
-2025 45 16 -> none
-2025 45 46 -> none
-2025 45 Nov -> none
-2025 45 2027 -> none
-2025 Oct 46 -> none
-2025 Oct Nov -> none
-2025 Oct 2027 -> none
-2025 2026 7 -> none
-2025 2026 10 -> none
-2025 2026 16 -> none
-2025 2026 46 -> none
-2025 2026 Nov -> none
-2025 2026 2027 -> none
+5 6 7 -> Cannot parse '5 6 7' as a date/time: No valid reading of the date in any order
+5 6 10 -> Cannot parse '5 6 10' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+5 6 16 -> Cannot parse '5 6 16' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+5 6 46 -> Cannot parse '5 6 46' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+5 6 Nov -> Cannot parse '5 6 Nov' as a date/time: No valid reading of the date in any order
+5 6 2027 -> Cannot parse '5 6 2027' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+5 09 7 -> Cannot parse '5 09 7' as a date/time: No valid reading of the date in any order
+5 09 10 -> Cannot parse '5 09 10' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+5 09 16 -> Cannot parse '5 09 16' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+5 09 46 -> Cannot parse '5 09 46' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+5 09 Nov -> Cannot parse '5 09 Nov' as a date/time: No valid reading of the date in any order
+5 09 2027 -> Cannot parse '5 09 2027' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+5 15 7 -> Cannot parse '5 15 7' as a date/time: No valid reading of the date in any order
+5 15 Nov -> Cannot parse '5 15 Nov' as a date/time: No valid reading of the date in any order
+5 45 7 -> Cannot parse '5 45 7' as a date/time: No valid reading of the date in any order
+5 45 10 -> Cannot parse '5 45 10' as a date/time: No valid reading of the date in any order
+5 45 16 -> Cannot parse '5 45 16' as a date/time: No valid reading of the date in any order
+5 45 46 -> Cannot parse '5 45 46' as a date/time: No valid reading of the date in any order
+5 45 Nov -> Cannot parse '5 45 Nov' as a date/time: No valid reading of the date in any order
+5 45 2027 -> Cannot parse '5 45 2027' as a date/time: No valid reading of the date in any order
+5 Oct 7 -> Cannot parse '5 Oct 7' as a date/time: No valid reading of the date in any order
+5 Oct Nov -> Cannot parse '5 Oct Nov' as a date/time: No valid reading of the date in any order
+5 2026 7 -> Cannot parse '5 2026 7' as a date/time: No valid reading of the date in any order
+5 2026 10 -> Cannot parse '5 2026 10' as a date/time: No valid reading of the date in any order
+5 2026 16 -> Cannot parse '5 2026 16' as a date/time: No valid reading of the date in any order
+5 2026 46 -> Cannot parse '5 2026 46' as a date/time: No valid reading of the date in any order
+5 2026 Nov -> Cannot parse '5 2026 Nov' as a date/time: No valid reading of the date in any order
+5 2026 2027 -> Cannot parse '5 2026 2027' as a date/time: No valid reading of the date in any order
+08 6 10 -> Cannot parse '08 6 10' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+08 6 16 -> Cannot parse '08 6 16' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+08 6 46 -> Cannot parse '08 6 46' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+08 6 Nov -> Cannot parse '08 6 Nov' as a date/time: No valid reading of the date in any order
+08 6 2027 -> Cannot parse '08 6 2027' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+08 09 10 -> Cannot parse '08 09 10' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+08 09 16 -> Cannot parse '08 09 16' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+08 09 46 -> Cannot parse '08 09 46' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+08 09 Nov -> Cannot parse '08 09 Nov' as a date/time: No valid reading of the date in any order
+08 09 2027 -> Cannot parse '08 09 2027' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+08 15 7 -> Cannot parse '08 15 7' as a date/time: No valid reading of the date in any order
+08 15 Nov -> Cannot parse '08 15 Nov' as a date/time: No valid reading of the date in any order
+08 45 7 -> Cannot parse '08 45 7' as a date/time: No valid reading of the date in any order
+08 45 10 -> Cannot parse '08 45 10' as a date/time: No valid reading of the date in any order
+08 45 16 -> Cannot parse '08 45 16' as a date/time: No valid reading of the date in any order
+08 45 46 -> Cannot parse '08 45 46' as a date/time: No valid reading of the date in any order
+08 45 Nov -> Cannot parse '08 45 Nov' as a date/time: No valid reading of the date in any order
+08 45 2027 -> Cannot parse '08 45 2027' as a date/time: No valid reading of the date in any order
+08 Oct 10 -> Cannot parse '08 Oct 10' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+08 Oct 16 -> Cannot parse '08 Oct 16' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+08 Oct Nov -> Cannot parse '08 Oct Nov' as a date/time: No valid reading of the date in any order
+08 2026 7 -> Cannot parse '08 2026 7' as a date/time: No valid reading of the date in any order
+08 2026 10 -> Cannot parse '08 2026 10' as a date/time: No valid reading of the date in any order
+08 2026 16 -> Cannot parse '08 2026 16' as a date/time: No valid reading of the date in any order
+08 2026 46 -> Cannot parse '08 2026 46' as a date/time: No valid reading of the date in any order
+08 2026 Nov -> Cannot parse '08 2026 Nov' as a date/time: No valid reading of the date in any order
+08 2026 2027 -> Cannot parse '08 2026 2027' as a date/time: No valid reading of the date in any order
+14 6 10 -> Cannot parse '14 6 10' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+14 6 16 -> Cannot parse '14 6 16' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+14 6 Nov -> Cannot parse '14 6 Nov' as a date/time: No valid reading of the date in any order
+14 09 10 -> Cannot parse '14 09 10' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+14 09 16 -> Cannot parse '14 09 16' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+14 09 Nov -> Cannot parse '14 09 Nov' as a date/time: No valid reading of the date in any order
+14 15 7 -> Cannot parse '14 15 7' as a date/time: No valid reading of the date in any order
+14 15 10 -> Cannot parse '14 15 10' as a date/time: No valid reading of the date in any order
+14 15 16 -> Cannot parse '14 15 16' as a date/time: No valid reading of the date in any order
+14 15 46 -> Cannot parse '14 15 46' as a date/time: No valid reading of the date in any order
+14 15 Nov -> Cannot parse '14 15 Nov' as a date/time: No valid reading of the date in any order
+14 15 2027 -> Cannot parse '14 15 2027' as a date/time: No valid reading of the date in any order
+14 45 7 -> Cannot parse '14 45 7' as a date/time: No valid reading of the date in any order
+14 45 10 -> Cannot parse '14 45 10' as a date/time: No valid reading of the date in any order
+14 45 16 -> Cannot parse '14 45 16' as a date/time: No valid reading of the date in any order
+14 45 46 -> Cannot parse '14 45 46' as a date/time: No valid reading of the date in any order
+14 45 Nov -> Cannot parse '14 45 Nov' as a date/time: No valid reading of the date in any order
+14 45 2027 -> Cannot parse '14 45 2027' as a date/time: No valid reading of the date in any order
+14 Oct 10 -> Cannot parse '14 Oct 10' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+14 Oct 16 -> Cannot parse '14 Oct 16' as a date/time: Ambiguous date with no prior unambiguous date to establish the order
+14 Oct Nov -> Cannot parse '14 Oct Nov' as a date/time: No valid reading of the date in any order
+14 2026 7 -> Cannot parse '14 2026 7' as a date/time: No valid reading of the date in any order
+14 2026 10 -> Cannot parse '14 2026 10' as a date/time: No valid reading of the date in any order
+14 2026 16 -> Cannot parse '14 2026 16' as a date/time: No valid reading of the date in any order
+14 2026 46 -> Cannot parse '14 2026 46' as a date/time: No valid reading of the date in any order
+14 2026 Nov -> Cannot parse '14 2026 Nov' as a date/time: No valid reading of the date in any order
+14 2026 2027 -> Cannot parse '14 2026 2027' as a date/time: No valid reading of the date in any order
+44 6 46 -> Cannot parse '44 6 46' as a date/time: No valid reading of the date in any order
+44 6 Nov -> Cannot parse '44 6 Nov' as a date/time: No valid reading of the date in any order
+44 6 2027 -> Cannot parse '44 6 2027' as a date/time: No valid reading of the date in any order
+44 09 46 -> Cannot parse '44 09 46' as a date/time: No valid reading of the date in any order
+44 09 Nov -> Cannot parse '44 09 Nov' as a date/time: No valid reading of the date in any order
+44 09 2027 -> Cannot parse '44 09 2027' as a date/time: No valid reading of the date in any order
+44 15 7 -> Cannot parse '44 15 7' as a date/time: No valid reading of the date in any order
+44 15 10 -> Cannot parse '44 15 10' as a date/time: No valid reading of the date in any order
+44 15 16 -> Cannot parse '44 15 16' as a date/time: No valid reading of the date in any order
+44 15 46 -> Cannot parse '44 15 46' as a date/time: No valid reading of the date in any order
+44 15 Nov -> Cannot parse '44 15 Nov' as a date/time: No valid reading of the date in any order
+44 15 2027 -> Cannot parse '44 15 2027' as a date/time: No valid reading of the date in any order
+44 45 7 -> Cannot parse '44 45 7' as a date/time: No valid reading of the date in any order
+44 45 10 -> Cannot parse '44 45 10' as a date/time: No valid reading of the date in any order
+44 45 16 -> Cannot parse '44 45 16' as a date/time: No valid reading of the date in any order
+44 45 46 -> Cannot parse '44 45 46' as a date/time: No valid reading of the date in any order
+44 45 Nov -> Cannot parse '44 45 Nov' as a date/time: No valid reading of the date in any order
+44 45 2027 -> Cannot parse '44 45 2027' as a date/time: No valid reading of the date in any order
+44 Oct 46 -> Cannot parse '44 Oct 46' as a date/time: No valid reading of the date in any order
+44 Oct Nov -> Cannot parse '44 Oct Nov' as a date/time: No valid reading of the date in any order
+44 Oct 2027 -> Cannot parse '44 Oct 2027' as a date/time: No valid reading of the date in any order
+44 2026 7 -> Cannot parse '44 2026 7' as a date/time: No valid reading of the date in any order
+44 2026 10 -> Cannot parse '44 2026 10' as a date/time: No valid reading of the date in any order
+44 2026 16 -> Cannot parse '44 2026 16' as a date/time: No valid reading of the date in any order
+44 2026 46 -> Cannot parse '44 2026 46' as a date/time: No valid reading of the date in any order
+44 2026 Nov -> Cannot parse '44 2026 Nov' as a date/time: No valid reading of the date in any order
+44 2026 2027 -> Cannot parse '44 2026 2027' as a date/time: No valid reading of the date in any order
+Sep 6 7 -> Cannot parse 'Sep 6 7' as a date/time: No valid reading of the date in any order
+Sep 6 Nov -> Cannot parse 'Sep 6 Nov' as a date/time: No valid reading of the date in any order
+Sep 09 7 -> Cannot parse 'Sep 09 7' as a date/time: No valid reading of the date in any order
+Sep 09 Nov -> Cannot parse 'Sep 09 Nov' as a date/time: No valid reading of the date in any order
+Sep 15 7 -> Cannot parse 'Sep 15 7' as a date/time: No valid reading of the date in any order
+Sep 15 Nov -> Cannot parse 'Sep 15 Nov' as a date/time: No valid reading of the date in any order
+Sep 45 7 -> Cannot parse 'Sep 45 7' as a date/time: No valid reading of the date in any order
+Sep 45 10 -> Cannot parse 'Sep 45 10' as a date/time: No valid reading of the date in any order
+Sep 45 16 -> Cannot parse 'Sep 45 16' as a date/time: No valid reading of the date in any order
+Sep 45 46 -> Cannot parse 'Sep 45 46' as a date/time: No valid reading of the date in any order
+Sep 45 Nov -> Cannot parse 'Sep 45 Nov' as a date/time: No valid reading of the date in any order
+Sep 45 2027 -> Cannot parse 'Sep 45 2027' as a date/time: No valid reading of the date in any order
+Sep Oct 7 -> Cannot parse 'Sep Oct 7' as a date/time: No valid reading of the date in any order
+Sep Oct 10 -> Cannot parse 'Sep Oct 10' as a date/time: No valid reading of the date in any order
+Sep Oct 16 -> Cannot parse 'Sep Oct 16' as a date/time: No valid reading of the date in any order
+Sep Oct 46 -> Cannot parse 'Sep Oct 46' as a date/time: No valid reading of the date in any order
+Sep Oct Nov -> Cannot parse 'Sep Oct Nov' as a date/time: No valid reading of the date in any order
+Sep Oct 2027 -> Cannot parse 'Sep Oct 2027' as a date/time: No valid reading of the date in any order
+Sep 2026 7 -> Cannot parse 'Sep 2026 7' as a date/time: No valid reading of the date in any order
+Sep 2026 10 -> Cannot parse 'Sep 2026 10' as a date/time: No valid reading of the date in any order
+Sep 2026 16 -> Cannot parse 'Sep 2026 16' as a date/time: No valid reading of the date in any order
+Sep 2026 46 -> Cannot parse 'Sep 2026 46' as a date/time: No valid reading of the date in any order
+Sep 2026 Nov -> Cannot parse 'Sep 2026 Nov' as a date/time: No valid reading of the date in any order
+Sep 2026 2027 -> Cannot parse 'Sep 2026 2027' as a date/time: No valid reading of the date in any order
+2025 6 46 -> Cannot parse '2025 6 46' as a date/time: No valid reading of the date in any order
+2025 6 Nov -> Cannot parse '2025 6 Nov' as a date/time: No valid reading of the date in any order
+2025 6 2027 -> Cannot parse '2025 6 2027' as a date/time: No valid reading of the date in any order
+2025 09 46 -> Cannot parse '2025 09 46' as a date/time: No valid reading of the date in any order
+2025 09 Nov -> Cannot parse '2025 09 Nov' as a date/time: No valid reading of the date in any order
+2025 09 2027 -> Cannot parse '2025 09 2027' as a date/time: No valid reading of the date in any order
+2025 15 7 -> Cannot parse '2025 15 7' as a date/time: No valid reading of the date in any order
+2025 15 10 -> Cannot parse '2025 15 10' as a date/time: No valid reading of the date in any order
+2025 15 16 -> Cannot parse '2025 15 16' as a date/time: No valid reading of the date in any order
+2025 15 46 -> Cannot parse '2025 15 46' as a date/time: No valid reading of the date in any order
+2025 15 Nov -> Cannot parse '2025 15 Nov' as a date/time: No valid reading of the date in any order
+2025 15 2027 -> Cannot parse '2025 15 2027' as a date/time: No valid reading of the date in any order
+2025 45 7 -> Cannot parse '2025 45 7' as a date/time: No valid reading of the date in any order
+2025 45 10 -> Cannot parse '2025 45 10' as a date/time: No valid reading of the date in any order
+2025 45 16 -> Cannot parse '2025 45 16' as a date/time: No valid reading of the date in any order
+2025 45 46 -> Cannot parse '2025 45 46' as a date/time: No valid reading of the date in any order
+2025 45 Nov -> Cannot parse '2025 45 Nov' as a date/time: No valid reading of the date in any order
+2025 45 2027 -> Cannot parse '2025 45 2027' as a date/time: No valid reading of the date in any order
+2025 Oct 46 -> Cannot parse '2025 Oct 46' as a date/time: No valid reading of the date in any order
+2025 Oct Nov -> Cannot parse '2025 Oct Nov' as a date/time: No valid reading of the date in any order
+2025 Oct 2027 -> Cannot parse '2025 Oct 2027' as a date/time: No valid reading of the date in any order
+2025 2026 7 -> Cannot parse '2025 2026 7' as a date/time: No valid reading of the date in any order
+2025 2026 10 -> Cannot parse '2025 2026 10' as a date/time: No valid reading of the date in any order
+2025 2026 16 -> Cannot parse '2025 2026 16' as a date/time: No valid reading of the date in any order
+2025 2026 46 -> Cannot parse '2025 2026 46' as a date/time: No valid reading of the date in any order
+2025 2026 Nov -> Cannot parse '2025 2026 Nov' as a date/time: No valid reading of the date in any order
+2025 2026 2027 -> Cannot parse '2025 2026 2027' as a date/time: No valid reading of the date in any order
 5 15 10 -> 2010-05-15
 5 15 16 -> 2016-05-15
 5 15 46 -> 2046-05-15

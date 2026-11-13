@@ -1,5 +1,8 @@
-`unknownFile` modTime str wl
+`unknownFile` modTime match
+    ok _  : "ok" wl,
+    err e : @e wl,
+end
 `filesize.txt` modTime match
-    just t : now @t - 0.0 >= str wl,
-    none   : "none" wl,
+    ok t  : now @t - 0.0 >= str wl,
+    err e : @e wl,
 end

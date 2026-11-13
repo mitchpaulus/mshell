@@ -18,10 +18,17 @@ import (
 // Text items are sanitized and style items take no cells, so the shell
 // lays the prompt out exactly, as it does command text.
 
-// builtinDeclSource declares the types of the prompt builtins. They are
+// builtinDeclSource declares Result (a value or an error, unwrapped by
+// '?'), the types of the prompt builtins, the
+// Cipher that encrypt and decrypt take (Crypto.go), the types of the
+// abbreviation builtins (Abbr.go), the types of the key binding
+// builtins (Bindings.go) and of the file manager's (FmBindings.go), and
+// the cells parseExcel gives (Excel.go). They are
 // part of the binary: the type checker and the runtime declare them before
 // any file, and no file can declare their names again.
 const builtinDeclSource = `
+enum Result[a e] = ok a | err e end
+
 enum Base16Color =
       baseBlack | baseRed | baseGreen | baseYellow
     | baseBlue | baseMagenta | baseCyan | baseWhite
@@ -58,7 +65,88 @@ enum CursorShape =
     | blinkingBar | steadyBar
 end
 
+enum Cipher = cipherAesGcm | cipherChaCha20Poly1305 | cipherXChaCha20Poly1305 end
+
+enum ExcelError = excelError str end
+
+type ExcelCell = str | float | bool | ExcelError
+
 type PromptInfo = {stackDepth: int, stackTypes: [str], lastLineOk: bool, lastExitCode: Maybe[int], lastDurationMs: int}
+
+enum AbbrMatch = abbrWord str | abbrRegex str end
+
+enum AbbrPosition = abbrCommand | abbrAnywhere | abbrArgOf [str] end
+
+type AbbrInfo = {word: str, command: Maybe[str], line: str}
+
+enum AbbrExpansion = abbrText str | abbrFunc (AbbrInfo -- Maybe[str]) end
+
+type Abbr = {abbr: AbbrMatch, expansion: AbbrExpansion, position?: AbbrPosition, cursorMarker?: str, description?: str}
+
+enum NamedKey =
+      keyEnter | keyTab | keyBackspace | keyEscape | keyDelete | keyInsert
+    | keyUp | keyDown | keyLeft | keyRight | keyHome | keyEnd | keyPageUp | keyPageDown
+    | keyF1 | keyF2 | keyF3 | keyF4 | keyF5 | keyF6 | keyF7 | keyF8 | keyF9 | keyF10
+    | keyF11 | keyF12 | keyF13 | keyF14 | keyF15 | keyF16 | keyF17 | keyF18 | keyF19 | keyF20
+    | keyF21 | keyF22 | keyF23 | keyF24 | keyF25 | keyF26 | keyF27 | keyF28 | keyF29 | keyF30
+    | keyF31 | keyF32 | keyF33 | keyF34 | keyF35
+end
+
+enum ModifiedKey = keyCtrl Key | keyAlt Key | keyShift Key | keySuper Key end
+
+type Key = rune | NamedKey | ModifiedKey
+
+enum EditMode = modeInsert | modeComplete end
+
+type EditState = {before: str, after: str, keys: [Key], mode: EditMode}
+
+enum EditOp =
+      editInsert str | editSelfInsert | editSetLine str str
+    | editLeft | editRight | editWordLeft | editWordRight | editLineStart | editLineEnd
+    | editBackspace | editDelete | editDeleteWordLeft | editDeleteToStart | editDeleteToEnd
+    | editExpandAbbr
+    | editAccept | editExit | editRun ( -- ) | editRunOps (EditState -- Maybe[[EditOp]])
+    | editForward | editAcceptSuggestion
+    | editHistoryPrev | editHistoryNext | editHistorySearchBack | editHistorySearchForward
+    | editLastArg | editComplete | editCompleteBack
+    | editCompleteNext | editCompletePrev | editCompleteLeft | editCompleteRight | editCompleteAccept
+    | editClearScreen | editRemeasure | editMessage str
+end
+
+enum BindingAction = bindingOps [EditOp] | bindingFunc (EditState -- Maybe[[EditOp]]) end
+
+type Binding = {keys: [Key], action: BindingAction, mode?: EditMode, within?: int, idleBefore?: int, description?: str}
+
+enum FmMode = fmModeNormal | fmModeInsert | fmModeHelp end
+
+enum FmPrompt = fmPromptSearch | fmPromptRename | fmPromptAsk str str (str FmState -- Maybe[[FmOp | EditOp]]) end
+
+type FmLine = {prompt: FmPrompt, before: str, after: str}
+
+type FmState = {dir: str, current: Maybe[str], selected: [str], mode: FmMode, line: Maybe[FmLine], keys: [Key]}
+
+enum FmDistance = fmRows int | fmPercent float end
+
+enum FmOp =
+      fmDown | fmUp | fmTop | fmBottom | fmDownBy FmDistance | fmUpBy FmDistance
+    | fmSearchNext | fmSearchPrev | fmCursorTo str
+    | fmOpen | fmParent | fmCd str | fmReload | fmOpenEditor
+    | fmToggle | fmSelectionInvert | fmSelectionClear
+    | fmPrompt FmPrompt
+    | fmCut | fmCopy | fmPaste | fmClipboardClear
+    | fmYankName | fmYankPath | fmYankGitPath
+    | fmTrash | fmBookmarkSet | fmBookmarkGo | fmHelp
+    | fmLineAccept | fmLineCancel
+    | fmHelpClose
+    | fmRun ( -- ) | fmRunWait ( -- ) | fmRunOps (FmState -- Maybe[[FmOp | EditOp]])
+    | fmMessage str | fmQuit | fmQuitNoCd
+end
+
+type FmProgram = [FmOp | EditOp]
+
+enum FmAction = fmOps FmProgram | fmFunc (FmState -- Maybe[FmProgram]) end
+
+type FmBinding = {keys: [Key], action: FmAction, mode?: FmMode, within?: int, idleBefore?: int, description?: str}
 `
 
 // builtinDeclFile is the file the built-in declarations' tokens name.
@@ -459,57 +547,21 @@ func (state *TermState) userPrompt() (promptRender, bool) {
 		return promptRender{}, false
 	}
 	stack := MShellStack{state.promptInfo()}
-
 	cancel := newEvalCancel()
-	var timedOut atomic.Bool
-	timer := time.AfterFunc(promptTimeout, func() {
-		timedOut.Store(true)
-		cancel.request()
-	})
-	interrupts := make(chan os.Signal, 1)
-	signal.Notify(interrupts, os.Interrupt)
-	finished := make(chan struct{})
-	go func() {
-		select {
-		case <-interrupts:
-			cancel.request()
-		case <-finished:
-		}
-	}()
-
-	var errOut bytes.Buffer
-	ev.cancel, ev.failOut = cancel, &errOut
-	result, err := ev.EvaluateQuote(quote, &stack, state.context, state.stdLibDefs)
-	ev.cancel, ev.failOut = nil, nil
-	close(finished)
-	signal.Stop(interrupts)
-	timer.Stop()
+	stopInterrupts := watchInterrupts(cancel)
+	run := state.runUserQuote(quote, &stack, state.context, promptTimeout, cancel)
+	stopInterrupts()
 
 	// A quote that finished with its list is shown, even if the time ran
 	// out as it finished.
-	var problem string
 	var render promptRender
-	switch {
-	case err != nil:
-		problem = err.Error()
-	case result.ExitCalled:
-		problem = "The prompt called 'exit'; that does not end the shell.\n"
-	case result.Success && len(stack) == 1:
-		render, err = renderPrompt(stack[0])
-		if err != nil {
-			problem = err.Error() + ".\n"
-		}
-	case result.Success:
+	problem := run.problem("The prompt", "the shell", promptTimeout)
+	if problem == "" && len(stack) != 1 {
 		problem = fmt.Sprintf("The prompt must leave one list on the stack, and left %d values.\n", len(stack))
-	case timedOut.Load():
-		problem = fmt.Sprintf("The prompt took longer than %d seconds.\n", int(promptTimeout/time.Second))
-	case cancel.requested.Load():
-		problem = "The prompt was interrupted.\n"
-	default:
-		problem = errOut.String()
-		if problem == "" {
-			// A command run with '!' stops the quote without a message.
-			problem = fmt.Sprintf("The prompt stopped with exit code %d.\n", result.ExitCode)
+	} else if problem == "" {
+		var err error
+		if render, err = renderPrompt(stack[0]); err != nil {
+			problem = err.Error() + ".\n"
 		}
 	}
 	if problem != "" {
@@ -522,6 +574,100 @@ func (state *TermState) userPrompt() (promptRender, bool) {
 	}
 	state.promptProblem = ""
 	return render, true
+}
+
+// userQuoteRun is how a quote the init file registered ended, when the
+// shell ran it.
+type userQuoteRun struct {
+	result    EvalResult
+	err       error
+	timedOut  bool
+	cancelled bool
+	// errOut is what the quote printed as it failed.
+	errOut string
+}
+
+// runUserQuote runs quote on stack, and stops it, together with any
+// command it runs, after timeout or when cancel is requested.
+func (state *TermState) runUserQuote(quote *MShellQuotation, stack *MShellStack, context ExecuteContext, timeout time.Duration, cancel *evalCancel) userQuoteRun {
+	return state.evalState.runUserQuote(quote, stack, context, state.stdLibDefs, timeout, cancel)
+}
+
+// runUserQuote runs a quote with the definitions given, as the TermState
+// method does.
+func (ev *EvalState) runUserQuote(quote *MShellQuotation, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, timeout time.Duration, cancel *evalCancel) userQuoteRun {
+	var timedOut atomic.Bool
+	timer := time.AfterFunc(timeout, func() {
+		timedOut.Store(true)
+		cancel.request()
+	})
+
+	var errOut bytes.Buffer
+	ev.cancel, ev.failOut = cancel, &errOut
+	result, err := ev.EvaluateQuote(quote, stack, context, definitions)
+	ev.cancel, ev.failOut = nil, nil
+	timer.Stop()
+	return userQuoteRun{result: result, err: err, timedOut: timedOut.Load(), cancelled: cancel.requested.Load(), errOut: errOut.String()}
+}
+
+// watchInterrupts requests cancel on Ctrl-C until the function it
+// returns is called. The terminal must be in its normal mode, so Ctrl-C
+// arrives as an interrupt. Registering for the signal takes tens of
+// microseconds, too long for a key press.
+func watchInterrupts(cancel *evalCancel) func() {
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	finished := make(chan struct{})
+	go func() {
+		select {
+		case <-interrupts:
+			cancel.request()
+		case <-finished:
+		}
+	}()
+	return func() {
+		close(finished)
+		signal.Stop(interrupts)
+	}
+}
+
+// failure says why a quote that did not succeed stopped. what names the
+// quote, starting a sentence.
+func (run userQuoteRun) failure(what string, timeout time.Duration) string {
+	switch {
+	case run.timedOut:
+		return fmt.Sprintf("%s took longer than %s.\n", what, timeoutText(timeout))
+	case run.cancelled:
+		return what + " was interrupted.\n"
+	case run.errOut != "":
+		return run.errOut
+	default:
+		// A command run with '!' stops the quote without a message.
+		return fmt.Sprintf("%s stopped with exit code %d.\n", what, run.result.ExitCode)
+	}
+}
+
+// problem says why a quote run with a time limit gave nothing to use, or
+// is "" when it succeeded. what names the quote, starting a sentence, and
+// owner is what its exit does not end.
+func (run userQuoteRun) problem(what, owner string, timeout time.Duration) string {
+	switch {
+	case run.err != nil:
+		return run.err.Error()
+	case run.result.ExitCalled:
+		return what + " called 'exit'; that does not end " + owner + ".\n"
+	case run.result.Success:
+		return ""
+	}
+	return run.failure(what, timeout)
+}
+
+// timeoutText is a time limit in words: "3 seconds", "1 second".
+func timeoutText(d time.Duration) string {
+	if n := int(d / time.Second); n != 1 {
+		return fmt.Sprintf("%d seconds", n)
+	}
+	return "1 second"
 }
 
 // writeWindowTitle sets the terminal's window title with OSC 2. title is

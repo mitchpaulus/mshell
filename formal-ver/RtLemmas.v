@@ -87,6 +87,7 @@ Proof.
     (fun vs ts _ => forall ts', Forall2 sub ts ts' -> vtypedl sigs Σ vs ts')).
   - intros n b0 Hs. apply sub_unfold in Hs. remember TInt as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
   - intros n b0 Hs. apply sub_unfold in Hs. remember TStr as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
+  - intros n b0 Hs. apply sub_unfold in Hs. remember TRune as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
   - intros n b0 Hs. apply sub_unfold in Hs. remember TBool as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
   - intros l a t E Hs b0 Hs'. eapply vt_list; eauto. eapply sub_trans; eauto.
   - intros l fs r t E Hs b0 Hs'. eapply vt_rec; eauto. eapply sub_trans; eauto.
@@ -122,6 +123,9 @@ Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ TInt |- _
 
 Lemma vt_str_inv Σ v : vtyped sigs Σ v TStr -> exists s, v = VStr s.
 Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ TStr |- _ => apply sub_unfold in Hs; inversion Hs end. Qed.
+
+Lemma vt_rune_inv Σ v : vtyped sigs Σ v TRune -> exists n, v = VRune n.
+Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ TRune |- _ => apply sub_unfold in Hs; inversion Hs end. Qed.
 
 Lemma vt_bool_inv Σ v : vtyped sigs Σ v TBool -> exists b, v = VBool b.
 Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ TBool |- _ => apply sub_unfold in Hs; inversion Hs end. Qed.
@@ -191,6 +195,7 @@ Proof.
     (fun v t _ => (forall l, In l (vlocs v) -> ~ In l X) -> vtyped sigs Σ' v t)
     (fun vs ts _ => (forall l, In l (flat_map vlocs vs) -> ~ In l X) -> vtypedl sigs Σ' vs ts));
     simpl.
+  - intros; constructor.
   - intros; constructor.
   - intros; constructor.
   - intros; constructor.
@@ -278,6 +283,7 @@ Proof.
   - intros; constructor.
   - intros; constructor.
   - intros; constructor.
+  - intros; constructor.
   - intros sc e ins outs Hv Hm. constructor. eapply vtyped_clo_scope; eauto.
   - intros l vs t Os e d IH n Hm. apply dt_list with (vs := vs); auto.
     + rewrite Hm; [exact e | apply in_eq].
@@ -346,6 +352,7 @@ Proof.
     (fun vs ts Os _ => (forall l, In l (flat_map vlocs vs) -> In l (concat Os)) /\
      (forall l, In l (concat Os) -> exists o, nth_error H l = Some o /\ is_container o /\
                          forall r, In r (olocs o) -> In r (concat Os)))).
+  - intros; simpl; repeat split; try constructor; tauto.
   - intros; simpl; repeat split; try constructor; tauto.
   - intros; simpl; repeat split; try constructor; tauto.
   - intros; simpl; repeat split; try constructor; tauto.
@@ -422,6 +429,8 @@ Proof.
     apply sub_unfold in Hs. remember TInt as x eqn:E. induction Hs; subst; try discriminate; dsub_rest D0.
   - intros n b Hs. assert (D0 : dtyped sigs Σ H (VStr n) TStr []) by constructor.
     apply sub_unfold in Hs. remember TStr as x eqn:E. induction Hs; subst; try discriminate; dsub_rest D0.
+  - intros n b Hs. assert (D0 : dtyped sigs Σ H (VRune n) TRune []) by constructor.
+    apply sub_unfold in Hs. remember TRune as x eqn:E. induction Hs; subst; try discriminate; dsub_rest D0.
   - intros n b Hs. assert (D0 : dtyped sigs Σ H (VBool n) TBool []) by constructor.
     apply sub_unfold in Hs. remember TBool as x eqn:E. induction Hs; subst; try discriminate; dsub_rest D0.
   - intros sc e ins outs Hv b Hs. apply vtyped_clo_dtyped. eapply vtyped_sub; eauto.
@@ -556,6 +565,8 @@ Proof.
     apply rsub_unfold in R. remember TInt as x eqn:E. induction R; subst; try discriminate; drsub_rest D0.
   - intros n b R. assert (D0 : dtyped sigs Σ H (VStr n) TStr []) by constructor.
     apply rsub_unfold in R. remember TStr as x eqn:E. induction R; subst; try discriminate; drsub_rest D0.
+  - intros n b R. assert (D0 : dtyped sigs Σ H (VRune n) TRune []) by constructor.
+    apply rsub_unfold in R. remember TRune as x eqn:E. induction R; subst; try discriminate; drsub_rest D0.
   - intros n b R. assert (D0 : dtyped sigs Σ H (VBool n) TBool []) by constructor.
     apply rsub_unfold in R. remember TBool as x eqn:E. induction R; subst; try discriminate; drsub_rest D0.
   - intros sc e ins outs Hv b R. assert (D0 : dtyped sigs Σ H (VClo sc e) (TQuote ins outs) [])
@@ -632,6 +643,7 @@ Proof.
     (fun vs ts _ => forallb immutable ts = true ->
        dtypedl sigs Σ H vs ts (map (fun _ => []) vs) /\ flat_map vlocs vs = []));
     simpl; intros; try discriminate.
+  - split; [constructor | reflexivity].
   - split; [constructor | reflexivity].
   - split; [constructor | reflexivity].
   - split; [constructor | reflexivity].

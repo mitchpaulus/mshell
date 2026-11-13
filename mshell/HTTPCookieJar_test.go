@@ -216,11 +216,20 @@ func TestHTTPCookieJarHTTPIntegration(t *testing.T) {
 		case "/broken":
 			http.SetCookie(w, &http.Cookie{Name: "partial", Value: "yes", Path: "/"})
 			http.Redirect(w, r, "ftp://example.com/", http.StatusFound)
+		case "/missing":
+			w.WriteHeader(http.StatusNotFound)
+		case "/short":
+			// Promise more body than is sent, so reading it fails.
+			w.Header().Set("Content-Length", "100")
+			w.Write([]byte("partial"))
 		default:
 			t.Errorf("unexpected network request: %s", r.URL)
 		}
 	}))
 	defer server.Close()
+	closed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	closedURL := closed.URL
+	closed.Close()
 	root, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
@@ -263,6 +272,24 @@ func TestHTTPCookieJarHTTPIntegration(t *testing.T) {
 `, false)
 	if out != "303\nfirst\nfalse\n" {
 		t.Fatalf("redirect disabled / no jar behavior:\n%s", out)
+	}
+	// Any status is a response, so it is ok; no response, or a body that
+	// cannot be read, is err with why.
+	out = run(strings.ReplaceAll(`
+def show (Result[HttpResponse str] -- ) match
+    ok r  : @r :status? str wl,
+    err e : $"err: {@e}" wl,
+end end
+{'url': 'BASE/missing'} httpGet show
+{'url': 'BASE/missing'} httpPost show
+{'url': 'BASE/short'} httpGet show
+{'url': 'CLOSED/'} httpGet show
+`, "CLOSED", closedURL), false)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 4 || lines[0] != "404" || lines[1] != "404" ||
+		!strings.HasPrefix(lines[2], "err: Error reading response body: ") ||
+		!strings.HasPrefix(lines[3], "err: Get \""+closedURL+"/\": ") {
+		t.Fatalf("ok/err results:\n%s", out)
 	}
 	for _, script := range []string{
 		`{'url': 'BASE/never', 'cookieJar': {}} httpGet`,

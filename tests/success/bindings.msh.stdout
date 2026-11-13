@@ -1,0 +1,6 @@
+true
+1
+1
+0
+[keyCtrl(r'x') keyCtrl(r'e') keyF1 keyCtrl(keyAlt(keyLeft))]
+Just([editSetLine("sudo ab" "cd")])

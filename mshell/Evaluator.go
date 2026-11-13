@@ -1,7 +1,6 @@
 package main
 
 import (
-	"maps"
 	"archive/zip"
 	"bufio"
 	"bytes"
@@ -476,6 +475,10 @@ type EvalState struct {
 	PositionalArgs []string
 	LoopDepth      int
 
+	// patternBinds holds the names a list or dict pattern binds until the
+	// whole pattern has matched. It is kept to reuse its storage.
+	patternBinds []patternBind
+
 	StopOnError           bool
 	CallStack             CallStack
 	CompletionDefinitions map[string][]MShellDefinition
@@ -527,6 +530,17 @@ type EvalState struct {
 	// member setCursorShape chose, or "".
 	PromptQuote *MShellQuotation
 	CursorShape string
+	// Abbrs are the abbreviations abbrAdd added, oldest first (Abbr.go),
+	// and AbbrWarnings the lines about abbreviations that never expand and
+	// bindings that never fire that the interactive shell has not printed
+	// yet. A script never prints them.
+	Abbrs        []*abbrEntry
+	AbbrWarnings []string
+	// bindings and fmBindings are the keymaps of the shell (Bindings.go)
+	// and of the file manager (FmBindings.go). shellKeymap and fmKeymap give
+	// them with their defaults.
+	bindings   keymap[*bindingEntry]
+	fmBindings keymap[*fmBindingEntry]
 	// lastExitCode is the exit code of the last process to finish, when
 	// ranProcess is set.
 	lastExitCode int
@@ -627,8 +641,8 @@ type EnumMemberInfo struct {
 func isPatternWord(word string) bool {
 	switch word {
 	case "_", "just", "none", "null", "list", "dict",
-		"path", "datetime", "quotation", "maybe", "binary",
-		"Maybe", "Json", "HtmlNode", "is":
+		"path", "datetime", "rune", "quotation", "maybe", "binary",
+		"Maybe", "Json", "Toml", "HtmlNode", "is":
 		return true
 	}
 	return false
@@ -770,17 +784,30 @@ func tokenPos(t Token) string {
 // constructEnum runs a member's constructor: it takes the payload values
 // from the stack and pushes the enum value.
 func (state *EvalState) constructEnum(t *Token, info EnumMemberInfo, stack *MShellStack) *EvalResult {
-	var payload []MShellObject
-	if info.Arity > 0 {
-		if len(*stack) < info.Arity {
-			return state.mismatchPtr(fmt.Sprintf("%d:%d: '%s' takes %d value(s) from the stack.\n", t.Line, t.Column, t.Lexeme, info.Arity))
-		}
-		payload = make([]MShellObject, info.Arity)
+	if len(*stack) < info.Arity {
+		return state.mismatchPtr(fmt.Sprintf("%d:%d: '%s' takes %d value(s) from the stack.\n", t.Line, t.Column, t.Lexeme, info.Arity))
+	}
+	var e *MShellEnum
+	switch info.Arity {
+	case 0:
+		e = &MShellEnum{}
+	case 1:
+		// One allocation holds the value and its payload.
+		v := &struct {
+			MShellEnum
+			one [1]MShellObject
+		}{}
+		v.one[0], _ = stack.Pop()
+		v.Payload = v.one[:]
+		e = &v.MShellEnum
+	default:
+		e = &MShellEnum{Payload: make([]MShellObject, info.Arity)}
 		for i := info.Arity - 1; i >= 0; i-- {
-			payload[i], _ = stack.Pop()
+			e.Payload[i], _ = stack.Pop()
 		}
 	}
-	stack.Push(&MShellEnum{EnumName: info.EnumName, Member: t.Lexeme, MemberIndex: info.Ordinal, Payload: payload})
+	e.EnumName, e.Member, e.MemberIndex = info.EnumName, t.Lexeme, info.Ordinal
+	stack.Push(e)
 	return nil
 }
 
@@ -789,54 +816,54 @@ func (state *EvalState) constructEnum(t *Token, info EnumMemberInfo, stack *MShe
 // binds its payloads; an enum's name (`Shape`, `Shape s`) matches any value
 // of that enum and binds the value. handled is false when the pattern's first
 // word is neither.
-func (state *EvalState) matchEnumPattern(pattern []MShellParseItem, subject MShellObject) (handled bool, matched bool, bindings map[string]MShellObject, result EvalResult) {
+// On a match, it sets the bound names in vars.
+func (state *EvalState) matchEnumPattern(pattern []MShellParseItem, subject MShellObject, vars map[string]MShellObject) (handled bool, matched bool, result EvalResult) {
 	first, ok := pattern[0].(*Token)
 	if !ok || first.Type != LITERAL {
-		return false, false, nil, SimpleSuccess()
+		return false, false, SimpleSuccess()
 	}
 	info, isMember := state.EnumMembers[first.Lexeme]
 	if !isMember && !state.EnumNames[first.Lexeme] {
-		return false, false, nil, SimpleSuccess()
+		return false, false, SimpleSuccess()
 	}
 	binds := pattern[1:]
 	for _, b := range binds {
 		bt, ok := b.(*Token)
 		if !ok || bt.Type != LITERAL {
 			start := b.GetStartToken()
-			return true, false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: '%s' in a pattern is followed by names to bind, not '%s'.\n", start.Line, start.Column, first.Lexeme, start.Lexeme))
+			return true, false, state.TypeMismatch(fmt.Sprintf("%d:%d: '%s' in a pattern is followed by names to bind, not '%s'.\n", start.Line, start.Column, first.Lexeme, start.Lexeme))
 		}
 	}
 	value, isEnum := subject.(*MShellEnum)
 	if isMember {
 		if len(binds) != info.Arity {
-			return true, false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: '%s' has %d payload value(s), and the pattern binds %d.\n", first.Line, first.Column, first.Lexeme, info.Arity, len(binds)))
+			return true, false, state.TypeMismatch(fmt.Sprintf("%d:%d: '%s' has %d payload value(s), and the pattern binds %d.\n", first.Line, first.Column, first.Lexeme, info.Arity, len(binds)))
 		}
 		if !isEnum || value.Member != first.Lexeme {
-			return true, false, nil, SimpleSuccess()
+			return true, false, SimpleSuccess()
 		}
-		bindings = make(map[string]MShellObject, len(binds))
 		for i, b := range binds {
 			if name := b.(*Token).Lexeme; name != "_" {
-				bindings[name] = value.Payload[i]
+				vars[name] = value.Payload[i]
 			}
 		}
-		return true, true, bindings, SimpleSuccess()
+		return true, true, SimpleSuccess()
 	}
 	if state.EnumNames[first.Lexeme] {
 		if len(binds) > 1 {
-			return true, false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: The pattern '%s' binds one name, the value.\n", first.Line, first.Column, first.Lexeme))
+			return true, false, state.TypeMismatch(fmt.Sprintf("%d:%d: The pattern '%s' binds one name, the value.\n", first.Line, first.Column, first.Lexeme))
 		}
 		if !isEnum || value.EnumName != first.Lexeme {
-			return true, false, nil, SimpleSuccess()
+			return true, false, SimpleSuccess()
 		}
 		if len(binds) == 1 {
 			if name := binds[0].(*Token).Lexeme; name != "_" {
-				bindings = map[string]MShellObject{name: subject}
+				vars[name] = subject
 			}
 		}
-		return true, true, bindings, SimpleSuccess()
+		return true, true, SimpleSuccess()
 	}
-	return false, false, nil, SimpleSuccess()
+	return false, false, SimpleSuccess()
 }
 
 func (state *EvalState) EnvironmentHistory() *EnvironmentHistory {
@@ -1612,12 +1639,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 
 	case *MShellParsePrefixQuote:
 		// `.fn body end` pushes (body), then calls fn.
-		mshellParseQuote := MShellParseQuote{
-			Items:      t.Items,
-			StartToken: t.StartToken,
-			EndToken:   t.EndToken,
-		}
-		stack.Push(&MShellQuotation{Tokens: t.Items, Variables: frame.Context.Variables, MShellParseQuote: &mshellParseQuote})
+		stack.Push(&MShellQuotation{Tokens: t.Items, Variables: frame.Context.Variables, MShellParseQuote: t.Quote})
 
 		// The function name is the lexeme without its trailing '.'.
 		lexeme := t.StartToken.Lexeme
@@ -1777,22 +1799,38 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 }
 
 // processTryAs runs `tryAs T`: it validates the top of the stack against T
-// in place and replaces it by `just` the same value, or `none`.
+// in place and replaces it by `ok` with the same value, or `err` with why
+// the value does not conform.
 func (state *EvalState) processTryAs(t *MShellTryAs, stack *MShellStack) *EvalResult {
 	value, err := stack.Pop()
 	if err != nil {
 		return state.mismatchPtr(fmt.Sprintf("%d:%d: 'tryAs' needs a value on the stack.\n", t.Tok.Line, t.Tok.Column))
 	}
-	conforms, err := state.validateValue(value, t.Target, &t.resolved)
+	conforms, why, err := state.tryValidate(value, t.Target, &t.resolved)
 	if err != nil {
 		return state.failErrPtr(err, fmt.Sprintf("%d:%d: 'tryAs %s': %s.\n", t.Tok.Line, t.Tok.Column, t.Target.DebugString(), err))
 	}
 	if conforms {
-		stack.Push(&Maybe{obj: value})
+		stack.Push(newResult(true, value))
 	} else {
-		stack.Push(&Maybe{obj: nil})
+		stack.Push(newResult(false, MShellString{Content: why}))
 	}
 	return nil
+}
+
+// newResult makes `v ok`, or `v err` when ok is false, in one allocation.
+func newResult(ok bool, v MShellObject) *MShellEnum {
+	r := &struct {
+		MShellEnum
+		one [1]MShellObject
+	}{}
+	r.one[0] = v
+	r.Payload = r.one[:]
+	r.EnumName, r.Member, r.MemberIndex = "Result", "ok", 0
+	if !ok {
+		r.Member, r.MemberIndex = "err", 1
+	}
+	return &r.MShellEnum
 }
 
 // processMatchBlock handles match...end blocks
@@ -1807,7 +1845,7 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 	}
 
 	for _, arm := range matchBlock.Arms {
-		matched, bindings, result := state.matchPattern(arm.Pattern, subject, startToken)
+		matched, result := state.matchPattern(arm.Pattern, arm.RepeatsWord, subject, startToken, frame.Context.Variables)
 		if !result.Success {
 			return nilIfNothingToDo(result)
 		}
@@ -1815,7 +1853,6 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 			if arm.Consume {
 				stack.Pop()
 			}
-			maps.Copy(frame.Context.Variables, bindings)
 			state.pushBodyFrame(arm.Body, CallStackItem{MShellParseItem: matchBlock, Name: "match", CallStackType: CALLSTACKMATCH})
 			return nil
 		}
@@ -1838,28 +1875,29 @@ func (state *EvalState) emptyMatchSubjectFailure(matchBlock *MShellParseMatchBlo
 }
 
 // matchPattern checks if a subject matches a pattern (list of parse items).
-// Returns (matched bool, bindings map, result EvalResult).
-func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
+// On a match, the names the pattern binds are set in vars. A list or dict
+// pattern can fail part way through, so it sets them only once all of it
+// has matched.
+func (state *EvalState) matchPattern(pattern []MShellParseItem, repeatsWord bool, subject MShellObject, startToken Token, vars map[string]MShellObject) (bool, EvalResult) {
 	// Only a word that is not a pattern word can name an enum or a member.
 	// Checking first keeps other patterns from paying for the call.
 	if first, ok := pattern[0].(*Token); ok && first.Type == LITERAL && !isPatternWord(first.Lexeme) {
-		if handled, matched, bindings, result := state.matchEnumPattern(pattern, subject); handled {
-			return matched, bindings, result
+		if handled, matched, result := state.matchEnumPattern(pattern, subject, vars); handled {
+			return matched, result
 		}
 	}
 	if is, ok := pattern[0].(*MShellIsPattern); ok && len(pattern) == 1 {
 		conforms, err := state.validateValue(subject, is.Target, &is.resolved)
 		if err != nil {
-			return false, nil, state.failErr(err, fmt.Sprintf("%d:%d: 'is %s': %s.\n", is.IsTok.Line, is.IsTok.Column, is.Target.DebugString(), err))
+			return false, state.failErr(err, fmt.Sprintf("%d:%d: 'is %s': %s.\n", is.IsTok.Line, is.IsTok.Column, is.Target.DebugString(), err))
 		}
 		if !conforms {
-			return false, nil, SimpleSuccess()
+			return false, SimpleSuccess()
 		}
-		var bindings map[string]MShellObject
 		if is.Binding.Lexeme != "_" {
-			bindings = map[string]MShellObject{is.Binding.Lexeme: subject}
+			vars[is.Binding.Lexeme] = subject
 		}
-		return true, bindings, SimpleSuccess()
+		return true, SimpleSuccess()
 	}
 	// Handle multi-token patterns (e.g., "just v" for maybe destructuring,
 	// or "<typekeyword> name" for type-test binding).
@@ -1880,35 +1918,33 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 					ok = true
 				}
 				if !ok || maybeVal.IsNone() {
-					return false, nil, SimpleSuccess()
+					return false, SimpleSuccess()
 				}
-				bindings := make(map[string]MShellObject)
 				if second.Lexeme != "_" {
-					bindings[second.Lexeme] = maybeVal.obj
+					vars[second.Lexeme] = maybeVal.obj
 				}
-				return true, bindings, SimpleSuccess()
+				return true, SimpleSuccess()
 			}
 			// `<typekeyword> name`: match on the type, then bind the
 			// matched value to name.
 			if isTypeKeywordToken(*first) {
 				matched, result := state.matchTokenPattern(*first, subject)
 				if !result.Success {
-					return false, nil, result
+					return false, result
 				}
 				if !matched {
-					return false, nil, SimpleSuccess()
+					return false, SimpleSuccess()
 				}
-				bindings := make(map[string]MShellObject)
 				if second.Lexeme != "_" {
-					bindings[second.Lexeme] = subject
+					vars[second.Lexeme] = subject
 				}
-				return true, bindings, SimpleSuccess()
+				return true, SimpleSuccess()
 			}
 		}
 	}
 
 	if len(pattern) != 1 {
-		return false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: Match arm pattern must be a single item, 'just <name>', '<type> <name>', or multiple same-kind literals (OR). %s\n", startToken.Line, startToken.Column, matchPatternFormsHint))
+		return false, state.TypeMismatch(fmt.Sprintf("%d:%d: Match arm pattern must be a single item, 'just <name>', '<type> <name>', or multiple same-kind literals (OR). %s\n", startToken.Line, startToken.Column, matchPatternFormsHint))
 	}
 
 	patternItem := pattern[0]
@@ -1916,25 +1952,34 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 	switch p := patternItem.(type) {
 	case *Token:
 		matched, result := state.matchTokenPattern(*p, subject)
-		return matched, nil, result
+		return matched, result
 	case *MShellParseOrPattern:
 		// OR alternatives: match if the subject equals any literal.
 		for _, tok := range p.Tokens {
 			matched, result := state.matchTokenPattern(tok, subject)
 			if !result.Success {
-				return false, nil, result
+				return false, result
 			}
 			if matched {
-				return true, nil, SimpleSuccess()
+				return true, SimpleSuccess()
 			}
 		}
-		return false, nil, SimpleSuccess()
-	case *MShellParseList:
-		return state.matchListPattern(p, subject)
-	case *MShellParseDict:
-		return state.matchDictPattern(p, subject, startToken)
+		return false, SimpleSuccess()
+	case *MShellParseList, *MShellParseDict:
+		// A nested pattern can match and bind names before a later
+		// position fails, so the names are only set once all of it matches.
+		binds := state.patternBinds[:0]
+		matched, result := state.matchInnerPattern(p, subject, &binds, repeatsWord)
+		if result.Success && matched {
+			for _, b := range binds {
+				vars[b.name] = b.value
+			}
+		}
+		clear(binds)
+		state.patternBinds = binds[:0]
+		return matched && result.Success, result
 	default:
-		return false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: Unsupported pattern type: %T\n", startToken.Line, startToken.Column, patternItem))
+		return false, state.TypeMismatch(fmt.Sprintf("%d:%d: Unsupported pattern type: %T\n", startToken.Line, startToken.Column, patternItem))
 	}
 }
 
@@ -1943,7 +1988,7 @@ func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, 
 	// Value literals were decoded once at lex time.
 	if p.Value != nil {
 		switch p.Type {
-		case INTEGER, FLOAT, STRING, SINGLEQUOTESTRING:
+		case INTEGER, FLOAT, STRING, SINGLEQUOTESTRING, RUNE:
 			eq, err := subject.Equals(p.Value)
 			if err != nil {
 				return false, SimpleSuccess()
@@ -1987,6 +2032,9 @@ func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, 
 			return ok, SimpleSuccess()
 		case "datetime":
 			_, ok := subject.(*MShellDateTime)
+			return ok, SimpleSuccess()
+		case "rune":
+			_, ok := subject.(MShellRune)
 			return ok, SimpleSuccess()
 		case "quotation":
 			_, ok := subject.(*MShellQuotation)
@@ -2089,114 +2137,126 @@ func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, 
 	}
 }
 
-// matchListPattern matches a list destructuring pattern against a subject.
-func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShellObject) (bool, map[string]MShellObject, EvalResult) {
-	list, ok := subject.(*MShellList)
-	if !ok {
-		return false, nil, SimpleSuccess()
-	}
-
-	// Check for spread pattern
-	spreadIndex := -1
-	for i, item := range pattern.Items {
-		if tok, ok := item.(*Token); ok && tok.Type == LITERAL && len(tok.Lexeme) > 3 && tok.Lexeme[:3] == "..." {
-			spreadIndex = i
-			break
-		}
-	}
-
-	if spreadIndex >= 0 {
-		// Pattern with spread: [a ...rest] or [a b ...rest]
-		beforeCount := spreadIndex
-		afterCount := len(pattern.Items) - spreadIndex - 1
-		minRequired := beforeCount + afterCount
-
-		if len(list.Items) < minRequired {
-			return false, nil, SimpleSuccess()
-		}
-
-		bindings := make(map[string]MShellObject, len(pattern.Items))
-		// Bind elements before spread
-		for i := range beforeCount {
-			tok, ok := pattern.Items[i].(*Token)
-			if !ok || tok.Type != LITERAL {
-				return false, nil, state.TypeMismatch("List pattern element must be a binding name, '_', or '...rest'.\n")
-			}
-			if tok.Type == LITERAL && tok.Lexeme != "_" {
-				bindings[tok.Lexeme] = list.Items[i]
-			}
-		}
-
-		// Bind spread as a new list with its own storage, like `skip`:
-		// no two lists share a backing array, so setAt, del and append
-		// on the rest never change the source.
-		spreadTok := pattern.Items[spreadIndex].(*Token)
-		spreadName := spreadTok.Lexeme[3:] // Remove "..."
-		if spreadName != "_" {
-			end := len(list.Items) - afterCount
-			bindings[spreadName] = &MShellList{Items: slices.Clone(list.Items[beforeCount:end])}
-		}
-
-		// Bind elements after spread
-		for i := range afterCount {
-			tok, ok := pattern.Items[spreadIndex+1+i].(*Token)
-			if !ok || tok.Type != LITERAL {
-				return false, nil, state.TypeMismatch("List pattern element must be a binding name, '_', or '...rest'.\n")
-			}
-			if tok.Type == LITERAL && tok.Lexeme != "_" {
-				bindings[tok.Lexeme] = list.Items[len(list.Items)-afterCount+i]
-			}
-		}
-
-		return true, bindings, SimpleSuccess()
-	}
-
-	// Exact match: [a b c] must match length exactly
-	if len(list.Items) != len(pattern.Items) {
-		return false, nil, SimpleSuccess()
-	}
-
-	bindings := make(map[string]MShellObject, len(pattern.Items))
-	for i, item := range pattern.Items {
-		tok, ok := item.(*Token)
-		if !ok || tok.Type != LITERAL {
-			return false, nil, state.TypeMismatch("List pattern element must be a binding name, '_', or '...rest'.\n")
-		}
-		if tok.Type == LITERAL && tok.Lexeme != "_" {
-			bindings[tok.Lexeme] = list.Items[i]
-		}
-	}
-
-	return true, bindings, SimpleSuccess()
+// patternBind is a name a list or dict pattern binds, and its value.
+type patternBind struct {
+	name  string
+	value MShellObject
 }
 
-// matchDictPattern matches a dict destructuring pattern against a subject.
-func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
-	dict, ok := subject.(*MShellDict)
+// matchInnerPattern matches a list or dict pattern, or one position of one,
+// against value. The names it binds are added to binds.
+func (state *EvalState) matchInnerPattern(item MShellParseItem, value MShellObject, binds *[]patternBind, repeatsWord bool) (bool, EvalResult) {
+	switch p := item.(type) {
+	case *MShellParseList:
+		return state.matchListPattern(p, value, binds, repeatsWord)
+	case *MShellParseDict:
+		return state.matchDictPattern(p, value, binds, repeatsWord)
+	case *Token:
+		if p.Type == LITERAL && p.Lexeme != "none" && p.Lexeme != "null" {
+			if p.Lexeme == "_" {
+				return true, SimpleSuccess()
+			}
+			// An enum member without payload values is a whole value in
+			// one word, so it tests the element. Any other word is a name.
+			if info, ok := state.EnumMembers[p.Lexeme]; ok && info.Arity == 0 {
+				e, isEnum := value.(*MShellEnum)
+				return isEnum && e.EnumName == info.EnumName && e.Member == p.Lexeme, SimpleSuccess()
+			}
+			return state.addPatternBind(p, p.Lexeme, value, binds, repeatsWord)
+		}
+		return state.matchTokenPattern(*p, value)
+	}
+	start := item.GetStartToken()
+	return false, state.TypeMismatch(fmt.Sprintf("%d:%d: '%s' cannot be part of a pattern. %s\n", start.Line, start.Column, start.Lexeme, listPatternPositionHint))
+}
+
+// addPatternBind adds the name bound to value, unless it is `_`.
+func (state *EvalState) addPatternBind(tok *Token, name string, value MShellObject, binds *[]patternBind, repeatsWord bool) (bool, EvalResult) {
+	if name == "_" {
+		return true, SimpleSuccess()
+	}
+	if repeatsWord {
+		for _, b := range *binds {
+			if b.name == name {
+				return false, state.TypeMismatch(fmt.Sprintf("%d:%d: A destructuring pattern cannot bind '%s' more than once.\n", tok.Line, tok.Column, name))
+			}
+		}
+	}
+	*binds = append(*binds, patternBind{name: name, value: value})
+	return true, SimpleSuccess()
+}
+
+// matchListPattern matches a list pattern: every position against the
+// element there, and a `...rest` against the elements between.
+func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShellObject, binds *[]patternBind, repeatsWord bool) (bool, EvalResult) {
+	list, ok := subject.(*MShellList)
 	if !ok {
-		return false, nil, SimpleSuccess()
+		return false, SimpleSuccess()
+	}
+	spreadIndex := slices.IndexFunc(pattern.Items, isSpreadToken)
+	n := len(list.Items)
+	if spreadIndex < 0 {
+		// Without a spread the lengths must be equal.
+		if n != len(pattern.Items) {
+			return false, SimpleSuccess()
+		}
+		for i, item := range pattern.Items {
+			if matched, result := state.matchInnerPattern(item, list.Items[i], binds, repeatsWord); !matched || !result.Success {
+				return false, result
+			}
+		}
+		return true, SimpleSuccess()
 	}
 
-	bindings := make(map[string]MShellObject, len(pattern.Items))
+	// Positions before the spread match from the front, those after it
+	// from the back.
+	after := len(pattern.Items) - spreadIndex - 1
+	if n < spreadIndex+after {
+		return false, SimpleSuccess()
+	}
+	for i := range spreadIndex {
+		if matched, result := state.matchInnerPattern(pattern.Items[i], list.Items[i], binds, repeatsWord); !matched || !result.Success {
+			return false, result
+		}
+	}
+	for i := range after {
+		if matched, result := state.matchInnerPattern(pattern.Items[spreadIndex+1+i], list.Items[n-after+i], binds, repeatsWord); !matched || !result.Success {
+			return false, result
+		}
+	}
+
+	// The rest is a new list with its own storage, like `skip`: no two
+	// lists share a backing array, so setAt, del and append on the rest
+	// never change the source. It is made last, once everything else
+	// has matched.
+	spreadTok := pattern.Items[spreadIndex].(*Token)
+	if name := spreadTok.Lexeme[3:]; name != "_" {
+		rest := &MShellList{Items: slices.Clone(list.Items[spreadIndex : n-after])}
+		return state.addPatternBind(spreadTok, name, rest, binds, repeatsWord)
+	}
+	return true, SimpleSuccess()
+}
+
+// matchDictPattern matches a dict pattern: each key must be present, and
+// its value must match the pattern given for it. Other keys are allowed.
+func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShellObject, binds *[]patternBind, repeatsWord bool) (bool, EvalResult) {
+	dict, ok := subject.(*MShellDict)
+	if !ok {
+		return false, SimpleSuccess()
+	}
 	for _, kv := range pattern.Items {
 		val, exists := dict.Items[kv.Key]
 		if !exists {
-			return false, nil, SimpleSuccess()
+			return false, SimpleSuccess()
 		}
-		// The value side should be a single literal token for the binding name
 		if len(kv.Value) != 1 {
-			return false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: Dict pattern value must be a single binding name.\n", startToken.Line, startToken.Column))
+			return false, state.TypeMismatch(fmt.Sprintf("%d:%d: Each value in a dict pattern must be one item. %s\n", pattern.StartToken.Line, pattern.StartToken.Column, dictPatternValueHint))
 		}
-		tok, ok := kv.Value[0].(*Token)
-		if !ok || tok.Type != LITERAL {
-			return false, nil, state.TypeMismatch(fmt.Sprintf("%d:%d: Dict pattern value must be a literal binding name.\n", startToken.Line, startToken.Column))
-		}
-		if tok.Lexeme != "_" {
-			bindings[tok.Lexeme] = val
+		if matched, result := state.matchInnerPattern(kv.Value[0], val, binds, repeatsWord); !matched || !result.Success {
+			return false, result
 		}
 	}
-
-	return true, bindings, SimpleSuccess()
+	return true, SimpleSuccess()
 }
 
 // processTokenToken handles the Token kinds evalSimpleToken doesn't.
@@ -6724,6 +6784,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						stack.Push(MShellInt{len(objTyped.Grid.Columns)})
 					case *MShellDict:
 						stack.Push(MShellInt{len(objTyped.Items)})
+					case MShellBinary:
+						stack.Push(MShellInt{len(objTyped.Data)})
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot get length of a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -6784,11 +6846,13 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						fmt.Fprint(writer, topTyped.Content)
 					case MShellInt:
 						fmt.Fprint(writer, topTyped.Value)
+					case MShellRune:
+						fmt.Fprint(writer, string(topTyped.Value))
 					case MShellBinary:
 						if t.Lexeme == "wl" || t.Lexeme == "wle" {
 							return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot write a binary with a newline. You are allowed to write contents directly with `w` or `we`.\n", t.Line, t.Column))
 						}
-						_, _ = writer.Write(topTyped)
+						_, _ = writer.Write(topTyped.Data)
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
 					}
@@ -6857,6 +6921,31 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						newList.Items[i] = MShellString{item}
 					}
 					stack.Push(newList)
+				case "splitOnce":
+					delimiter, strLiteral, err := stack.Pop2(t)
+					if err != nil {
+						return state.TypeMismatch(err.Error())
+					}
+
+					delimiterStr, err := delimiter.CastString()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot split with a %s (%s).\n", t.Line, t.Column, delimiter.TypeName(), delimiter.DebugString()))
+					}
+
+					strToSplit, err := strLiteral.CastString()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot split a %s (%s).\n", t.Line, t.Column, strLiteral.TypeName(), strLiteral.DebugString()))
+					}
+
+					before, after, found := cutOnce(strToSplit, delimiterStr)
+					if !found {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						newList := NewList(2)
+						newList.Items[0] = MShellString{before}
+						newList.Items[1] = MShellString{after}
+						stack.Push(&Maybe{obj: newList})
+					}
 				case "wsplit":
 					// Split on whitespace
 					obj, err := stack.Pop()
@@ -7115,7 +7204,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.CheckedFailure(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
 					}
 
-					stack.Push(MShellBinary(content))
+					stack.Push(newBinary(content))
 				case "cd":
 					obj, err := stack.Pop()
 					if err != nil {
@@ -7152,7 +7241,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot use a %s as a starting directory for mshFileManager.\n", t.Line, t.Column, obj.TypeName()))
 					}
 
-					newDir := RunFileManagerBuiltin(dir)
+					newDir, exit := RunFileManagerBuiltin(state, context, definitions, dir)
+					if exit != nil {
+						return *exit
+					}
 					if newDir != "" {
 						result, _, _, _ := state.ChangeDirectory(newDir, environmentSource(t))
 						if !result.Success {
@@ -7299,8 +7391,34 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						stack.Push(obj)
 					case MShellFloat:
 						stack.Push(MShellInt{int(objTyped.Value)})
+					case MShellRune:
+						stack.Push(MShellInt{int(objTyped.Value)})
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot convert a %s to an int.\n", t.Line, t.Column, obj.TypeName()))
+					}
+				case "toRune":
+					// (int -- Maybe[rune]) a Unicode scalar value, or none.
+					// (str -- Maybe[rune]) the string's one code point, or none.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toRune' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					switch objTyped := obj.(type) {
+					case MShellInt:
+						if objTyped.Value < 0 || objTyped.Value > unicode.MaxRune || !utf8.ValidRune(rune(objTyped.Value)) {
+							stack.Push(&Maybe{obj: nil})
+						} else {
+							stack.Push(&Maybe{obj: MShellRune{rune(objTyped.Value)}})
+						}
+					case MShellString:
+						r, size := utf8.DecodeRuneInString(objTyped.Content)
+						if size == 0 || size != len(objTyped.Content) || (r == utf8.RuneError && size == 1) {
+							stack.Push(&Maybe{obj: nil})
+						} else {
+							stack.Push(&Maybe{obj: MShellRune{r}})
+						}
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot convert a %s to a rune.\n", t.Line, t.Column, obj.TypeName()))
 					}
 				case "toBase":
 					// (int:value int:base -- str) Format an integer in the given
@@ -7367,11 +7485,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// TODO: Don't make a new lexer object each time.
 					parsedTime, err := ParseDateTime(dateStr, &state.DateOrder)
 					if err != nil {
-						stack.Push(&Maybe{obj: nil})
-						// return state.CheckedFailure(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
+						stack.Push(newResult(false, MShellString{Content: "Cannot parse '" + dateStr + "' as a date/time: " + err.Error()}))
 					} else {
 						dt := MShellDateTime{Time: parsedTime, OriginalString: dateStr}
-						stack.Push(&Maybe{obj: &dt})
+						stack.Push(newResult(true, &dt))
 					}
 				case "files", "dirs":
 					// Dump all the files in the current directory to the stack. No sub-directories.
@@ -8123,7 +8240,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 					var contentBytes []byte
 					if asBinary, ok := obj2.(MShellBinary); ok {
-						contentBytes = []byte(asBinary)
+						contentBytes = asBinary.Data
 					} else {
 						contentStr, err := obj2.CastString()
 						if err != nil {
@@ -8434,7 +8551,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if !found {
 						stack.Push(&Maybe{obj: nil})
 					} else {
-						stack.Push(&Maybe{obj: MShellBinary(data)})
+						stack.Push(&Maybe{obj: newBinary(data)})
 					}
 				case "tarDirInc", "tarDirExc":
 					obj1, obj2, err := stack.Pop2(t)
@@ -8649,7 +8766,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if !found {
 						stack.Push(&Maybe{obj: nil})
 					} else {
-						stack.Push(&Maybe{obj: MShellBinary(data)})
+						stack.Push(&Maybe{obj: newBinary(data)})
 					}
 				case "e", "ec", "es":
 					// Token Type
@@ -8702,9 +8819,9 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					var fileInfo os.FileInfo
 					fileInfo, err = os.Stat(path)
 					if err != nil {
-						stack.Push(&Maybe{obj: nil})
+						stack.Push(newResult(false, MShellString{Content: err.Error()}))
 					} else {
-						stack.Push(&Maybe{obj: MShellInt{int(fileInfo.Size())}})
+						stack.Push(newResult(true, MShellInt{int(fileInfo.Size())}))
 					}
 				case "modTime":
 					obj1, err := stack.Pop()
@@ -8720,10 +8837,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					var fileInfo os.FileInfo
 					fileInfo, err = os.Stat(path)
 					if err != nil {
-						stack.Push(&Maybe{obj: nil})
+						stack.Push(newResult(false, MShellString{Content: err.Error()}))
 					} else {
 						modTime := fileInfo.ModTime()
-						stack.Push(&Maybe{obj: &MShellDateTime{Time: modTime, OriginalString: modTime.Format(time.RFC3339)}})
+						stack.Push(newResult(true, &MShellDateTime{Time: modTime, OriginalString: modTime.Format(time.RFC3339)}))
 					}
 				case "evalSymLinks":
 					obj1, err := stack.Pop()
@@ -8738,9 +8855,9 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 					resolved, err := filepath.EvalSymlinks(path)
 					if err != nil {
-						stack.Push(&Maybe{obj: nil})
+						stack.Push(newResult(false, MShellString{Content: err.Error()}))
 					} else {
-						stack.Push(&Maybe{obj: MShellPath{Path: resolved}})
+						stack.Push(newResult(true, MShellPath{Path: resolved}))
 					}
 				case "linkCount":
 					obj1, err := stack.Pop()
@@ -8755,9 +8872,9 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 					count, err := fileLinkCount(path)
 					if err != nil {
-						stack.Push(&Maybe{obj: nil})
+						stack.Push(newResult(false, MShellString{Content: err.Error()}))
 					} else {
-						stack.Push(&Maybe{obj: MShellInt{count}})
+						stack.Push(newResult(true, MShellInt{count}))
 					}
 				case "sameFile":
 					obj1, obj2, err := stack.Pop2(t)
@@ -9290,6 +9407,27 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot extract values from a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
+				case "toCsv":
+					// Write a list of string rows, or a grid with a header row, as CSV.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toCsv' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					var out string
+					switch objTyped := obj.(type) {
+					case *MShellList:
+						out, err = rowsToCsv(objTyped)
+					case *MShellGrid:
+						out, err = gridToCsv(objTyped, nil)
+					case *MShellGridView:
+						out, err = gridToCsv(objTyped.Source, objTyped.Indices)
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toCsv' on a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+					if err != nil {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(MShellString{out})
 				case "toDict":
 					// Convert a GridRow to a dictionary.
 					obj, err := stack.Pop()
@@ -10299,7 +10437,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						// Create a new JSON reader directly from the string contents
 						jsonData = []byte(obj1Typed.Content)
 					case MShellBinary:
-						binaryData := []byte(obj1Typed)
+						binaryData := obj1Typed.Data
 						if !utf8.Valid(binaryData) {
 							return state.CheckedFailure(fmt.Sprintf("%d:%d: Error parsing JSON: input is not valid UTF-8.\n", t.Line, t.Column))
 						}
@@ -10316,6 +10454,38 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// Convert the parsed data to analgous MShell types
 					resultObj := ParseJsonObjToMshell(parsedData)
 					stack.Push(resultObj)
+				case "parseToml":
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'parseToml' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					// A path names a file, read as UTF-8; a string is the contents.
+					// Text that is not valid TOML gives err with why; a file that
+					// cannot be read is still a failure.
+					var tomlData string
+					switch obj1Typed := obj1.(type) {
+					case MShellPath:
+						path, _ := obj1.CastString()
+						data, err := os.ReadFile(path)
+						if err != nil {
+							return state.CheckedFailure(fmt.Sprintf("%d:%d: Error reading file %s: %s\n", t.Line, t.Column, path, err.Error()))
+						}
+						tomlData = string(data)
+					case MShellString:
+						tomlData = obj1Typed.Content
+					case MShellBinary:
+						tomlData = string(obj1Typed.Data)
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot parse a %s as TOML.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					dict, err := decodeToml(tomlData)
+					if err != nil {
+						stack.Push(newResult(false, MShellString{Content: err.Error()}))
+					} else {
+						stack.Push(newResult(true, dict))
+					}
 				case "parseExcel":
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -10331,7 +10501,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 							return state.CheckedFailure(fmt.Sprintf("%d:%d: Error reading file %s: %s\n", t.Line, t.Column, p, err.Error()))
 						}
 					case MShellBinary:
-						xlsxData = []byte(obj1Typed)
+						xlsxData = obj1Typed.Data
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: 'parseExcel' expects a Path or Binary, got a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
@@ -10779,6 +10949,67 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'just' operation on an empty stack.\n", t.Line, t.Column))
 					}
 					stack.Push(&Maybe{obj: o})
+				case "findMap", "linearSearch":
+					// Run the quote on each list element in order, each on its own
+					// stack, and stop at the first match. findMap's quote returns a
+					// Maybe and the first one that is not none is the result.
+					// linearSearch's quote returns a bool and the result is the
+					// first element it is true for.
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.TypeMismatch(err.Error())
+					}
+
+					fn, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The first parameter in '%s' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString()))
+					}
+					listObj, ok := obj2.(*MShellList)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The second parameter in '%s' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					isFindMap := t.Lexeme == "findMap"
+					var found MShellObject
+					var searchStack MShellStack
+					for _, item := range listObj.Items {
+						searchStack.resetTo(item)
+						result, err := state.EvaluateQuote(fn, &searchStack, context, definitions)
+						if err != nil {
+							return state.CheckedFailure(err.Error())
+						}
+						if result.ShouldPassResultUpStack() {
+							return result
+						}
+						if len(searchStack) != 1 {
+							return state.TypeMismatch(fmt.Sprintf("%d:%d: The function in '%s' did not return a single value, found %d values.\n", t.Line, t.Column, t.Lexeme, len(searchStack)))
+						}
+
+						if isFindMap {
+							maybe, ok := searchStack[0].(*Maybe)
+							if !ok {
+								return state.TypeMismatch(fmt.Sprintf("%d:%d: The function in 'findMap' did not return a Maybe, found a %s (%s).\n", t.Line, t.Column, searchStack[0].TypeName(), searchStack[0].DebugString()))
+							}
+							if maybe.obj != nil {
+								found = maybe
+								break
+							}
+						} else {
+							matched, ok := searchStack[0].(MShellBool)
+							if !ok {
+								return state.TypeMismatch(fmt.Sprintf("%d:%d: The function in 'linearSearch' did not return a bool, found a %s (%s).\n", t.Line, t.Column, searchStack[0].TypeName(), searchStack[0].DebugString()))
+							}
+							if matched.Value {
+								found = &Maybe{obj: item}
+								break
+							}
+						}
+					}
+
+					if found == nil {
+						found = &Maybe{obj: nil}
+					}
+					stack.Push(found)
 				case "filter":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -11463,6 +11694,67 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						}
 						stack.Push(mapResultMaybe)
 					}
+				case "orElse":
+					// A just or an ok is given back as is. On a none the
+					// quote runs with nothing given to it; on an err it gets
+					// the error. Either way it runs on the current stack and
+					// its result is the result.
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.TypeMismatch(err.Error())
+					}
+
+					fn, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The first parameter in 'orElse' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					var isMaybe bool
+					switch v := obj2.(type) {
+					case *Maybe:
+						isMaybe = true
+						if v.obj != nil {
+							stack.Push(v)
+							return SimpleSuccess()
+						}
+					case *MShellEnum:
+						if v.EnumName != "Result" {
+							return state.TypeMismatch(fmt.Sprintf("%d:%d: The second parameter in 'orElse' is expected to be a Maybe or a Result, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+						}
+						if v.Member == "ok" {
+							stack.Push(v)
+							return SimpleSuccess()
+						}
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The second parameter in 'orElse' is expected to be a Maybe or a Result, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					// A none or an err. The quote must leave one value
+					// more than the stack has now: for an err, it is
+					// given the error and must replace it.
+					wantLen := len(*stack) + 1
+					if !isMaybe {
+						stack.Push(obj2.(*MShellEnum).Payload[0])
+					}
+					result, err := state.EvaluateQuote(fn, stack, context, definitions)
+					if err != nil {
+						return state.CheckedFailure(err.Error())
+					}
+					if result.ShouldPassResultUpStack() {
+						return result
+					}
+					if len(*stack) != wantLen {
+						return state.TypeMismatch(quoteLeftMessage(t, "orElse", len(*stack)-wantLen+1))
+					}
+					alt, _ := stack.Pop()
+					if isMaybe {
+						if _, ok := alt.(*Maybe); !ok {
+							return state.TypeMismatch(fmt.Sprintf("%d:%d: The function in 'orElse' did not return a Maybe, found a %s (%s).\n", t.Line, t.Column, alt.TypeName(), alt.DebugString()))
+						}
+					} else if r, ok := alt.(*MShellEnum); !ok || r.EnumName != "Result" {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The function in 'orElse' did not return a Result, found a %s (%s).\n", t.Line, t.Column, alt.TypeName(), alt.DebugString()))
+					}
+					stack.Push(alt)
 				case "md5":
 					// Calculate the MD5 hash of a string
 					obj, err := stack.Pop()
@@ -11476,7 +11768,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					case MShellString:
 						data = []byte(objTyped.Content)
 					case MShellBinary:
-						data = []byte(objTyped)
+						data = objTyped.Data
 					case MShellPath:
 						pathStr, err := obj.CastString()
 						if err != nil {
@@ -11862,8 +12154,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// Make request
 					resp, err := client.Do(req)
 
+					// A request that gets no response, or whose body cannot be
+					// read, gives err with why. Any status is a response.
 					if err != nil {
-						stack.Push(&Maybe{obj: nil}) // No response
+						stack.Push(newResult(false, MShellString{Content: err.Error()}))
 					} else {
 						responseDict := NewDict()
 						if cookieJar != nil {
@@ -11886,12 +12180,11 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						bodyBytes, err := io.ReadAll(resp.Body)
 						resp.Body.Close()
 						if err != nil {
-							return state.CheckedFailure(fmt.Sprintf("%d:%d: Error reading response body in '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
+							stack.Push(newResult(false, MShellString{Content: fmt.Sprintf("Error reading response body: %s", err.Error())}))
+						} else {
+							responseDict.Items["body"] = newBinary(bodyBytes)
+							stack.Push(newResult(true, responseDict))
 						}
-						responseDict.Items["body"] = MShellBinary(bodyBytes)
-
-						// Push the response dictionary onto the stack
-						stack.Push(&Maybe{obj: responseDict})
 					}
 				case "urlEncode":
 					// Top of stack should be dictionary or string.
@@ -11944,7 +12237,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: The top of stack in 'base64encode' is expected to be a binary, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 					}
 
-					encoded := base64.StdEncoding.EncodeToString([]byte(binaryObj))
+					encoded := base64.StdEncoding.EncodeToString(binaryObj.Data)
 					stack.Push(MShellString{Content: encoded})
 				case "base64decode":
 					// Convert a base64 string to binary data.
@@ -11963,7 +12256,41 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.CheckedFailure(fmt.Sprintf("%d:%d: Error decoding base64 in 'base64decode': %s\n", t.Line, t.Column, err.Error()))
 					}
 
-					stack.Push(MShellBinary(decoded))
+					stack.Push(newBinary(decoded))
+				case "hexDecode":
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'hexDecode' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					strObj, ok := obj.(MShellString)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The top of stack in 'hexDecode' is expected to be a string, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+					}
+
+					decoded, err := hex.DecodeString(strObj.Content)
+					if err != nil {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: Error decoding hex in 'hexDecode': %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					stack.Push(newBinary(decoded))
+				case "runes":
+					// (str -- [rune]) the code points of a string.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'runes' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					strObj, ok := obj.(MShellString)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'runes' operation on a %s (%s).\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+					}
+					newList := NewList(utf8.RuneCountInString(strObj.Content))
+					i := 0
+					for _, r := range strObj.Content {
+						newList.Items[i] = MShellRune{r}
+						i++
+					}
+					stack.Push(newList)
 				case "utf8Str":
 					// Convert MShellBinary on the top of the stack to a UTF-8 string
 					obj, err := stack.Pop()
@@ -11977,7 +12304,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 
 					// Convert binary to string
-					strContent := string(binaryObj)
+					strContent := string(binaryObj.Data)
 					stack.Push(MShellString{Content: strContent})
 				case "utf8Bytes":
 					// Convert MShellString on the top of the stack to UTF-8 bytes
@@ -11993,7 +12320,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 					// Convert string to bytes
 					bytesContent := []byte(strObj.Content)
-					stack.Push(MShellBinary(bytesContent))
+					stack.Push(newBinary(bytesContent))
 				case "sleep":
 					// Sleep float number of seconds.
 					obj, err := stack.Pop()
@@ -12201,7 +12528,81 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 							stack.Push(MShellBool{seconObjBool.Value})
 						}
 					default:
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+						if r := state.evalBitwise(&t, stack, obj1, obj2); r != nil {
+							return *r
+						}
+					}
+				case "xor":
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'xor' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'xor' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+					if r := state.evalBitwise(&t, stack, obj1, obj2); r != nil {
+						return *r
+					}
+				case "toBinary":
+					if r := state.evalToBinary(&t, stack); r != nil {
+						return *r
+					}
+				case "byteList":
+					if r := state.evalByteList(&t, stack); r != nil {
+						return *r
+					}
+				case "cryptoRandom":
+					if r := state.evalCryptoRandom(&t, stack); r != nil {
+						return *r
+					}
+				case "encrypt":
+					if r := state.evalEncrypt(&t, stack); r != nil {
+						return *r
+					}
+				case "decrypt":
+					if r := state.evalDecrypt(&t, stack); r != nil {
+						return *r
+					}
+				case "abbrAdd":
+					if r := state.evalAbbrAdd(&t, stack); r != nil {
+						return *r
+					}
+				case "abbrErase":
+					if r := state.evalAbbrErase(&t, stack); r != nil {
+						return *r
+					}
+				case "abbrRename":
+					if r := state.evalAbbrRename(&t, stack); r != nil {
+						return *r
+					}
+				case "abbrList":
+					if r := state.evalAbbrList(&t, stack); r != nil {
+						return *r
+					}
+				case "bindingAdd":
+					if r := state.shellKeymap().evalAdd(state, &t, stack); r != nil {
+						return *r
+					}
+				case "bindingErase":
+					if r := state.shellKeymap().evalErase(state, &t, stack); r != nil {
+						return *r
+					}
+				case "bindingList":
+					if r := state.shellKeymap().evalList(state, &t, stack); r != nil {
+						return *r
+					}
+				case "fmBindingAdd":
+					if r := state.fmKeymap().evalAdd(state, &t, stack); r != nil {
+						return *r
+					}
+				case "fmBindingErase":
+					if r := state.fmKeymap().evalErase(state, &t, stack); r != nil {
+						return *r
+					}
+				case "fmBindingList":
+					if r := state.fmKeymap().evalList(state, &t, stack); r != nil {
+						return *r
 					}
 
 				default: // last new function
@@ -12399,6 +12800,16 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					return SimpleSuccess()
 				}
 
+				// '?' on a Result pushes the value of an ok, and fails on
+				// an err with the error's str as the message.
+				if result, ok := top.(*MShellEnum); ok && t.Type == QUESTION && result.EnumName == "Result" {
+					if result.Member == "err" {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: Failed on '?' with err: %s\n", t.Line, t.Column, result.Payload[0].ToString()))
+					}
+					stack.Push(result.Payload[0])
+					return SimpleSuccess()
+				}
+
 				// Switch on type
 				var result EvalResult
 				var exitCode int
@@ -12444,7 +12855,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				} else if stdoutBehavior == STDOUT_COMPLETE {
 					stack.Push(MShellString{string(stdout)})
 				} else if stdoutBehavior == STDOUT_BINARY {
-					stack.Push(MShellBinary(stdout))
+					stack.Push(newBinary(stdout))
 				} else if stdoutBehavior != STDOUT_NONE {
 					// panic for unhandled
 					return state.TypeMismatch(fmt.Sprintf("%d:%d: Unhandled stdout behavior %d.\n", t.Line, t.Column, stdoutBehavior))
@@ -12463,7 +12874,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				} else if stderrBehavior == STDERR_COMPLETE {
 					stack.Push(MShellString{string(stderr)})
 				} else if stderrBehavior == STDERR_BINARY {
-					stack.Push(MShellBinary(stderr))
+					stack.Push(newBinary(stderr))
 				} else if stderrBehavior != STDERR_NONE {
 					// panic for unhandled
 					return state.TypeMismatch(fmt.Sprintf("%d:%d: Unhandled stderr behavior %d.\n", t.Line, t.Column, stderrBehavior))
@@ -12876,6 +13287,17 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot convert an empty stack to a string.\n", t.Line, t.Column))
 				}
 
+				// Values that hold no other values are written as renderValue
+				// would write them, without setting up a renderer.
+				switch v := obj.(type) {
+				case MShellString:
+					stack.Push(v)
+					return SimpleSuccess()
+				case MShellInt, MShellFloat, MShellBool, MShellPath, *MShellDateTime:
+					stack.Push(MShellString{v.ToString()})
+					return SimpleSuccess()
+				}
+
 				strVal, err := renderOrError(obj, flavorStr)
 				if err != nil {
 					return state.CheckedFailure(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
@@ -13120,6 +13542,13 @@ func (state *EvalState) evalPlusToken(t *Token, stack *MShellStack, context *Exe
 		default:
 			return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot add a path to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 		}
+	case MShellBinary:
+		switch obj2.(type) {
+		case MShellBinary:
+			stack.Push(concatBinary(obj2.(MShellBinary), obj1.(MShellBinary)))
+		default:
+			return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot add a binary to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+		}
 	case *MShellGrid, *MShellGridView:
 		switch obj2.(type) {
 		case *MShellGrid, *MShellGridView:
@@ -13239,8 +13668,16 @@ func (state *EvalState) evalGreaterLessEqualToken(t *Token, stack *MShellStack, 
 
 		obj1Date, ok1 := obj1.(*MShellDateTime)
 		obj2Date, ok2 := obj2.(*MShellDateTime)
+		obj1Rune, isRune1 := obj1.(MShellRune)
+		obj2Rune, isRune2 := obj2.(MShellRune)
 
-		if ok1 && ok2 {
+		if isRune1 && isRune2 {
+			if t.Type == GREATERTHANOREQUAL {
+				stack.Push(MShellBool{obj2Rune.Value >= obj1Rune.Value})
+			} else {
+				stack.Push(MShellBool{obj2Rune.Value <= obj1Rune.Value})
+			}
+		} else if ok1 && ok2 {
 			if t.Type == GREATERTHANOREQUAL {
 				stack.Push(MShellBool{obj2Date.Time.After(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
 			} else {
@@ -13327,13 +13764,13 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 				switch obj2.(type) {
 				case *MShellList:
 					obj2.(*MShellList).StdinBehavior = STDIN_BINARY
-					obj2.(*MShellList).StandardInputBinary = obj1.(MShellBinary)
+					obj2.(*MShellList).StandardInputBinary = obj1.(MShellBinary).Data
 					obj2.(*MShellList).StandardInputContents = ""
 					obj2.(*MShellList).StandardInputFile = ""
 					stack.Push(obj2)
 				case *MShellQuotation:
 					obj2.(*MShellQuotation).StdinBehavior = STDIN_BINARY
-					obj2.(*MShellQuotation).StandardInputBinary = obj1.(MShellBinary)
+					obj2.(*MShellQuotation).StandardInputBinary = obj1.(MShellBinary).Data
 					obj2.(*MShellQuotation).StandardInputContents = ""
 					obj2.(*MShellQuotation).StandardInputFile = ""
 					stack.Push(obj2)
@@ -13380,6 +13817,16 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 				}
 			default:
 				return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot %s a datetime (%s) to a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+		case MShellRune:
+			obj2Rune, ok := obj2.(MShellRune)
+			if !ok {
+				return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot %s a rune (%s) to a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+			if t.Type == GREATERTHAN {
+				stack.Push(MShellBool{obj2Rune.Value > obj1.(MShellRune).Value})
+			} else {
+				stack.Push(MShellBool{obj2Rune.Value < obj1.(MShellRune).Value})
 			}
 		default:
 			return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot do a %s operation with a %s (%s) and a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
@@ -13534,4 +13981,19 @@ func readAllBounded(r io.Reader, limit int64) ([]byte, error) {
 		return nil, errReadLimitExceeded{limit}
 	}
 	return buffer.Bytes(), nil
+}
+
+// cutOnce splits s at the first sep, as strings.SplitN(s, sep, 2) does,
+// but without allocating a slice for the two parts. An empty sep splits
+// after the first character, as 'split' does; SplitN would count every
+// character of s to do that.
+func cutOnce(s, sep string) (before, after string, found bool) {
+	if sep == "" {
+		_, size := utf8.DecodeRuneInString(s)
+		if size == 0 || size == len(s) {
+			return "", "", false
+		}
+		return s[:size], s[size:], true
+	}
+	return strings.Cut(s, sep)
 }

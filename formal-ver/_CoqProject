@@ -21,6 +21,7 @@ Escape.v
 Checkable.v
 Frame.v
 Join.v
+PartialJoin.v
 Cycles.v
 Examples.v
 Recursive.v

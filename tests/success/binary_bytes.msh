@@ -1,0 +1,12 @@
+[0 1 127 255] toBinary str wl
+[] toBinary len wl
+"abc" utf8Bytes byteList str wl
+"abc" utf8Bytes len wl
+"ab" utf8Bytes "cd" utf8Bytes + utf8Str wl
+"DEADbeef" hexDecode str wl
+"" hexDecode len wl
+"abcd" utf8Bytes -2: utf8Str wl
+"abcd" utf8Bytes :-1 utf8Str wl
+"abcd" utf8Bytes :-1: utf8Str wl
+"abcd" utf8Bytes 4: len wl
+"abcd" utf8Bytes 1:-1 utf8Str wl

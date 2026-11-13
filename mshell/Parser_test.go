@@ -60,14 +60,15 @@ func TestParseRejectsInvalidStructuralBindingPatterns(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"['copy'] match ['copy'] : end", "List destructuring patterns may contain only binding names"},
 		{"[1] => [_]", "must bind at least one variable"},
-		{"[1 2] => [value value]", "cannot bind 'value' more than once"},
-		{"[1 2] => [value ...value]", "cannot bind 'value' more than once"},
-		{"{'a': 1, 'b': 2} => {'a': value, 'b': value}", "cannot bind 'value' more than once"},
+		{"[1] => ['a' 1 [_ ..._]]", "must bind at least one variable"},
 		{"[1] => [first ...middle ...last]", "one named spread binding"},
-		{"[1] => [[nested]]", "List destructuring patterns may contain only binding names"},
-		{"{'a': 1} => {'a': first second}", "must be one binding name"},
+		{"[[1]] => [[first ...middle ...last]]", "one named spread binding"},
+		{"['-h'] match [-h] : end", "To match the string, quote it: '-h'"},
+		{"['a'] match [$\"a\"] : end", "A format string cannot be a match pattern"},
+		{"[(1)] match [(1)] : end", "cannot be part of a pattern"},
+		{"{'a': 1} => {'a': first second}", "must be one item"},
+		{"{'a': {'b': 1}} => {'a': {'b': ...rest}}", "Dictionary destructuring does not support spread patterns"},
 		{"{'a': 1} => {'a': ..._}", "Dictionary destructuring does not support spread patterns"},
 		{"{'a': 1} match {'a': ...rest} : end", "Dictionary destructuring does not support spread patterns"},
 		{"none => just _", "must bind at least one variable"},
@@ -82,6 +83,25 @@ func TestParseRejectsInvalidStructuralBindingPatterns(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%q: got error %q, want it to contain %q", tc.input, err, tc.want)
+		}
+	}
+}
+
+func TestParseAcceptsLiteralAndNestedPatterns(t *testing.T) {
+	cases := []string{
+		"['GET' '/'] match ['GET' path] : , ['POST' path ...rest] : , [...rest 'end'] : , _ : , end",
+		"[1] match [1 2.5 true false `p` 'r' \"s\" none null -3] : , _ : , end",
+		"[[1 2]] => [[a b] ...rest]",
+		"{'to': [1 2]} => {'to': [x1 y1], 'kind': 'move'}",
+		"[{'a': [1]}] => [{'a': [one]}]",
+		// The parser cannot tell an enum member from a name, so the same
+		// word twice is left to the type checker and the runtime.
+		"[1 2] => [value value]",
+	}
+	for _, input := range cases {
+		parser := NewMShellParser(NewLexer(input, nil))
+		if _, err := parser.ParseFile(); err != nil {
+			t.Errorf("%q: unexpected parse error: %v", input, err)
 		}
 	}
 }

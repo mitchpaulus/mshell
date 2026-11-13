@@ -106,8 +106,10 @@ func (g *typeGen) leaf(underCtor, inAlias bool) TypeId {
 	switch g.rng.Intn(12) {
 	case 0, 1, 2:
 		return TidInt
-	case 3, 4:
+	case 3:
 		return TidStr
+	case 4:
+		return TidRune
 	case 5:
 		return TidBool
 	case 6:
@@ -451,7 +453,7 @@ const (
 func TestRelationsAgreeWithOracle(t *testing.T) {
 	bin := oracleBinary()
 	if bin == "" {
-		t.Skip("formal-ver/oracle/oracle is not built (make -C formal-ver/oracle)")
+		t.Skip("formal-ver/oracle/oracle is not built (run redo in formal-ver/oracle)")
 	}
 	perKind := 1000
 	if s := os.Getenv("MSH_ORACLE_QUERIES"); s != "" {
@@ -478,6 +480,9 @@ func TestRelationsAgreeWithOracle(t *testing.T) {
 	yes := map[string]int{}
 	var recheck []int
 	for i, q := range queries {
+		if strings.HasPrefix(answers[i], "error:") {
+			t.Fatalf("%s: oracle answered %q; if the query is valid, the oracle may be older than the proof (rebuild with redo in formal-ver/oracle)", q, answers[i])
+		}
 		ok, got, err := p.agrees(r, q, answers[i])
 		if err != nil {
 			t.Fatalf("%s: %v", q, err)

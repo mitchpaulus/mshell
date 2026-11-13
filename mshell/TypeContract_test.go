@@ -692,7 +692,41 @@ func validatable(ar *TypeArena, t TypeId) bool {
 			return false
 		}
 	}
-	return true
+	return !mentionsUncheckableEnum(ar, t)
+}
+
+// mentionsUncheckableEnum reports whether t mentions an enum that cannot
+// be validated against, such as one that holds a quote (AbbrExpansion).
+func mentionsUncheckableEnum(ar *TypeArena, t TypeId) bool {
+	n := ar.nodes[t]
+	switch n.Kind {
+	case TKEnum:
+		if !ar.enumDecls[n.A].Checkable {
+			return true
+		}
+		for _, x := range ar.enumArgs[n.Extra] {
+			if mentionsUncheckableEnum(ar, x) {
+				return true
+			}
+		}
+	case TKList:
+		return mentionsUncheckableEnum(ar, TypeId(n.A))
+	case TKRecord:
+		rec := ar.records[n.Extra]
+		for _, f := range rec.Fields {
+			if f.Type != TidNothing && mentionsUncheckableEnum(ar, f.Type) {
+				return true
+			}
+		}
+		return rec.Rest.Type != TidNothing && mentionsUncheckableEnum(ar, rec.Rest.Type)
+	case TKUnion:
+		for _, m := range ar.unionMembers[n.Extra] {
+			if mentionsUncheckableEnum(ar, m) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type contractFailure struct {

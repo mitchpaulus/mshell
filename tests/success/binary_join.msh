@@ -1,0 +1,27 @@
+# Joining onto a binary never changes another binary, even when they share a buffer.
+"aa" hexDecode base!
+@base "bb" hexDecode + a!
+@a "cc" hexDecode + b!
+@a "dd" hexDecode + c!
+@b "ee" hexDecode + d!
+@b :2 "ff" hexDecode + e!
+@base str wl
+@a str wl
+@b str wl
+@c str wl
+@d str wl
+@e str wl
+@a "" hexDecode + str wl
+"abcd" utf8Bytes :0:, :2: utf8Str wl
+
+# Joining in a loop.
+"" hexDecode acc!
+"01" hexDecode one!
+0 i!
+(
+    @i 100000 >= if break end
+    @acc @one + acc!
+    @i 1 + i!
+) loop
+@acc len wl
+@acc byteList sum wl

@@ -1,14 +1,18 @@
 a, b
-rejected
+not of type Manifest: at .packages[1].name, expected str, found int 42
+not of type Manifest: at .packages[0], missing the field "name"
 0
 5
+not of type [Cell]: at [1], expected Cell (bool | int | float | str | null), found a list of 1 item
 http://x
-cfg2 rejected
+not of type Config: at .timeout, expected float, found str "soon"
 cfg3 ok
 3
-str is not list
-not all ints
+not of type {str: int}: at ["b c"], expected int, found str "2"
+expected [float], found str "x"
+not of type [int]: at [1], expected int, found float 2.0
 path ok
-five is not a str
+expected str, found int 5
 maybe ok
 none is a Maybe
+expected Maybe[int], found just str "x"

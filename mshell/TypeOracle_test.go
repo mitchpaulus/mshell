@@ -159,6 +159,8 @@ func (o *oracleTypes) fromSexp(x sexp, binders []TypeId) (TypeId, error) {
 			return TidInt, nil
 		case "str":
 			return TidStr, nil
+		case "rune":
+			return TidRune, nil
 		case "bool":
 			return TidBool, nil
 		case "bot":
@@ -402,6 +404,9 @@ func (o *oracleTypes) printTo(sb *strings.Builder, t TypeId, binders []TypeId) {
 		return
 	case TidStr:
 		sb.WriteString("str")
+		return
+	case TidRune:
+		sb.WriteString("rune")
 		return
 	case TidBool:
 		sb.WriteString("bool")

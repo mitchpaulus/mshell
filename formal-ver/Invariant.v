@@ -69,6 +69,7 @@ Variable sigs : genv.
 Inductive vtyped (Σ : store_ty) : val -> ty -> Prop :=
 | vt_int n : vtyped Σ (VInt n) TInt
 | vt_str s : vtyped Σ (VStr s) TStr
+| vt_rune n : vtyped Σ (VRune n) TRune
 | vt_bool b : vtyped Σ (VBool b) TBool
 | vt_list l a t : nth_error Σ l = Some (HList a) -> sub (TList a) t -> vtyped Σ (VLoc l) t
 | vt_rec l fs r t : nth_error Σ l = Some (HRec fs r) -> sub (TRec fs r) t -> vtyped Σ (VLoc l) t
@@ -101,6 +102,7 @@ Definition obj_ok (Σ : store_ty) (o : obj) (h : htype) : Prop :=
 Inductive dtyped (Σ : store_ty) (H : heap) : val -> ty -> list loc -> Prop :=
 | dt_int n : dtyped Σ H (VInt n) TInt []
 | dt_str s : dtyped Σ H (VStr s) TStr []
+| dt_rune n : dtyped Σ H (VRune n) TRune []
 | dt_bool b : dtyped Σ H (VBool b) TBool []
 | dt_clo sc e ins outs :
     vtyped Σ (VClo sc e) (TQuote ins outs) -> dtyped Σ H (VClo sc e) (TQuote ins outs) []

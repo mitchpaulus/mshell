@@ -147,8 +147,9 @@ func TestParseExcelBytes(t *testing.T) {
 	if s, ok := row3.Items[0].(MShellString); !ok || s.Content != "inline" {
 		t.Errorf("A3 inlineStr: got %v", row3.Items[0])
 	}
-	if m, ok := row3.Items[1].(*Maybe); !ok || !m.IsNone() {
-		t.Errorf("B3 error cell: expected None Maybe, got %v", row3.Items[1])
+	if e, ok := row3.Items[1].(*MShellEnum); !ok || e.EnumName != "ExcelError" || e.Member != "excelError" ||
+		len(e.Payload) != 1 || e.Payload[0] != (MShellString{"#DIV/0!"}) {
+		t.Errorf("B3 error cell: expected excelError \"#DIV/0!\", got %v", row3.Items[1])
 	}
 	if s, ok := row3.Items[2].(MShellString); !ok || s.Content != "" {
 		t.Errorf("C3 padding: got %v", row3.Items[2])

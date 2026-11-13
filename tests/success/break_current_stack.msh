@@ -33,3 +33,12 @@
 0 n! 0
 ( 1 + dup 5 > if break end dup just (2 mod 0 = if @n 1 + n! continue end 0) map drop ) loop
 drop @n wl
+
+# orElse runs its quote on the current stack too.
+0 i!
+( @i 1 + i!  none (break) orElse drop ) loop
+@i wl
+
+0 i!
+( @i 1 + i!  "e" err (drop @i 3 >= if break end 1 ok) orElse drop ) loop
+@i wl

@@ -146,13 +146,16 @@ func TestQueuedInputLookahead(t *testing.T) {
 		},
 	}
 
-	token, err := state.readInputToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	end, err := state.HandleToken(token)
-	if err != nil || end {
-		t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+	// Queued keys are handled, in order, before the terminal is read.
+	for range 2 {
+		token, err := state.readInputToken()
+		if err != nil {
+			t.Fatal(err)
+		}
+		end, err := state.HandleToken(token)
+		if err != nil || end {
+			t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+		}
 	}
 
 	if got := string(state.currentCommand); got != "jx" {
@@ -162,10 +165,10 @@ func TestQueuedInputLookahead(t *testing.T) {
 		t.Fatal("consumed queue was not reset")
 	}
 	if state.stdInState.i != 0 {
-		t.Fatal("lookahead consumed terminal input before queued input")
+		t.Fatal("terminal input was read before queued input")
 	}
 
-	token, err = state.readInputToken()
+	token, err := state.readInputToken()
 	if err != nil || token != (AsciiToken{Char: 'z'}) {
 		t.Fatalf("next token = %v, err=%v; want z", token, err)
 	}
@@ -391,35 +394,109 @@ func TestAllMatchesAreFiles(t *testing.T) {
 func TestBuildCompletionInsertPrefersPathQuoteForFileMatches(t *testing.T) {
 	state := TermState{l: NewLexer("", nil)}
 
-	got := state.buildCompletionInsert("Floor 0/", LITERAL, true)
+	got := state.buildCompletionInsert("Floor 0/", LITERAL, true, true)
 	want := "`Floor 0/"
 	if got != want {
 		t.Fatalf("buildCompletionInsert() = %q, want %q", got, want)
 	}
 
-	got = state.buildCompletionInsert("Floor 0.txt", LITERAL, true)
+	got = state.buildCompletionInsert("Floor 0.txt", LITERAL, true, true)
 	want = "`Floor 0.txt` "
 	if got != want {
 		t.Fatalf("buildCompletionInsert() = %q, want %q", got, want)
 	}
 
-	got = state.buildCompletionInsert("Floor 0/", LITERAL, false)
+	got = state.buildCompletionInsert("Floor 0/", LITERAL, false, false)
 	want = "'Floor 0/'"
 	if got != want {
 		t.Fatalf("buildCompletionInsert() = %q, want %q", got, want)
 	}
 }
 
+// A value or file name that would not be read as its own text when typed
+// bare is quoted; a binary or builtin name never is.
+func TestBuildCompletionInsertQuotesWordsThatMeanSomethingElse(t *testing.T) {
+	state := TermState{l: NewLexer("", nil)}
+	state.stdLibDefs = []MShellDefinition{{Name: "myDef"}}
+	state.evalState.EnumMembers = map[string]EnumMemberInfo{"circle": {EnumName: "Shape"}}
+
+	for _, tc := range []struct {
+		match string
+		file  bool
+		want  string
+	}{
+		{"compile", false, "compile"},
+		{"--pdf-standard", false, "--pdf-standard"},
+		{"a-1b", false, "a-1b"},
+		{"2021", false, "2021"},
+		{"144", false, "144"},
+		{"2.0", false, "'2.0'"},
+		{"007", false, "'007'"},
+		{"@preview/pro-letter", false, "'@preview/pro-letter'"},
+		{"@preview/pro-letter:0.1.1", false, "'@preview/pro-letter:0.1.1'"},
+		{"<intro>", false, "'<intro>'"},
+		{"-", false, "'-'"},
+		{"--", false, "'--'"},
+		{"true", false, "'true'"},
+		{"none", false, "'none'"},
+		{"sort", false, "'sort'"},
+		{"myDef", false, "'myDef'"},
+		{"circle", false, "'circle'"},
+		{"notes.txt", true, "notes.txt"},
+		{"src/", true, "src/"},
+		{"2.0", true, "`2.0` "},
+		{"sort", true, "`sort` "},
+	} {
+		if got := state.buildCompletionInsert(tc.match, LITERAL, tc.file, true); got != tc.want {
+			t.Errorf("buildCompletionInsert(%q, file=%v) = %q, want %q", tc.match, tc.file, got, tc.want)
+		}
+	}
+
+	// A binary name in command position is left as it is.
+	if got := state.buildCompletionInsert("sort", LITERAL, false, false); got != "sort" {
+		t.Errorf("binary sort = %q, want sort", got)
+	}
+	// A value finished inside an open single quote is closed.
+	if got := state.buildCompletionInsert("@preview/pro-letter", UNFINISHEDSINGLEQUOTESTRING, false, true); got != "'@preview/pro-letter'" {
+		t.Errorf("value in open quote = %q", got)
+	}
+	// A file name inside an open single quote stays open.
+	if got := state.buildCompletionInsert("src/", UNFINISHEDSINGLEQUOTESTRING, true, true); got != "'src/" {
+		t.Errorf("file in open quote = %q", got)
+	}
+}
+
+func TestBuildSharedCompletionInsertOpensQuoteForValues(t *testing.T) {
+	state := TermState{l: NewLexer("", nil)}
+	for _, tc := range []struct{ prefix, want string }{
+		{"@preview/", "'@preview/"},
+		{"<", "'<"},
+		{"-", "-"},
+		{"--", "--"},
+		{"--no-", "--no-"},
+		{"1.", "1."},
+		{"a-", "a-"},
+	} {
+		if got := state.buildSharedCompletionInsert(tc.prefix, LITERAL, false, true); got != tc.want {
+			t.Errorf("buildSharedCompletionInsert(%q) = %q, want %q", tc.prefix, got, tc.want)
+		}
+	}
+	// Binaries and builtins among the matches: nothing is quoted.
+	if got := state.buildSharedCompletionInsert("@preview/", LITERAL, false, false); got != "@preview/" {
+		t.Errorf("mixed matches = %q", got)
+	}
+}
+
 func TestBuildSharedCompletionInsertUsesBacktickForFilePrefixes(t *testing.T) {
 	state := TermState{l: NewLexer("", nil)}
 
-	got := state.buildSharedCompletionInsert("Floor ", LITERAL, true)
+	got := state.buildSharedCompletionInsert("Floor ", LITERAL, true, true)
 	want := "`Floor "
 	if got != want {
 		t.Fatalf("buildSharedCompletionInsert() = %q, want %q", got, want)
 	}
 
-	got = state.buildSharedCompletionInsert("Floor ", LITERAL, false)
+	got = state.buildSharedCompletionInsert("Floor ", LITERAL, false, false)
 	want = "'Floor "
 	if got != want {
 		t.Fatalf("buildSharedCompletionInsert() = %q, want %q", got, want)
@@ -1067,9 +1144,9 @@ func TestInteractiveLexerDeleteRequiresTilde(t *testing.T) {
 		{"end vt220", "\x1b[4~", KEY_END},
 		{"home rxvt", "\x1b[7~", KEY_HOME},
 		{"end rxvt", "\x1b[8~", KEY_END},
-		{"home ctrl xterm", "\x1b[1;5H", KEY_HOME},
-		{"end shift xterm", "\x1b[1;2F", KEY_END},
-		{"alt b", "\x1bb", KEY_ALT_B},
+		{"home ctrl xterm", "\x1b[1;5H", KeyToken{Code: NamedHome | KeyModCtrl}},
+		{"end shift xterm", "\x1b[1;2F", KeyToken{Code: NamedEnd | KeyModShift}},
+		{"alt b", "\x1bb", KeyToken{Code: 'b' | KeyModAlt, EscOf: 'b'}},
 		{"cursor report", "\x1b[3;5R", CsiToken{FinalChar: 'R', Params: []byte("3;5")}},
 		{"incomplete report parameters", "\x1b[3R", CsiToken{FinalChar: 'R', Params: []byte("3")}},
 		{"other CSI with one parameter", "\x1b[3A", CsiToken{FinalChar: 'A', Params: []byte("3")}},
@@ -1099,19 +1176,21 @@ func TestInteractiveLexerDeleteRequiresTilde(t *testing.T) {
 	}
 }
 
-// A lone Escape has no binding. The byte after it is lexed as its own key
-// instead of being swallowed as an unknown Alt chord.
-func TestInteractiveLexerLoneEscapeKeepsNextKey(t *testing.T) {
+// ESC and a key in one read is Alt and the key, which remembers the key,
+// so that it is Escape and then the key when Alt and it has no binding
+// (TestEscapeThenUnboundKey). The byte after ESC is never swallowed.
+func TestInteractiveLexerEscapeThenKey(t *testing.T) {
 	tests := []struct {
 		name string
 		input string
 		want []TerminalToken
 	}{
-		{"letter", "\x1bax", []TerminalToken{AsciiToken{Char: 'a'}, AsciiToken{Char: 'x'}}},
-		{"tab", "\x1b\tx", []TerminalToken{AsciiToken{Char: '\t'}, AsciiToken{Char: 'x'}}},
-		{"enter", "\x1b\rx", []TerminalToken{AsciiToken{Char: '\r'}, AsciiToken{Char: 'x'}}},
-		{"multibyte", "\x1b\xe4\xb8\x96x", []TerminalToken{MutliByteToken{Char: '世'}, AsciiToken{Char: 'x'}}},
-		{"double escape then arrow", "\x1b\x1b[Ax", []TerminalToken{KEY_UP, AsciiToken{Char: 'x'}}},
+		{"letter", "\x1bax", []TerminalToken{KeyToken{Code: 'a' | KeyModAlt, EscOf: 'a'}, AsciiToken{Char: 'x'}}},
+		{"upper case letter", "\x1bAx", []TerminalToken{KeyToken{Code: 'a' | KeyModAlt | KeyModShift, EscOf: 'A'}, AsciiToken{Char: 'x'}}},
+		{"tab", "\x1b\tx", []TerminalToken{KeyToken{Code: NamedTab | KeyModAlt, EscOf: NamedTab}, AsciiToken{Char: 'x'}}},
+		{"enter", "\x1b\rx", []TerminalToken{KeyToken{Code: NamedEnter | KeyModAlt, EscOf: NamedEnter}, AsciiToken{Char: 'x'}}},
+		{"multibyte", "\x1b\xe4\xb8\x96x", []TerminalToken{KeyToken{Code: '世' | KeyModAlt, EscOf: '世'}, AsciiToken{Char: 'x'}}},
+		{"double escape then arrow", "\x1b\x1b[Ax", []TerminalToken{KeyToken{Code: NamedUp | KeyModAlt, EscOf: NamedUp}, AsciiToken{Char: 'x'}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1131,6 +1210,70 @@ func TestInteractiveLexerLoneEscapeKeepsNextKey(t *testing.T) {
 				t.Fatalf("consumed %d bytes, want %d", reader.i, len(input))
 			}
 		})
+	}
+}
+
+// chunkReads gives each chunk as one read, split where it is longer than
+// the buffer, and then the end of the input.
+func chunkReads(chunks ...string) func([]byte) (int, error) {
+	return func(buf []byte) (int, error) {
+		if len(chunks) == 0 {
+			return 0, io.EOF
+		}
+		n := copy(buf, chunks[0])
+		chunks[0] = chunks[0][n:]
+		if chunks[0] == "" {
+			chunks = chunks[1:]
+		}
+		return n, nil
+	}
+}
+
+// An ESC that ends a read is Escape, unless the read filled the buffer;
+// a sequence split across reads is still one key (ai/fm-bindings.typ,
+// section 10.2).
+func TestInteractiveLexerEscapeAtReadBoundary(t *testing.T) {
+	tests := []struct {
+		name   string
+		buffer int
+		reads  []string
+		want   []TerminalToken
+	}{
+		{"escape alone", 16, []string{"\x1b", "x"}, []TerminalToken{KeyToken{Code: NamedEscape}, AsciiToken{Char: 'x'}}},
+		{"escape then a key in the next read", 16, []string{"x\x1b", "a"}, []TerminalToken{AsciiToken{Char: 'x'}, KeyToken{Code: NamedEscape}, AsciiToken{Char: 'a'}}},
+		{"escape filling the buffer", 1, []string{"\x1b[A"}, []TerminalToken{KEY_UP}},
+		{"sequence split after the bracket", 16, []string{"\x1b[", "A"}, []TerminalToken{KEY_UP}},
+		{"escape and a key in one read", 16, []string{"\x1bq"}, []TerminalToken{KeyToken{Code: 'q' | KeyModAlt, EscOf: 'q'}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := &StdinReaderState{array: make([]byte, tt.buffer), read: chunkReads(tt.reads...)}
+			state := &TermState{}
+			for i, want := range tt.want {
+				got, err := state.InteractiveLexer(reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("token %d = %#v, want %#v", i, got, want)
+				}
+			}
+			if got, err := state.InteractiveLexer(reader); err != nil || got != (EofTerminalToken{}) {
+				t.Fatalf("after the tokens: %#v, %v", got, err)
+			}
+		})
+	}
+}
+
+// A CSI sequence that never ends is given up on: the lexer does not wait
+// for its end forever.
+func TestInteractiveLexerBoundsCsiParameters(t *testing.T) {
+	input := "\x1b[" + strings.Repeat("1;", maxCsiParamBytes)
+	reader := &StdinReaderState{array: make([]byte, 64), read: chunkReads(input)}
+	state := &TermState{}
+	got, err := state.InteractiveLexer(reader)
+	if err != nil || got != (UnknownToken{}) {
+		t.Fatalf("token = %#v, %v; want UnknownToken", got, err)
 	}
 }
 

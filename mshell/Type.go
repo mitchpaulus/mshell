@@ -33,6 +33,7 @@ const (
 	TidBottom   // divergent: exit, infinite loop, (Phase 2) propagated fail
 	TidNull     // JSON `null`; distinct from `none` (the empty Maybe case)
 	TidUnknown  // unknown contents: every value has this type, and nothing but a kind pattern accepts it
+	TidRune     // one Unicode scalar value: r'a', U+0061
 )
 
 // TypeKind categorizes a TypeNode. The interpretation of TypeNode.A, B, and
@@ -383,6 +384,7 @@ func NewTypeArena() *TypeArena {
 		TKPrim, // TidBottom
 		TKPrim, // TidNull
 		TKPrim, // TidUnknown
+		TKPrim, // TidRune
 	}
 	for i := range primitives {
 		// Encode the primitive id directly in A so the cons key stays unique.

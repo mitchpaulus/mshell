@@ -88,11 +88,24 @@ const (
 // out and reads the replies from stdin. The cell size is zero if the
 // terminal gave none.
 func detectSixel(out *os.File, inFd int, cols int, rows int) sixelTerminal {
-	// Cell size in pixels, text area size in pixels, then primary device
-	// attributes (DA1). DA1 goes last: terminals answer queries in order and
-	// all of them answer DA1, so its reply means no more replies are coming.
-	if _, err := out.WriteString("\033[16t\033[14t\033[c"); err != nil {
-		return sixelTerminal{}
+	result, _ := detectTerminal(out, inFd, cols, rows, false)
+	return result
+}
+
+// detectTerminal is detectSixel, and when askKitty is set it also asks
+// whether the terminal has the kitty keyboard protocol, in the same round
+// trip (ai/fm-bindings.typ, section 10.3).
+func detectTerminal(out *os.File, inFd int, cols int, rows int, askKitty bool) (sixelTerminal, bool) {
+	// The kitty protocol's flags, cell size in pixels, text area size in
+	// pixels, then primary device attributes (DA1). DA1 goes last:
+	// terminals answer queries in order and all of them answer DA1, so its
+	// reply means no more replies are coming.
+	query := "\033[16t\033[14t\033[c"
+	if askKitty {
+		query = "\033[?u" + query
+	}
+	if _, err := out.WriteString(query); err != nil {
+		return sixelTerminal{}, false
 	}
 
 	reply := collectTerminalReplies(terminalQueryTimeout, func(wait time.Duration) ([]byte, bool) {
@@ -106,7 +119,26 @@ func detectSixel(out *os.File, inFd int, cols int, rows int) sixelTerminal {
 			result.cellW, result.cellH = w, h
 		}
 	}
-	return result
+	return result, askKitty && hasKittyKeysReply(reply)
+}
+
+// hasKittyKeysReply reports whether replies hold the kitty keyboard
+// protocol's answer to CSI ? u: CSI ? flags u.
+func hasKittyKeysReply(reply []byte) bool {
+	for s := string(reply); ; {
+		i := strings.Index(s, "\033[?")
+		if i < 0 {
+			return false
+		}
+		s = s[i+3:]
+		j := 0
+		for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+			j++
+		}
+		if j > 0 && j < len(s) && s[j] == 'u' {
+			return true
+		}
+	}
 }
 
 // collectTerminalReplies reads replies until the DA1 reply has arrived,

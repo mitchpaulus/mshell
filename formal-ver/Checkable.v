@@ -33,7 +33,7 @@ Definition is_req (f : fstat) : bool := match f with FReq _ => true | _ => false
     where it is substituted away before validation). *)
 Fixpoint chk (okE : ename -> bool) (pok : bool) (t : ty) : bool :=
   match t with
-  | TInt | TStr | TBool | TBot | TTop => true
+  | TInt | TStr | TBool | TRune | TBot | TTop => true
   | TParam _ => pok
   | TVar _ | TQuote _ _ => false
   | TList t' => chk okE pok t'
@@ -146,6 +146,7 @@ Proof.
   - destruct (vt_int_inv _ _ _ V) as [? ->]. discriminate.
   - destruct (vt_str_inv _ _ _ V) as [? ->]. discriminate.
   - destruct (vt_bool_inv _ _ _ V) as [? ->]. discriminate.
+  - destruct (vt_rune_inv _ _ _ V) as [? ->]. discriminate.
   - exfalso. exact (vt_bot _ _ _ V).
   - discriminate.
   - destruct (vt_list_inv _ _ _ _ V) as (l & a & -> & El & [Hat Hta]).

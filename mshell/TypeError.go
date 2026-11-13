@@ -150,7 +150,7 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 	case TErrUnknownIdentifier:
 		fmt.Fprintf(&sb, "unknown identifier '%s'", e.Name)
 	case TErrBranchStackSize:
-		fmt.Fprintf(&sb, "branches produce stacks of differing sizes: %s", e.Hint)
+		fmt.Fprintf(&sb, "branches produce stacks of differing sizes:%s", e.Hint)
 	case TErrNonExhaustiveMatch:
 		fmt.Fprintf(&sb, "non-exhaustive match: %s", e.Hint)
 	case TErrNoMatchingOverload:
@@ -218,6 +218,8 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return "path"
 	case TidDateTime:
 		return "datetime"
+	case TidRune:
+		return "rune"
 	case TidBottom:
 		// ⊥ in a message is a type nothing has fixed yet (a variable left
 		// unsolved reads as ⊥), printed like one (plan question 25).

@@ -1,0 +1,1 @@
+Error parsing file stdin: 1:1: U+D83D is a surrogate: it exists only inside UTF-16 and is not a character. Write the character's own code point, such as U+1F600.

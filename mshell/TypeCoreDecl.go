@@ -32,7 +32,7 @@ type coreCtor struct {
 // reservedTypeNames are names the language already gives a type, or
 // nothing a declaration may take.
 var reservedTypeNames = map[string]bool{
-	"binary": true, "null": true, "path": true, "datetime": true, "Grid": true, "GridView": true,
+	"binary": true, "null": true, "path": true, "datetime": true, "rune": true, "Grid": true, "GridView": true,
 	"GridRow": true, "Maybe": true, "never": true, "none": true, "new": true,
 }
 
@@ -56,7 +56,17 @@ func (c *coreChecker) declareAll(items []MShellParseItem, defNames map[string]To
 		c.ctors = map[NameId]*coreCtor{}
 	}
 	if c.declared == nil {
-		c.declared = map[NameId]Token{}
+		// Sized for every name the items declare, so it does not grow.
+		n := 0
+		for _, item := range items {
+			switch d := item.(type) {
+			case *MShellTypeDecl:
+				n++
+			case *MShellEnumDecl:
+				n += 1 + len(d.Members)
+			}
+		}
+		c.declared = make(map[NameId]Token, n)
 	}
 	taken := c.declared
 	declErr := func(tok Token, hint string) {

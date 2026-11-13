@@ -115,6 +115,7 @@ func (b *coreTableBuilder) builtinAliases() {
 	b.alias("CompletionResult", "[str] | {values?: [str], preferredFiles?: str | [str], files?: str | [str], "+
 		"dirs?: bool, binaries?: bool}")
 	b.alias("HttpResponse", "{status: int, reason: str, headers: {str: [str]}, body: binary, cookieJar?: [Cookie]}")
+	b.alias("Encrypted", "{nonce: binary, ciphertext: binary, tag: binary}")
 }
 
 // typ resolves a type written in type syntax, with no generics.
@@ -214,9 +215,10 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		"(int int -- bool)",
 		"(float float -- bool)",
 		"(datetime datetime -- bool)",
+		"(rune rune -- bool)",
 	}
 	// `+` on two grids is in TypeCoreGrid.go.
-	b.regTok(PLUS, append(arithmetic, "(str str -- str)", "([t] [t] -- [t])", "(path path -- path)")...)
+	b.regTok(PLUS, append(arithmetic, "(str str -- str)", "([t] [t] -- [t])", "(path path -- path)", "(binary binary -- binary)")...)
 	for i := range t.byToken[PLUS] {
 		if s := &t.byToken[PLUS][i]; len(s.ins) == 2 && ar.Kind(s.ins[0]) == TKList {
 			s.newListOut = 1
@@ -237,6 +239,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		"(binary binary -- bool)",
 		"(path path -- bool)",
 		"(datetime datetime -- bool)",
+		"(rune rune -- bool)",
 		"(null null -- bool)",
 	}
 	b.regTok(EQUALS, equality...)
@@ -259,7 +262,10 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("random", "( -- float)")
 	b.reg("randomFixed", "( -- float)")
 
-	b.reg("toInt", "(str -- Maybe[int])", "(float -- int)", "(int -- int)")
+	b.reg("toInt", "(str -- Maybe[int])", "(float -- int)", "(int -- int)", "(rune -- int)")
+	// An int that is not a Unicode scalar value, or a str that is not one
+	// code point, gives none.
+	b.reg("toRune", "(int -- Maybe[rune])", "(str -- Maybe[rune])")
 	b.reg("toFloat", "(str -- Maybe[float])", "(int -- float)", "(float -- float)")
 	// Value below, base (2 to 36) on top.
 	b.reg("toBase", "(int int -- str)")
@@ -272,6 +278,8 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// String below, delimiter on top.
 	b.reg("split", "(str | path str | path -- new [str])")
+	// Gives [before after] at the first delimiter.
+	b.reg("splitOnce", "(str | path str | path -- new Maybe[[str]])")
 	b.reg("wsplit", "(str | path -- new [str])")
 	b.reg("lines", "(str -- new [str])")
 	// The grid form (two grids and a key quote for each) is in
@@ -304,8 +312,18 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	b.reg("base64encode", "(binary -- str)")
 	b.reg("base64decode", "(str -- binary)")
+	b.reg("runes", "(str -- new [rune])")
 	b.reg("utf8Str", "(binary -- str)")
 	b.reg("utf8Bytes", "(str -- binary)")
+	b.reg("hexDecode", "(str -- binary)")
+	// Each int must be 0 to 255.
+	b.reg("toBinary", "([int] -- binary)")
+	b.reg("byteList", "(binary -- new [int])")
+	b.reg("cryptoRandom", "(int -- binary)")
+	// Data, key, cipher. encrypt makes a random nonce; decrypt gives none
+	// for a wrong key or changed data.
+	b.reg("encrypt", "(binary binary Cipher -- new Encrypted)")
+	b.reg("decrypt", "(Encrypted binary Cipher -- Maybe[binary])")
 	// A str or binary is hashed as its content; a path names a file.
 	b.reg("md5", "(str | path | binary -- str)")
 	// Always names a file.
@@ -323,6 +341,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// A path names a file; a str (a bare word in a list literal too) is the text.
 	b.reg("parseJson", "(str | path | binary -- new Json)")
+	b.reg("parseToml", "(str | path | binary -- new Result[{Toml} str])")
 	// The document node: tag "" with the <html> element as its child.
 	b.reg("parseHtml", "(str | path -- new HtmlNode)")
 	b.reg("parseLinkHeader", "(str -- new [Link])")
@@ -330,12 +349,13 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.regTok(POSITIONAL, "( -- str)")
 	// A line of stdin, and whether one was read.
 	b.regTok(READ, "( -- str bool)")
-	b.regTok(QUESTION, "(Maybe[a] -- a)")
+	// On a Result, an err fails at run time.
+	b.regTok(QUESTION, "(Maybe[a] -- a)", "(Result[a e] -- a)")
 	b.keeps(t.token(QUESTION))
 
 	// ----- Lists -----
 
-	b.reg("len", append([]string{"([a] -- int)", "(str | path | {} -- int)", "(GridRow_s -- int)"},
+	b.reg("len", append([]string{"([a] -- int)", "(str | path | {} | binary -- int)", "(GridRow_s -- int)"},
 		gridForms("(G_s -- int)")...)...)
 	// The value-below-list order (`x [xs] append`) is left to partialName:
 	// when both are lists the runtime appends the upper list into the
@@ -400,7 +420,11 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	for cmp, i := t.name(res.names.Intern("sortByCmp")), 1; i < len(cmp); i++ {
 		cmp[i].newListOut = 1
 	}
-	for _, name := range []string{"each", "filter", "sortByCmp"} {
+	// findMap gives the first Maybe its quote returns that is not none;
+	// linearSearch the first element its quote accepts.
+	b.reg("findMap", "([a] (a -- Maybe[b]) -- Maybe[b])")
+	b.reg("linearSearch", "([a] (a -- bool) -- Maybe[a])")
+	for _, name := range []string{"each", "filter", "sortByCmp", "findMap", "linearSearch"} {
 		b.child(name)
 	}
 	// map on a list runs its quote on a child stack; on a Maybe, on the
@@ -423,7 +447,13 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// These run their quote on the current stack.
 	b.reg("bind", "(Maybe[a] (a -- Maybe[b]) -- Maybe[b])")
 	b.reg("map2", "(Maybe[a] Maybe[b] (a b -- c) -- Maybe[c])")
-	for _, name := range []string{"bind", "map2"} {
+	// orElse gives a just or an ok back; on a none or an err it gives what
+	// the quote returns. On an err the quote gets the error.
+	b.reg("orElse",
+		"(Maybe[a] ( -- Maybe[a]) -- Maybe[a])",
+		"(Result[a e] (e -- Result[a f]) -- Result[a f])",
+	)
+	for _, name := range []string{"bind", "map2", "orElse"} {
 		sigs := t.name(res.names.Intern(name))
 		for i := range sigs {
 			sigs[i].current = true
@@ -453,9 +483,12 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	}
 	// With a quote, the quote runs on the current stack only when the bool
 	// below does not decide the result.
+	// On ints and binaries they are bitwise; binaries must have the same
+	// length.
 	for _, name := range []string{"and", "or"} {
-		b.reg(name, "(bool bool -- bool)", "(bool ( -- bool) -- bool)")
+		b.reg(name, "(bool bool -- bool)", "(bool ( -- bool) -- bool)", "(int int -- int)", "(binary binary -- binary)")
 	}
+	b.reg("xor", "(bool bool -- bool)", "(int int -- int)", "(binary binary -- binary)")
 
 	// Paths. A path input is a str or a path.
 	b.reg("toPath", "(str | path -- path)")
@@ -491,10 +524,10 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	for _, name := range []string{"isDir", "isFile", "fileExists", "isCmd"} {
 		b.reg(name, "(str | path -- bool)")
 	}
-	b.reg("fileSize", "(str | path -- Maybe[int])")
-	b.reg("modTime", "(str | path -- Maybe[datetime])")
-	b.reg("evalSymLinks", "(str | path -- Maybe[path])")
-	b.reg("linkCount", "(str | path -- Maybe[int])")
+	b.reg("fileSize", "(str | path -- Result[int str])")
+	b.reg("modTime", "(str | path -- Result[datetime str])")
+	b.reg("evalSymLinks", "(str | path -- Result[path str])")
+	b.reg("linkCount", "(str | path -- Result[int str])")
 	b.reg("sameFile", "(str | path str | path -- bool)")
 	b.reg("hardLinks", "(str | path -- new [path])")
 	b.reg("glob", "(str | path -- new [path])")
@@ -515,6 +548,17 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("hostname", "( -- str)")
 	b.reg("setPrompt", "((PromptInfo -- [PromptItem]) -- )")
 	b.reg("setCursorShape", "(CursorShape -- )")
+	b.reg("abbrAdd", "(Abbr -- )")
+	b.reg("abbrErase", "(AbbrMatch -- )")
+	// Old below, new on top.
+	b.reg("abbrRename", "(AbbrMatch AbbrMatch -- )")
+	b.reg("abbrList", "( -- new [Abbr])")
+	b.reg("bindingAdd", "(Binding -- )")
+	b.reg("bindingErase", "([Key] -- )")
+	b.reg("bindingList", "( -- new [Binding])")
+	b.reg("fmBindingAdd", "(FmBinding -- )")
+	b.reg("fmBindingErase", "([Key] -- )")
+	b.reg("fmBindingList", "( -- new [FmBinding])")
 	// Name below, value on top.
 	b.reg("setenv", "(str | path str | path -- )")
 	b.reg("unsetenv", "(str | path -- )")
@@ -531,7 +575,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// Dates and times.
 	b.reg("now", "( -- datetime)")
-	b.reg("toDt", "(str -- Maybe[datetime])", "(datetime -- datetime)")
+	b.reg("toDt", "(str -- Result[datetime str])", "(datetime -- datetime)")
 	for _, name := range []string{"date", "utcToCst", "cstToUtc"} {
 		b.reg(name, "(datetime -- datetime)")
 	}
@@ -562,12 +606,12 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// A cycle is a checked error.
 	b.reg("deepCopy", "(a -- new a)")
 
-	// Writes to stdout (w, wl) or stderr (we, wle). Only str and int are
-	// printed; wl and wle add a newline and refuse binary.
-	b.reg("w", "(str | int | binary -- )")
-	b.reg("we", "(str | int | binary -- )")
-	b.reg("wl", "(str | int -- )")
-	b.reg("wle", "(str | int -- )")
+	// Writes to stdout (w, wl) or stderr (we, wle). Only str, int and rune
+	// are printed; wl and wle add a newline and refuse binary.
+	b.reg("w", "(str | int | rune | binary -- )")
+	b.reg("we", "(str | int | rune | binary -- )")
+	b.reg("wl", "(str | int | rune -- )")
+	b.reg("wle", "(str | int | rune -- )")
 
 	// ---- New entries ----
 
@@ -619,7 +663,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// replaced or appended; the response's cookieJar is that same list.
 	// The response is left shared: its cookie jar is the request's list.
 	for _, name := range []string{"httpGet", "httpPost"} {
-		b.reg(name, "(HttpRequest -- Maybe[HttpResponse])")
+		b.reg(name, "(HttpRequest -- Result[HttpResponse str])")
 	}
 
 	// ----- Dicts -----
@@ -663,6 +707,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		newOut: 1,
 	}})
 	b.reg("parseCsv", "(str | path -- new [[str]])")
+	b.reg("toCsv", append([]string{"([[str]] -- str)"}, gridForms("(G_s -- str)")...)...)
 
 	// The list form of groupBy. The grid form takes a list of aggregation
 	// specs; written at the call, each quote gives its own type and the
@@ -687,9 +732,9 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// map, extend and `+`, updateCol, gridSetCell, gridAddCol,
 	// gridRemoveCol, gridRenameCol, gridCol, gridValues, toDict.
 
-	// parseExcel: one record per sheet. An error cell is none.
+	// parseExcel: one record per sheet.
 	{
-		cell := ar.MakeUnion([]TypeId{TidStr, TidFloat, TidBool, ar.MakeMaybeEnum(TidBottom)})
+		cell := b.typ("ExcelCell")
 		field := func(name string, ty TypeId) RecordField {
 			return RecordField{Name: res.names.Intern(name), Status: FieldRequired, Type: ty}
 		}

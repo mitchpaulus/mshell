@@ -196,6 +196,15 @@ The static checker rejects a pattern when the subject type proves that it can ne
 <p>
 This form is intentionally binding-only, not a general inline switch.
 Its pattern must bind at least one name and may be a list, dictionary, or <code>just name</code> pattern.
+List and dictionary patterns may test literal values and nest, as in <code>match</code>:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;run&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;build.msh&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellFATARROW">=&gt;</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;run&#39;</span> <span class="mshellLITERAL">file</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+<span class="mshellVARRETRIEVE">@file</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: build.msh</span></code>
+</pre>
+
+<p>
 Use <code>_</code> to discard one list element or a named dictionary value.
 In list patterns, use <code>..._</code> to accept and discard zero or more elements.
 Each binding name may appear only once in a structural pattern.
@@ -216,7 +225,7 @@ List patterns are limited to 256 positions, and dictionary patterns are limited 
 
 <p>
 An arm may list several strings, integers, or paths in a row; it matches if the subject equals any of them.
-All alternatives in one arm must be the same kind: all strings, all integers, or all paths.
+All alternatives in one arm must be the same kind: all strings, all integers, all paths, or all runes.
 Other types are not allowed. For strings, they must be quoted, they cannot be literals.
 </p>
 
@@ -243,7 +252,7 @@ Other types are not allowed. For strings, they must be quoted, they cannot be li
 <p>
 Match against a type name.
 Supported type patterns: <code>int</code>, <code>float</code>, <code>str</code>, <code>bool</code>,
-<code>list</code>, <code>dict</code>, <code>path</code>, <code>datetime</code>,
+<code>list</code>, <code>dict</code>, <code>path</code>, <code>datetime</code>, <code>rune</code>,
 <code>quotation</code>, <code>maybe</code>, <code>binary</code>,
 and the name of a declared <a href="#control-flow-enum-patterns"><code>enum</code></a>.
 </p>
@@ -411,6 +420,61 @@ The spread binding is a new list, so changing it does not change the matched lis
 <span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: 1 | [2 3 4] | 5</span></code>
 </pre>
 
+<h3 id="control-flow-list-literals">Literals and Nested Patterns</h3>
+
+<p>
+A position in a list pattern can also be a literal value, which the element must equal:
+a quoted string, a number, <code>true</code>, <code>false</code>, a path, a rune, <code>none</code>, or <code>null</code>.
+This makes argument lists easy to take apart.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;cp&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;a.txt&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;b.txt&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;ls&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>              <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;list&#34;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;cp&#39;</span> <span class="mshellLITERAL">from</span> <span class="mshellLITERAL">to</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>      <span class="mshellCOLON">:</span> <span class="mshellFORMATSTRINGSTART">$&#34;copy {</span><span class="mshellVARRETRIEVE">@from</span><span class="mshellFORMATSTRINGMID">} to {</span><span class="mshellVARRETRIEVE">@to</span><span class="mshellFORMATSTRINGEND">}&#34;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;rm&#39;</span> <span class="mshellLITERAL">...files</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>     <span class="mshellCOLON">:</span> <span class="mshellFORMATSTRINGSTART">$&#34;remove {</span><span class="mshellVARRETRIEVE">@files</span> <span class="mshellLITERAL">len</span> <span class="mshellSTR">str</span><span class="mshellFORMATSTRINGEND">} files&#34;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">...rest</span> <span class="mshellSINGLEQUOTESTRING">&#39;--help&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>  <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;help&#34;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">_</span>                   <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;unknown command&#34;</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: copy a.txt to b.txt</span></code>
+</pre>
+
+<p>
+A bare word in a pattern is a name, even though it is a string in a list literal.
+<code>[GET path]</code> binds two names and matches any two element list; write <code>['GET' path]</code> to match the string.
+A bare word starting with <code>-</code>, like <code>-h</code>, is an error: quote it as <code>'-h'</code>.
+</p>
+
+<p>
+An enum member without payload values is a whole value in one word, so in a position it tests the element instead of binding a name.
+A member with payload values, like <code>num</code> below, cannot be matched inside a list pattern; bind the element and match it on its own.
+</p>
+
+<pre>
+<code><span class="mshellENUM">enum</span> <span class="mshellLITERAL">Tok</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">lparen</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">rparen</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">num</span> <span class="mshellTYPEINT">int</span> <span class="mshellEND">end</span>
+
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">lparen</span> <span class="mshellINTEGER">5</span> <span class="mshellLITERAL">num</span> <span class="mshellLITERAL">rparen</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">lparen</span> <span class="mshellLITERAL">inner</span> <span class="mshellLITERAL">rparen</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;one value in parentheses&#34;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">_</span>                     <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;other&#34;</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: one value in parentheses</span></code>
+</pre>
+
+<p>
+A position can be another list or dict pattern, which matches the element there.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">&#34;num&#34;</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">&#34;op&#34;</span> <span class="mshellSTRING">&#34;+&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">&#34;num&#34;</span> <span class="mshellINTEGER">2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">&#34;num&#34;</span> <span class="mshellLITERAL">a</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">&#34;op&#34;</span> <span class="mshellSTRING">&#34;+&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">&#34;num&#34;</span> <span class="mshellLITERAL">b</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCOLON">:</span> <span class="mshellFORMATSTRINGSTART">$&#34;{</span><span class="mshellVARRETRIEVE">@a</span><span class="mshellFORMATSTRINGMID">} plus {</span><span class="mshellVARRETRIEVE">@b</span><span class="mshellFORMATSTRINGEND">}&#34;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">_</span>                                <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;no parse&#34;</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: 1 plus 2</span></code>
+</pre>
+
+<p>
+A name may appear only once in a pattern, including the patterns nested in it.
+The type checker reports a literal, enum member, or nested pattern that can never match the elements' type, such as <code>'GET'</code> in a list of ints.
+For exhaustiveness, an arm that tests what is in a position does not count as covering its lengths, so such a match usually ends with a <code>_</code> arm.
+</p>
+
 <h2>Dict Destructuring</h2>
 
 <p>
@@ -435,6 +499,18 @@ Extra keys in the subject are allowed — only the specified keys must be presen
 <span class="mshellEND">end</span>
 <span class="mshellLITERAL">wl</span>
 <span class="mshellLINECOMMENT"># Output: Bob</span></code>
+</pre>
+
+<p>
+The value for a key can be a literal the value must equal, or a nested list or dict pattern, as in a list pattern.
+</p>
+
+<pre>
+<code><span class="mshellSTRING">&#34;{\&#34;cmd\&#34;: \&#34;move\&#34;, \&#34;to\&#34;: [3, 4]}&#34;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLEFT_CURLY">{</span> <span class="mshellSINGLEQUOTESTRING">&#39;cmd&#39;</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;move&#39;</span><span class="mshellCOMMA">,</span> <span class="mshellSINGLEQUOTESTRING">&#39;to&#39;</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">px</span> <span class="mshellLITERAL">py</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellCOLON">:</span> <span class="mshellFORMATSTRINGSTART">$&#34;move to {</span><span class="mshellVARRETRIEVE">@px</span> <span class="mshellSTR">str</span><span class="mshellFORMATSTRINGMID">}, {</span><span class="mshellVARRETRIEVE">@py</span> <span class="mshellSTR">str</span><span class="mshellFORMATSTRINGEND">}&#34;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLEFT_CURLY">{</span> <span class="mshellSINGLEQUOTESTRING">&#39;cmd&#39;</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;quit&#39;</span> <span class="mshellRIGHT_CURLY">}</span>                <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;quit&#34;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">_</span>                                <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;unknown message&#34;</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: move to 3, 4</span></code>
 </pre>
 
 <h2>Scoping</h2>

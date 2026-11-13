@@ -124,6 +124,8 @@ Proof.
     intros l [].
   - intros n Σ0 Hs Hl Hn Hd. exists Σ0; repeat split; auto using sagree_refl; try constructor.
     intros l [].
+  - intros n Σ0 Hs Hl Hn Hd. exists Σ0; repeat split; auto using sagree_refl; try constructor.
+    intros l [].
   - (* closure *)
     intros sc e ins outs Hv Σ0 Hs Hl Hn Hd. exists Σ0; repeat split; auto using sagree_refl.
     + intros l [].

@@ -96,6 +96,33 @@ func TestPromptTablesCoverBuiltinEnums(t *testing.T) {
 		// Its members are the cases of renderPrompt's switch, which
 		// TestRenderPromptHandlesEveryItem checks.
 		"PromptItem": nil,
+		// Not a prompt enum; TestCipherNewCoversCipher checks it.
+		"Cipher": nil,
+		// Not a prompt enum; parseExcel makes its one member, which
+		// TestParseExcelBytes checks.
+		"ExcelError": nil,
+		// Not a prompt enum; '?' reads its members, which the tests in
+		// tests/success/result.msh and tests/fail/result_*.msh check.
+		"Result": nil,
+		// The abbreviation enums; parseAbbr reads their members, which
+		// TestAbbrBuiltins and TestAbbrExpansion use.
+		"AbbrMatch":     nil,
+		"AbbrPosition":  nil,
+		"AbbrExpansion": nil,
+		// The key binding enums; Bindings.go and Keys.go read their
+		// members by name, which TestBindingEnumsMatch checks.
+		"NamedKey":      nil,
+		"ModifiedKey":   nil,
+		"EditMode":      nil,
+		"EditOp":        nil,
+		"BindingAction": nil,
+		// The file manager's binding enums; FmBindings.go reads their
+		// members by name, which TestFmBindingEnumsMatch checks.
+		"FmMode":     nil,
+		"FmPrompt":   nil,
+		"FmDistance": nil,
+		"FmOp":       nil,
+		"FmAction":   nil,
 	}
 	enums := builtinEnums(t)
 	for name, d := range enums {
@@ -186,27 +213,72 @@ func TestPromptInfoMatchesType(t *testing.T) {
 
 // TestPromptBuiltinsDocumented checks that the user docs describe every
 // built-in enum member and PromptInfo field, and that the agent docs name
-// every built-in enum.
+// every built-in enum. An enum added to builtinDeclSource must be listed
+// in enumDocs with the page that describes its members.
 func TestPromptBuiltinsDocumented(t *testing.T) {
-	userDoc, err := os.ReadFile("../doc/getting-started.inc.html")
-	if err != nil {
-		t.Fatal(err)
+	const (
+		userDocName = "doc/getting-started.inc.html"
+		funcDocName = "doc/functions.inc.html"
+		typeDocName = "doc/data-types.inc.html"
+	)
+	enumDocs := map[string]string{
+		"Base16Color":    userDocName,
+		"BaseBrightness": userDocName,
+		"TextAttribute":  userDocName,
+		"PromptItem":     userDocName,
+		"CursorShape":    userDocName,
+		"Cipher":         funcDocName,
+		"ExcelError":     funcDocName,
+		"Result":         typeDocName,
+		"AbbrMatch":      userDocName,
+		"AbbrPosition":   userDocName,
+		"AbbrExpansion":  userDocName,
+		"NamedKey":       userDocName,
+		"ModifiedKey":    userDocName,
+		"EditMode":       userDocName,
+		"EditOp":         userDocName,
+		"BindingAction":  userDocName,
+		"FmMode":         userDocName,
+		"FmPrompt":       userDocName,
+		"FmDistance":     userDocName,
+		"FmOp":           userDocName,
+		"FmAction":       userDocName,
+	}
+	docs := map[string][]byte{}
+	for _, name := range []string{userDocName, funcDocName, typeDocName} {
+		doc, err := os.ReadFile("../" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		docs[name] = doc
 	}
 	agentDoc, err := os.ReadFile("../doc/mshell.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	inCode := func(name string) bool {
-		return regexp.MustCompile(`<code>` + regexp.QuoteMeta(name) + `[ <]`).Match(userDoc)
+	inCodeOf := func(doc []byte, name string) bool {
+		return regexp.MustCompile(`<code>` + regexp.QuoteMeta(name) + `[ <]`).Match(doc)
 	}
-	for name, d := range builtinEnums(t) {
+	inCode := func(name string) bool { return inCodeOf(docs[userDocName], name) }
+	enums := builtinEnums(t)
+	for name, d := range enums {
 		if !strings.Contains(string(agentDoc), "`"+name+"`") {
 			t.Errorf("doc/mshell.md does not name the built-in enum %s", name)
 		}
+		docName, ok := enumDocs[name]
+		if !ok {
+			t.Errorf("built-in enum %s is not listed in TestPromptBuiltinsDocumented's enumDocs", name)
+			continue
+		}
 		for _, m := range d.Members {
-			if !inCode(m) {
-				t.Errorf("doc/getting-started.inc.html does not describe %s, a member of %s", m, name)
+			if !inCodeOf(docs[docName], m) {
+				t.Errorf("%s does not describe %s, a member of %s", docName, m, name)
 			}
+		}
+	}
+	for name := range enumDocs {
+		if _, ok := enums[name]; !ok {
+			t.Errorf("enumDocs lists %s, which is not a built-in enum", name)
 		}
 	}
 	for _, f := range promptInfoFields(t) {

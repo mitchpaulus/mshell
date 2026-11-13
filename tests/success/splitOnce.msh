@@ -1,0 +1,14 @@
+# Only the first delimiter splits.
+"a=b=c" "=" splitOnce match
+    just parts : @parts => [key value] @key wl @value wl,
+    none : "none" wl,
+end
+"no delimiter" "=" splitOnce str wl
+"ends with=" "=" splitOnce str wl
+"=starts" "=" splitOnce str wl
+"" "=" splitOnce str wl
+"a::b::c" "::" splitOnce str wl
+# An empty delimiter splits after the first character, as 'split' does.
+"abc" "" splitOnce str wl
+"a" "" splitOnce str wl
+`dir/file.txt` "/" splitOnce str wl

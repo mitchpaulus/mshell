@@ -1,0 +1,2 @@
+# none has a type that holds only none, so a none arm covers it alone.
+none match none : "empty" wl, end

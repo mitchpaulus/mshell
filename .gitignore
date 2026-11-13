@@ -13,6 +13,10 @@ Screenshot*.png
 
 ai/fish-priority-issues/*
 ai/prompt-design.pdf
+ai/abbr.pdf
+ai/cli_bindings.pdf
+ai/runes.pdf
+ai/fm-bindings.pdf
 
 .redom/
 
@@ -37,6 +41,7 @@ codex.log
 .gomodcache/
 .gopath/
 .cache/
+msh.exe~
 
 *.mshell_history
 *.vsix
@@ -61,3 +66,8 @@ mshell/msh-cover
 mshell/msh.exe
 mshell/mshell
 mshell/mshw.exe
+
+mshell/testdata/toml-test/
+
+# Go test binaries (go test -c)
+*.test

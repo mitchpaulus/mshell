@@ -1,0 +1,2 @@
+# Static: a Toml may be any kind of value; narrow it with match or tryAs before using it as an int.
+"a = 1" parseToml ? :a? 1 + wl

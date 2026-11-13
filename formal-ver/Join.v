@@ -37,7 +37,7 @@ From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant
 (** ** Decidable syntactic equality of types *)
 Fixpoint ty_eqb (a b : ty) : bool :=
   match a, b with
-  | TInt, TInt | TStr, TStr | TBool, TBool | TBot, TBot | TTop, TTop => true
+  | TInt, TInt | TStr, TStr | TBool, TBool | TRune, TRune | TBot, TBot | TTop, TTop => true
   | TList x, TList y => ty_eqb x y
   | TRec fs1 r1, TRec fs2 r2 =>
       forallb2 (fun p q => String.eqb (fst p) (fst q) && fst_eqb (snd p) (snd q)) fs1 fs2
@@ -77,15 +77,16 @@ Proof.
   - intros b E; destruct b; simpl in E; congruence.
   - intros b E; destruct b; simpl in E; congruence.
   - intros b E; destruct b; simpl in E; congruence.
+  - intros b E; destruct b; simpl in E; congruence.
   - intros t IH b E; destruct b; simpl in E; try congruence. f_equal; auto.
-  - intros fs r Hfs Hr b E; destruct b as [| | | | | |fs2 r2| | | | | | |]; simpl in E; try congruence.
+  - intros fs r Hfs Hr b E; destruct b as [| | | | | | |fs2 r2| | | | | | |]; simpl in E; try congruence.
     apply andb_true_iff in E as [E1 E2]. f_equal; auto.
     eapply Forall2_eq; [| apply forallb2_Forall2; exact E1].
     eapply Forall_impl; [| exact Hfs]. intros [k f] Hf [k' f'] Hp. simpl in *.
     apply andb_true_iff in Hp as [Hk Hq]. apply String.eqb_eq in Hk. subst. f_equal. auto.
   - intros x y Hx Hy b E; destruct b; simpl in E; try congruence.
     apply andb_true_iff in E as [E1 E2]. f_equal; auto.
-  - intros ins outs Hi Ho b E; destruct b as [| | | | | | | |i2 o2| | | | |]; simpl in E; try congruence.
+  - intros ins outs Hi Ho b E; destruct b as [| | | | | | | | |i2 o2| | | | |]; simpl in E; try congruence.
     apply andb_true_iff in E as [E1 E2]. f_equal.
     + eapply Forall2_eq; [exact Hi | apply forallb2_Forall2; exact E1].
     + destruct outs as [o1|], o2 as [o2|]; try discriminate; auto. f_equal.
@@ -123,7 +124,7 @@ Fixpoint dsize (t : ty) : nat :=
   | TQuote ins outs =>
       S (list_sum (map dsize ins) + match outs with None => 0 | Some l => list_sum (map dsize l) end)
   | TEnum _ a => S (list_sum (map dsize a))
-  | TInt | TStr | TBool | TBot | TTop | TParam _ | TVar _ | TRV _ => 1
+  | TInt | TStr | TBool | TRune | TBot | TTop | TParam _ | TVar _ | TRV _ => 1
   end
 with fdsize (f : fstat) : nat :=
   match f with FReq t | FOpt t | FDict t => S (dsize t) | FAbs | FOpen => 1 end.

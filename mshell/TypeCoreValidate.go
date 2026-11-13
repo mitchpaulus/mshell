@@ -253,6 +253,8 @@ func (c *coreChecker) kindWord(k valueKind) string {
 		return "path"
 	case uint32(TidDateTime):
 		return "datetime"
+	case uint32(TidRune):
+		return "rune"
 	case uint32(TidBytes):
 		return "binary"
 	case uint32(TidNull):
@@ -272,8 +274,8 @@ func (c *coreChecker) kindWord(k valueKind) string {
 	return ""
 }
 
-// tryAs checks `tryAs T`: the value becomes `Maybe[T]`, new when the value
-// was.
+// tryAs checks `tryAs T`: the value becomes `Result[T str]`, new when the
+// value was; the str of an err says why the value does not conform.
 func (c *coreChecker) tryAs(t *MShellTryAs) {
 	c.at = t.Tok
 	target, ok := c.validationTarget(t.Target, t.Tok)
@@ -289,7 +291,16 @@ func (c *coreChecker) tryAs(t *MShellTryAs) {
 		// Keep checking with a target that nothing else depends on.
 		target = TidBottom
 	}
-	c.stack[len(c.stack)-1] = coreSlot{t: c.arena.MakeMaybeEnum(target), fresh: fresh}
+	c.stack[len(c.stack)-1] = coreSlot{t: c.resultType(target, TidStr), fresh: fresh}
+}
+
+// resultType returns `Result[a e]`, an instance of the built-in enum.
+func (c *coreChecker) resultType(a, e TypeId) TypeId {
+	idx, ok := c.res.enums[c.names.Intern("Result")]
+	if !ok {
+		panic("resultType: Result is not declared")
+	}
+	return c.arena.MakeEnum(idx, []TypeId{a, e})
 }
 
 // isCovers reports whether an `is T` arm covers the type m: m and T are

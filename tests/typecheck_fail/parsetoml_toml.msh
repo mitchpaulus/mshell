@@ -1,0 +1,2 @@
+# Static: parseToml gives a Result[{Toml} str]; unwrap it with ?, then narrow the Toml.
+"a = 1" parseToml :a? drop

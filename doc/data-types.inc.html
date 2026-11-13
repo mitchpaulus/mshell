@@ -8,6 +8,7 @@
     <li><a href="#data-type-list">List</a></li>
     <li><a href="#data-type-string">String</a></li>
     <li><a href="#data-type-format-string">Format String</a></li>
+    <li><a href="#data-type-rune">Rune</a></li>
     <li><a href="#data-type-int-and-float">Integer</a></li>
     <li><a href="#data-type-int-and-float">Float</a></li>
     <li><a href="#data-type-path">Path</a></li>
@@ -16,6 +17,7 @@
     <li><a href="#data-type-maybe">Maybe</a></li>
     <li><a href="#data-type-null">Null</a></li>
     <li><a href="#data-type-enum">Enum</a></li>
+    <li><a href="#data-type-result">Result</a></li>
     <li><a href="#data-type-pipe">Pipe</a></li>
     <li><a href="#data-type-binary">Binary</a></li>
     <li><a href="#data-type-grid">Grid</a></li>
@@ -218,6 +220,62 @@ A <code>}</code> outside an interpolation is literal, so escaping it is optional
 In short, if you stick to UTF-8 encoded strings and data, you should have a good time.
 If you have strings in other encodings, your results might have subtle differences.
 </p>
+
+<h1 id="data-type-rune">Rune <a class="section-link" href="#data-type-rune" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
+
+<p>
+A rune is one Unicode code point: any value from U+0000 to U+10FFFF except the surrogates, U+D800 to U+DFFF, which are not characters.
+Its type is <code>rune</code>.
+A rune is never a string, and a string is never a rune.
+</p>
+
+<p>
+There are two ways to write one.
+<code>r'…'</code> holds exactly one code point and, like a single-quoted string, has no escapes.
+<code>U+</code> and 4 to 6 hex digits gives a code point by number, as the Unicode standard writes it.
+Use it for the apostrophe, control characters, and combining marks, which would join the quote before them.
+</p>
+
+<pre>
+<code><span class="mshellRUNE">r&#39;a&#39;</span>      <span class="mshellLINECOMMENT"># a rune you can see</span>
+<span class="mshellRUNE">r&#39; &#39;</span>      <span class="mshellLINECOMMENT"># the space</span>
+<span class="mshellRUNE">U+001B</span>    <span class="mshellLINECOMMENT"># Escape, given by its code point</span>
+<span class="mshellRUNE">U+0301</span>    <span class="mshellLINECOMMENT"># a combining accent, which would join the quote</span>
+<span class="mshellRUNE">U+0027</span>    <span class="mshellLINECOMMENT"># the apostrophe</span></code>
+</pre>
+
+<p>
+The <code>r</code> is not a raw-string prefix: single-quoted strings are already raw.
+<code>r'abc'</code> is an error that says so, and <code>r'é'</code> written as <code>e</code> and a combining accent is an error that lists its two code points.
+</p>
+
+<p>
+<code>str</code> and <code>wl</code> give the character.
+Inside a list, a rune prints as source that reads back as the same rune.
+<code>toJson</code> gives a one-character string.
+Runes compare with <code>=</code>, and <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code> and <code>&gt;=</code> order them by code point.
+</p>
+
+<pre>
+<code><span class="mshellSINGLEQUOTESTRING">&#39;héllo&#39;</span> <span class="mshellLITERAL">runes</span>   <span class="mshellLINECOMMENT"># [r&#39;h&#39; r&#39;é&#39; r&#39;l&#39; r&#39;l&#39; r&#39;o&#39;]</span>
+<span class="mshellRUNE">r&#39;a&#39;</span> <span class="mshellLITERAL">toInt</span>      <span class="mshellLINECOMMENT"># 97</span>
+<span class="mshellINTEGER">97</span> <span class="mshellLITERAL">toRune</span>       <span class="mshellLINECOMMENT"># Just(a)</span>
+<span class="mshellSINGLEQUOTESTRING">&#39;ab&#39;</span> <span class="mshellLITERAL">toRune</span>     <span class="mshellLINECOMMENT"># None: not one code point</span>
+<span class="mshellRUNE">r&#39;a&#39;</span> <span class="mshellSTR">str</span>        <span class="mshellLINECOMMENT"># &#34;a&#34;</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRUNE">r&#39;a&#39;</span> <span class="mshellRUNE">U+0301</span> <span class="mshellRUNE">r&#39; &#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTR">str</span>  <span class="mshellLINECOMMENT"># &#34;[r&#39;a&#39; U+0301 r&#39; &#39;]&#34;</span></code>
+</pre>
+
+<p>
+<code>rune</code> is a type pattern in <code>match</code>, and rune literals are value patterns.
+</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@c</span> <span class="mshellMATCH">match</span>
+    <span class="mshellRUNE">r&#39;(&#39;</span> <span class="mshellRUNE">r&#39;[&#39;</span> <span class="mshellRUNE">r&#39;{&#39;</span> <span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;open&#39;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellRUNE">r&#39;)&#39;</span> <span class="mshellRUNE">r&#39;]&#39;</span> <span class="mshellRUNE">r&#39;}&#39;</span> <span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;close&#39;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">_</span>              <span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;other&#39;</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span></code>
+</pre>
 
 <h1 id="data-type-path">Path <a class="section-link" href="#data-type-path" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 <p> Since paths are such a common object to deal with in shell scripts, mshell has a dedicated type. </p>
@@ -502,6 +560,60 @@ Two enum values are equal when they are the same member of the same enum, with e
 Member names are global, and no name is used twice: a member, an enum, a <code>type</code>, a definition and a builtin each need a name of their own.
 </p>
 
+<h1 id="data-type-result">Result <a class="section-link" href="#data-type-result" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
+
+<p>
+<code>Result</code> is a built-in <a href="#data-type-enum">enum</a> for a value or the reason there is none.
+It is declared as:
+</p>
+
+<pre>
+<code><span class="mshellENUM">enum</span> <span class="mshellLITERAL">Result</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">a</span> <span class="mshellLITERAL">e</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">ok</span> <span class="mshellLITERAL">a</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">err</span> <span class="mshellLITERAL">e</span> <span class="mshellEND">end</span></code>
+</pre>
+
+<p>
+Where a <a href="#data-type-maybe"><code>Maybe</code></a> only says that a value is missing, an <code>err</code> carries the error.
+The error can be any type: a string, or an enum of your own that a <code>match</code> can take apart.
+</p>
+
+<p>
+<code>?</code> unwraps a Result as it does a Maybe.
+On an <code>ok</code> it leaves the value; on an <code>err</code> it fails, and the message is the <code>str</code> of the error.
+</p>
+
+<p>
+<a href="functions.html#functions-maybe"><code>orElse</code></a> recovers from an <code>err</code>: it gives an <code>ok</code> back as is, and on an <code>err</code> runs a quotation on the error, which returns a new Result.
+</p>
+
+<p>
+<a href="type_system.html#type-system-validation"><code>tryAs T</code></a> gives a <code>Result[T str]</code>, whose error says where and why a value does not conform to <code>T</code>.
+Built-in functions that can fail for more than one reason also give a <code>Result[T str]</code>:
+<code>httpGet</code>, <code>httpPost</code>, <code>parseToml</code>, <code>toDt</code>, <code>fileSize</code>, <code>modTime</code>, <code>evalSymLinks</code> and <code>linkCount</code>.
+</p>
+
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">safeDiv</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEINT">int</span> <span class="mshellTYPEINT">int</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">Result</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellTYPEINT">int</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellVARSTORE">d!</span> <span class="mshellVARSTORE">n!</span>
+    <span class="mshellVARRETRIEVE">@d</span> <span class="mshellINTEGER">0</span> <span class="mshellEQUALS">=</span> <span class="mshellIF">if</span> <span class="mshellSTRING">&#34;divide by zero&#34;</span> <span class="mshellLITERAL">err</span> <span class="mshellELSE">else</span> <span class="mshellVARRETRIEVE">@n</span> <span class="mshellVARRETRIEVE">@d</span> <span class="mshellLITERAL">/</span> <span class="mshellLITERAL">ok</span> <span class="mshellEND">end</span>
+<span class="mshellEND">end</span>
+
+<span class="mshellINTEGER">10</span> <span class="mshellINTEGER">2</span> <span class="mshellLITERAL">safeDiv</span> <span class="mshellQUESTION">?</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span>   <span class="mshellLINECOMMENT"># 5</span>
+<span class="mshellINTEGER">10</span> <span class="mshellINTEGER">0</span> <span class="mshellLITERAL">safeDiv</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">ok</span> <span class="mshellLITERAL">v</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@v</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">err</span> <span class="mshellLITERAL">e</span> <span class="mshellCOLON">:</span> <span class="mshellFORMATSTRINGSTART">$&#34;error: {</span><span class="mshellVARRETRIEVE">@e</span><span class="mshellFORMATSTRINGEND">}&#34;</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span>                     <span class="mshellLINECOMMENT"># error: divide by zero</span>
+<span class="mshellINTEGER">10</span> <span class="mshellINTEGER">0</span> <span class="mshellLITERAL">safeDiv</span> <span class="mshellQUESTION">?</span>          <span class="mshellLINECOMMENT"># fails: Failed on &#39;?&#39; with err: divide by zero</span></code>
+</pre>
+
+<p>
+<code>ok</code> and <code>err</code> are words, so a bare <code>ok</code> or <code>err</code> in a list literal makes a Result.
+Quote them to pass them to a command:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSINGLEQUOTESTRING">&#39;ok&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellEXECUTE">;</span>           <span class="mshellLINECOMMENT"># ok</span></code>
+</pre>
+
 <h1 id="data-type-pipe">Pipe <a class="section-link" href="#data-type-pipe" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
@@ -525,6 +637,9 @@ It's created by the <code>|</code> operator.
 Many times in shell programs you need to deal directly with binary data.
 This type represents an array of bytes.
 Example functions that takes binary data as input and output are <a href="functions.html#func-utf8Str"><code>utf8Str</code></a>, <a href="functions.html#func-utf8Bytes"><code>utf8Bytes</code></a>, <a href="functions.html#func-base64encode"><code>base64encode</code></a>, and <a href="functions.html#func-base64decode"><code>base64decode</code></a>.
+<code>len</code> gives the number of bytes, <code>+</code> joins two binaries, and indexes and slices work as they do on strings.
+<code>str</code> gives the bytes as hexadecimal.
+See <a href="functions.html#functions-binary">Binary Data</a> for bitwise operations, byte lists and encryption.
 </p>
 
 <h1 id="data-type-grid">Grid <a class="section-link" href="#data-type-grid" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>

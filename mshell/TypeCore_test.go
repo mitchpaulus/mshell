@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -103,7 +104,26 @@ func TestCoreChecker(t *testing.T) {
 		{`true if 5 else "x" parseJson end drop`, true, ""},
 		{`true if [1] else "x" parseJson end drop`, true, ""},
 		{`[1] xs! true if @xs else "x" parseJson end drop`, false, "no common type"},
-		{`true if 1 else end`, false, "differing sizes"},
+		{`true if 1 else end`, false, "differing sizes:\n" +
+			"  1 arm leaves 1 value:\n    the `if` branch (line 1): (int)\n" +
+			"  1 arm leaves 0 values:\n    the missing `else` (line 1)"},
+		// Only the arm whose stack size differs from most is named; arms
+		// that never reach the end are counted apart.
+		{"\"a\" match\n \"1\": 1,\n \"2\": 1 exit,\n \"3\": 1 2,\n _: 1\nend", false, "differing sizes:\n" +
+			"  2 arms leave 1 value\n" +
+			"  1 arm leaves 2 values:\n    the arm `\"3\"` (line 4): (int int)\n" +
+			"  1 other arm never reaches the end of the `match`"},
+		// At most three arms are named for one size, and four sizes listed.
+		{`"a" match "1": , "2": , "3": , "4": , "5": , "6": 1, "7": 1, "8": 1, "9": 1, "10": 1 2, "11": 1 2 3, "12": 1 2 3 4, _: 1 2 3 4 5 end`, false,
+			"differing sizes:\n  5 arms leave 0 values\n" +
+				"  4 arms leave 1 value:\n    the arm `\"6\"` (line 1): (int)\n    the arm `\"7\"` (line 1): (int)\n" +
+				"    the arm `\"8\"` (line 1): (int)\n    … and 1 more\n" +
+				"  1 arm leaves 2 values:\n    the arm `\"10\"` (line 1): (int int)\n" +
+				"  1 arm leaves 3 values:\n    the arm `\"11\"` (line 1): (int int int)\n" +
+				"  … and 2 more arms with 2 other sizes"},
+		// A long pattern is cut at its end, a long stack at its bottom.
+		{`[1 2] match [aVeryLongNameNumberOne aVeryLongNameNumberTwo ...rest]: "a" "b" [1] {"k": [1.0 2.0]} [[["x"]]] 2 3 4 5 6 7 8 9, _: 1 end`, false,
+			"the arm `[aVeryLongNameNumberOne aVeryLongNameNu…` (line 1): …act {k: [float]} [[[str]]] int int int int int int int int)"},
 		// else if conditions run on the stack the earlier ones left.
 		{`1 false if 2 else* 3 4 = *if 5 else 6 end + wl`, true, ""},
 		{`false if 1 else* "a" *if 2 else 3 end drop`, false, "expected"},
@@ -288,6 +308,23 @@ func TestCoreChecker(t *testing.T) {
 		{`[1] xs! [@xs] as [[int] | str] l!`, true, ""},
 		{`[1] xs! [@xs] as [[int | str]] l!`, false, "'as' needs evidence"},
 		{`def f ({a?: [int], b?: int} -- ) drop end [] j! {a: @j} f`, true, ""},
+		// Partly new arms stay partly new when they take one mark
+		// (formal-ver/PartialJoin.v).
+		{`type R = {a?: [int], b?: [int]} def pick (bool [int] -- R) xs! if {a: @xs} else {a: @xs} end end`, true, ""},
+		{`type R = {a?: [int], b?: [int]} def pick (bool [int] -- R) xs! if {a: @xs} else {a: @xs, b: [2]} end end`, true, ""},
+		{`[1] xs! true if {a: @xs} else {b: @xs} end as {a?: [int], b?: [int]} drop`, true, ""},
+		{`[1] xs! true if {a: @xs} else {b: [2]} end as {a?: [int], b?: [int | str]} drop`, true, ""},
+		{`[1] xs! true if {a: {c: @xs}} else {a: {c: @xs, d: 1}} end as {a: {c: [int], d?: int, e?: int}} drop`, true, ""},
+		{`[1] xs! 2 match 1 : {a: @xs}, 2 : {b: @xs}, _ : {c: [1]} end as {a?: [int], b?: [int], c?: [int]} drop`, true, ""},
+		{`[1] xs! true if [@xs] else [@xs @xs] end as [[int]] drop`, true, ""},
+		// A stored position keeps its type through the join.
+		{`[1] xs! true if {a: @xs} else {a: @xs, b: [2]} end as {a?: [int | str], b?: [int]} drop`, false, "`a` is a stored [int]"},
+		{`[1] xs! true if {a: {c: @xs}} else {a: {c: @xs, d: 1}} end as {a: {c: [int | str], d?: int}} drop`, false, "`c` in `a` is a stored [int]"},
+		{`[1] xs! true if {a: @xs} else {a: @xs} end dup as {a: [int], b?: int} d! e!`, false, "'as' needs evidence"},
+		// Stored in one arm and new in the other: no one mark, so shared.
+		{`[1] xs! true if {a: [1]} else {a: @xs} end as {a: [int], b?: int} drop`, false, "'as' needs evidence"},
+		{`[1] xs! true if [@xs] else [[3]] end as [[int] | str] drop`, false, "'as' needs evidence"},
+		{`[1] xs! ["s"] ys! true if {a: @xs} else {a: @ys} end drop`, false, "no common type"},
 		// zipPack and tarPack: one form per stored list type, and the
 		// built-in PackEntry alias. A new literal fits several forms with
 		// the same outputs, and takes the first.
@@ -545,6 +582,7 @@ func TestCoreDeclarations(t *testing.T) {
 		{`enum E = a end  enum F = a end`, false, "'a' is already declared at 1:10"},
 		{`type T = int  enum T = a end`, false, "'T' is already declared"},
 		{`type Json = int`, false, "'Json' is a built-in type"},
+		{`type Toml = int`, false, "'Toml' is a built-in type"},
 		{`enum E = a | just end`, false, "meaning of its own in match patterns"},
 		{`enum E[a a] = c a end`, false, "the parameter 'a' is written twice"},
 		// Generic enums: arguments, recursion, unions.
@@ -813,4 +851,83 @@ func TestCoreFinishedChoiceFits(t *testing.T) {
 	if !strings.Contains(got, "(int -- float)") {
 		t.Errorf("got %q, want the quote typed (int -- float)", got)
 	}
+}
+
+// TestJoinOrderIndependent: whether the arms of a match join does not
+// depend on their order (ai/n-way-join.md). The pool mixes new, stored and
+// partly new dicts and lists with values of other kinds.
+func TestJoinOrderIndependent(t *testing.T) {
+	base := NewCoreBase(nil, nil)
+	pool := []string{"{a: 1}", "{b: 1}", "@s", "@t", "{a: @xs}", "{b: @xs}", "{a: [2]}",
+		"[1]", `["a"]`, "@xs", "[@xs]", "1", "none", "5 just"}
+	pre := "[1] xs! {a: 1} s! {a: 1} as {a?: int, b?: int} t! "
+	check := func(arms []string) bool {
+		var b strings.Builder
+		b.WriteString(pre + "3 match ")
+		for i, a := range arms {
+			if i == len(arms)-1 {
+				b.WriteString("_ : " + a + " end drop")
+			} else {
+				b.WriteString(fmt.Sprint(i+1) + " : " + a + ", ")
+			}
+		}
+		_, ok := coreCheck(t, base, b.String())
+		return ok
+	}
+	var perms func(xs []string) [][]string
+	perms = func(xs []string) [][]string {
+		if len(xs) <= 1 {
+			return [][]string{slices.Clone(xs)}
+		}
+		var out [][]string
+		for i := range xs {
+			rest := append(slices.Clone(xs[:i]), xs[i+1:]...)
+			for _, p := range perms(rest) {
+				out = append(out, append([]string{xs[i]}, p...))
+			}
+		}
+		return out
+	}
+	try := func(combo []string) bool {
+		ps := perms(combo)
+		first := check(ps[0])
+		for _, p := range ps[1:] {
+			if check(p) != first {
+				t.Errorf("arms %v: checks in order %v is %v, in order %v is %v", combo, ps[0], first, p, !first)
+				break
+			}
+		}
+		return first
+	}
+	if !check([]string{"{a: [2]}", "{a: @xs}", "{b: 1}"}) || check([]string{"@xs", `["a"]`, "[1]"}) {
+		t.Errorf("the join of a sample is wrong")
+	}
+	accepted := 0
+	for _, combo := range combos(pool, 3) {
+		if try(combo) {
+			accepted++
+		}
+	}
+	if accepted < 200 {
+		t.Errorf("only %d of 364 three-arm combinations check", accepted)
+	}
+	// Four arms from part of the pool.
+	small := []string{"{a: 1}", "@t", "{a: @xs}", "{b: @xs}", "{a: [2]}", "[1]", "@xs"}
+	for _, combo := range combos(small, 4) {
+		try(combo)
+	}
+}
+
+// combos is every choice of k of xs, in the order of xs.
+func combos(xs []string, k int) [][]string {
+	if k == 0 {
+		return [][]string{nil}
+	}
+	var out [][]string
+	for i := range len(xs) - k + 1 {
+		for _, rest := range combos(xs[i+1:], k-1) {
+			out = append(out, append([]string{xs[i]}, rest...))
+		}
+	}
+	return out
 }

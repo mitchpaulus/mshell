@@ -1,0 +1,10 @@
+a
+b=c
+None
+Just(["ends with" ""])
+Just(["" "starts"])
+None
+Just(["a" "b::c"])
+Just(["a" "bc"])
+None
+Just(["dir" "file.txt"])

@@ -431,7 +431,7 @@ Proof. intros M H. apply rsub_fold, rf_mur, rsub_unfold; auto. Qed.
     [en_imm] can be checked on payload types before substitution. *)
 Fixpoint immutable (t : ty) : bool :=
   match t with
-  | TInt | TStr | TBool | TBot | TParam _ | TRV _ => true
+  | TInt | TStr | TBool | TRune | TBot | TParam _ | TRV _ => true
   | TVar _ => false          (* an instance may hold a list *)
   | TMu t' => immutable t'   (* the greatest fixed point: the variable counts as immutable *)
   | TUnion a b => immutable a && immutable b
@@ -576,7 +576,7 @@ Fixpoint occ_sub (ps : list eparam) (p : pol) (t : ty) : bool :=
   match t with
   | TParam i => match nth_error ps i with Some q => compat p (p_var q) | None => false end
   | TVar _ => false          (* declarations do not mention definitions' variables *)
-  | TInt | TStr | TBool | TBot | TTop | TMu _ | TRV _ => true   (* a recursive type is closed *)
+  | TInt | TStr | TBool | TRune | TBot | TTop | TMu _ | TRV _ => true   (* a recursive type is closed *)
   | TList t' => occ_sub ps PInv t'
   | TRec fs r => forallb (fun kf => focc_sub ps (snd kf)) fs && focc_sub ps r
   | TUnion a b => occ_sub ps p a && occ_sub ps p b
@@ -595,7 +595,7 @@ with focc_sub (ps : list eparam) (f : fstat) : bool :=
 Fixpoint pocc (t : ty) : list nat :=
   match t with
   | TParam i => [i]
-  | TInt | TStr | TBool | TBot | TTop | TVar _ | TMu _ | TRV _ => []
+  | TInt | TStr | TBool | TRune | TBot | TTop | TVar _ | TMu _ | TRV _ => []
   | TList t' => pocc t'
   | TRec fs r => flat_map (fun kf => fpocc (snd kf)) fs ++ fpocc r
   | TUnion a b => pocc a ++ pocc b
@@ -620,7 +620,7 @@ Fixpoint occ_fresh (ps : list eparam) (t : ty) : bool :=
       | None => false
       end
   | TVar _ => false
-  | TInt | TStr | TBool | TBot | TTop | TMu _ | TRV _ => true
+  | TInt | TStr | TBool | TRune | TBot | TTop | TMu _ | TRV _ => true
   | TList t' => occ_fresh ps t'
   | TRec fs r => forallb (fun kf => focc_fresh ps (snd kf)) fs && focc_fresh ps r
   | TUnion a b => occ_fresh ps a && occ_fresh ps b
@@ -647,7 +647,7 @@ Definition wf_payload (E : ename) (pts : list ty) : Prop := forallb (wf_pt E) pt
 
 Fixpoint size (t : ty) : nat :=
   match t with
-  | TInt | TStr | TBool | TBot | TTop | TParam _ | TVar _ | TMu _ | TRV _ => 1
+  | TInt | TStr | TBool | TRune | TBot | TTop | TParam _ | TVar _ | TMu _ | TRV _ => 1
   | TList t' => S (size t')
   | TUnion a b => S (size a + size b)
   | TRec fs r => S (fsize r + list_sum (map (fun p => fsize (snd p)) fs))

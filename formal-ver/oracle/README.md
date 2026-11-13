@@ -8,8 +8,10 @@ The Go checker's port of the same procedures (plan stage 2) is tested by compari
 the oracle's on generated types.
 
 ```
-make          # extract from the proof and build ./oracle (needs the proof built: make -C ..)
-make test     # check the oracle against examples.txt
+redo                  # extract from the proof and build ./oracle (builds the proof files it needs)
+redo test             # check the oracle against examples.txt
+redo update-examples  # rewrite examples.txt from the oracle
+redo clean            # remove ./oracle
 ```
 
 `examples.txt` is the examples of `Decide.v`, printed from the Rocq terms themselves (`./oracle --examples`),
@@ -39,7 +41,7 @@ and treat a `no` that turns into `yes` with more fuel as "fuel ran out".
 
 | Syntax | Type |
 |---|---|
-| `int`, `str`, `bool` | base types (the model has only these three; others behave the same way) |
+| `int`, `str`, `bool`, `rune` | base types (the model has only these four; others behave the same way) |
 | `bot`, `top` | the empty type; unknown contents |
 | `(maybe T)`, `(list T)` | `Maybe[T]`, `[T]` |
 | `(dict T)` | `{str: T}` (the same as `(rec () (dict T))`) |

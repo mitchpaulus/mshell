@@ -26,6 +26,7 @@ Definition kind_of (H : heap) (v : val) : option kind :=
   match v with
   | VInt _ => Some KInt
   | VStr _ => Some KStr
+  | VRune _ => Some KRune
   | VBool _ => Some KBool
   | VClo _ _ => Some KQuote
   | VCon E _ _ _ => Some (KEnum E)
@@ -77,6 +78,7 @@ Fixpoint validate (f : nat) (H : heap) (v : val) (t : ty) {struct f} : option bo
   match t with
   | TInt => Some (match v with VInt _ => true | _ => false end)
   | TStr => Some (match v with VStr _ => true | _ => false end)
+  | TRune => Some (match v with VRune _ => true | _ => false end)
   | TBool => Some (match v with VBool _ => true | _ => false end)
   | TBot | TParam _ | TVar _ | TRV _ => Some false
   | TTop => Some true
@@ -216,6 +218,7 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
   match w with
   | WInt m => next H (VInt m :: st)
   | WStr s => next H (VStr s :: st)
+  | WRune n => next H (VRune n :: st)
   | WBool b => next H (VBool b :: st)
   | WAdd => match st with VInt a :: VInt b :: st' => next H (VInt (b + a) :: st') | _ => RStuck end
   | WCat => match st with VStr a :: VStr b :: st' => next H (VStr (String.append b a) :: st') | _ => RStuck end

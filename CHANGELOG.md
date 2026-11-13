@@ -9,27 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tab completion for `typst`: subcommands, options and their values, `.typ` files for the input, and output files.
+  `typst init` offers the templates in the local and downloaded package directories,
+  and the `typst query` selector offers the labels in the input file.
+- `findMap`: apply a quotation to each list element and return the first result that is not `none`, without running it on the rest of the list.
+  `["a" "12" "7"] (toInt) findMap` gives `Just(12)`.
+- `orElse`: fall back when a `Maybe` is `none` or a `Result` is an `err`.
+  `'USER' getEnv ('USERNAME' getEnv) orElse` tries `USER`, then `USERNAME`.
+  On an `err` the quotation gets the error and returns a new `Result`. The quotation runs only when needed.
+- `Result`: a built-in enum for a value or the error that stopped it, `enum Result[a e] = ok a | err e end`.
+  `?` unwraps an `ok`, and fails on an `err` with the error's `str` as the message.
+  Since `ok` and `err` are now words, a bare `ok` or `err` in a command list must be quoted: `[echo 'ok']`.
+- `parseToml`: parse a TOML document from a string, binary, or file path. It gives a `Result[{Toml} str]`, an `err` saying why for text that is not valid TOML. `Toml` is a new built-in type.
+- `ExcelCell`: a built-in type for a cell `parseExcel` gives, `str | float | bool | ExcelError`, so stored rows can be typed `[[ExcelCell]]`.
+  An error cell is an `excelError` holding the error's text, such as `"#DIV/0!"`.
 - The interactive prompt is set in `init.msh` with `setPrompt`, from a quotation that returns a list of `PromptItem` values:
   text, line breaks, colors (16, 256 or RGB), text attributes, the window title and hyperlinks.
   It is given a `PromptInfo` with the stack's depth and types, and whether the last line succeeded, its exit code and how long it took.
   A prompt that fails, takes longer than 3 seconds, or is interrupted with Ctrl-C is stopped, and the built-in prompt is shown.
 - `setCursorShape` sets the cursor's shape while the interactive shell reads a command.
+- The language server supports goto declaration and goto definition on a `type` alias, an enum, an enum member, or a definition,
+  going to its declaration in the file or in the standard library or init file.
+- The language server offers a `Convert to prefix quote` code action that rewrites a quote followed by a word, such as `(2 *) map`, as `map. 2 * end`.
+  A quote on one line stays on one line; a multiline quote gets `map.` and `end` on their own lines.
 - Enums: `enum Shape = circle float | rect float float | dot end` declares a type whose values are one of its members.
   A member's name makes a value from its payload (`2.0 circle`), and a `match` arm takes it apart (`circle r : ...`).
   The enum's name is a match pattern for any of its members (`Shape s : ...`).
   Enums may have parameters (`enum Box[a] = box [a] | empty end`) and may refer to themselves.
   `str` gives `circle(2)`, `toJson` gives `{"circle": 2}`, and `=` compares the member and its payloads.
-- `tryAs T` checks at run time that a value conforms to the type `T`, and gives `just` the same value or `none`:
-  `"people.json" parseJson tryAs [Person] ?`.
+- `tryAs T` checks at run time that a value conforms to the type `T`, and gives a `Result[T str]`:
+  `ok` with the same value, or `err` with where and why the value does not conform,
+  such as `not of type [Person]: at [1].age, expected int, found str "41"`.
+  `"people.json" parseJson tryAs [Person] ?` stops with that message.
   Every element, dictionary value and enum payload is checked, in place, with no copy.
   The match pattern `is T name` does the same check in a match arm, and binds the value.
 - `del` removes a key from a dictionary: `{a: 1, b: 2} "a" del`. Nothing happens when the key is absent.
+- `splitOnce` splits a string at the first occurrence of a delimiter, giving `just [before after]`, or `none` when the delimiter is not found.
 - `getEnv` gets an environment variable by name, giving `none` when it is not set: `"EDITOR" getEnv "vim" maybe`.
 - Functions for symlinks and hard links
-  - `evalSymLinks` follows every symlink in a path, giving `none` for a missing path or broken symlink.
+  - `evalSymLinks` follows every symlink in a path, giving an `err` for a missing path or broken symlink.
   - `linkCount` gives the number of hard links to a file.
   - `sameFile` tests whether two paths are the same file.
   - `hardLinks` lists every name of a file. Windows only.
+- Functions for binary data and encryption
+  - `and`, `or` and the new `xor` work bitwise on two ints, and on two binaries of the same length.
+  - `toBinary` makes binary data from a list of byte values, and `byteList` gives the bytes as ints.
+  - `hexDecode` decodes a hexadecimal string into binary data.
+  - `cryptoRandom` gives secure random bytes, for keys and nonces.
+  - `encrypt` and `decrypt` encrypt data with a key and a `Cipher`: `cipherAesGcm`, `cipherChaCha20Poly1305` or `cipherXChaCha20Poly1305`.
+    `encrypt` gives the nonce, ciphertext and tag in a dictionary; `decrypt` gives `none` when the key is wrong or the data was changed.
 - `deepCopy` copies a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original.
 - The interactive shell type checks each line before it runs it, keeping types across lines.
   A line that does not check is not run and changes nothing.
@@ -44,15 +72,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `☁` cloud only, `✓` on this device, `●` always keep on this device, `↻` syncing, `✗` sync error.
   Folders show the same status as in Explorer.
   Cloud only files are not previewed, so scrolling past them no longer downloads them.
+- Under WSL, the file manager does not preview cloud only OneDrive files on Windows drives (`/mnt/c`), so scrolling past them does not download them.
 - The file manager shows file sizes in a column next to the file names, in `ls -h` style (`556`, `5.4K`, `41K`, `1.2M`).
   Each unit has its own color: bytes dim, kilobytes plain, megabytes cyan, gigabytes yellow, and larger magenta.
   Directories have no size.
+- The file manager's bottom row summarizes the directory: `3 directories, 12 files, 4.5 MiB`.
+  The total size of the files is shown once every file's size is known without extra work:
+  always on Windows, and on other systems once every file has been on screen.
 - Completion definitions can return a dictionary instead of a list, to choose what Tab offers:
   `values`, files matching glob patterns (`files`), preferred files with a fallback to the rest (`preferredFiles`), directories only (`dirs`), or executables on the path (`binaries`).
 - `\{` and `\}` escapes in double quoted strings and format strings, for literal braces.
+- Abbreviations, set in `init.msh`, expand a word as it is typed in the interactive shell: `{abbr: 's' abbrWord, expansion: 'git status -u' abbrText} abbrAdd`.
+  Space, Enter and `| ; < > ] )` expand the word at the cursor; Ctrl-Space inserts a space without expanding.
+  An abbreviation can match a word or a regular expression, expand in command position, anywhere, or as an argument of given commands,
+  compute its text with a quotation, and place the cursor at a marker.
+  Words in strings, paths and comments never expand.
+- Functions for abbreviations
+  - `abbrAdd`, `abbrErase`, `abbrRename` and `abbrList` manage them.
+- Runes: the type `rune` is one Unicode code point, written `r'a'`, or by number as `U+001B`.
+  A rune is never a string. `r'abc'` is an error that says single-quoted strings are already raw.
+  `=` compares runes, `<` and the other comparisons order them by code point, and `str`, `wl` and `w` give the character.
+  `rune` is a match pattern, and rune literals are value patterns.
+- Functions for runes
+  - `runes` splits a string into its runes.
+  - `toRune` makes a rune from a code point or a one-character string, giving `none` otherwise.
+  - `toInt` gives a rune's code point.
+- Key bindings: every key of the interactive shell is a binding, which `init.msh` can add, replace or remove:
+  `{keys: [r'x' keyCtrl r'e' keyCtrl], action: [(editInEditor) editRunOps] bindingOps} bindingAdd`.
+  Keys are typed values (a rune, a named key such as `keyF5`, or either with `keyCtrl`, `keyAlt`, `keyShift`, `keySuper`), so a misspelled key is a type error.
+  A binding runs a list of editor operations (`editAccept`, `editClearScreen`, `editRun`, ...), or a quotation that returns them from the line.
+  A key that starts a longer sequence still types at once, and is taken back if the sequence completes; optional `within` and `idleBefore` times keep a sequence of letters from firing while you type.
+  `editRun` runs a quotation with the terminal, such as a file manager, and keeps the line.
+- Ctrl-G edits the line in `$EDITOR`.
+- The interactive shell uses the kitty keyboard protocol in terminals that have it, so Escape, Ctrl-I and Tab, and Ctrl-Shift chords are distinct keys.
+  Set `MSH_KITTY_KEYS=0` to turn it off.
+- `msh keys` shows each key pressed as a binding writes it, with the bytes the terminal sent.
+- File manager key bindings: every key of the file manager is a binding, which `init.msh` can add, replace or remove:
+  `{keys: [r'g' r'h'], action: [~ fmCd] fmOps, description: 'home'} fmBindingAdd`.
+  A binding runs a list of file manager operations (`fmCd`, `fmToggle`, `fmRun`, ...) and the shell's line edits, or a quotation that returns them from the file manager's state.
+  A binding can open a prompt of its own and run a quotation with what was typed (`fmPromptAsk`), and run a command and keep its output on screen until a key is pressed (`fmRunWait`).
+  The box that lists the keys that can follow `y` or `g` shows your bindings too, with their descriptions.
+- The file manager:
+  - `?` shows a help screen with every binding, and every binding that never fires with the reason.
+  - Space selects entries, `v` inverts the selection and `u` clears it; cut, copy, trash, the yanks and `e` act on every selected entry, across directories.
+  - `Q` quits without changing directory.
+  - Home, End, Page Up and Page Down move the cursor.
+  - Search and rename share one line editor with the shell's keys: search has a cursor, and both have Delete, Ctrl-B, Ctrl-F, Alt-B, Alt-F, and Ctrl-C to cancel.
+- Functions for key bindings
+  - `bindingAdd`, `bindingErase` and `bindingList` manage them.
+  - `fmBindingAdd`, `fmBindingErase` and `fmBindingList` manage the file manager's.
+  - `editInEditor` edits the line in `$EDITOR`, for `editRunOps`.
+- List and dict patterns in `match` and `=>` can test literal values and nest.
+  A position, or a dict value, can be a quoted string, number, bool, path, rune, `none`, `null`,
+  an enum member without payload values, or another list or dict pattern:
+  `['cp' from to]`, `[...rest '--help']`, `[["num" a] ["op" "+"] ["num" b]]`, `{ 'cmd': 'move', 'to': [x y] }`.
 
 ### Changed
 
+- When `msh edit init` or `msh bin edit` cannot open the file, the error names the file and says what was tried and why each attempt failed:
+  `EDITOR` not set, not found, not executable, or exited with an error, and the default opener (`xdg-open`, `open`, or PowerShell) missing, timing out, or failing, with its output.
+  An editor that starts and then fails is reported, instead of also running the default opener.
+- Tab completion matches a word anywhere in a candidate when nothing starts with it, so `ctl` finds `systemctl`.
+  Lowercase words ignore case everywhere, and a word with an uppercase letter prefers candidates with the same case.
+  Only the best kind of match is offered, and a word starting with `-` still only matches from the start.
+- In a list or dict pattern, `none`, `null`, and enum members without payload values now test the element instead of binding a name with that spelling.
+  A bare word starting with `-` is an error; quote it to match the string (`'-h'`).
+- `httpGet`, `httpPost`, `toDt`, `fileSize`, `modTime`, `evalSymLinks` and `linkCount` give a `Result[T str]` instead of a `Maybe[T]`.
+  An `err` says why there is no value, such as the connection error, the reason a date did not parse, or `stat foo: permission denied`,
+  and `?` fails with that message.
+  An `httpGet` or `httpPost` response body that cannot be read is now an `err` instead of stopping the script.
+- The interactive shell has no built-in aliases; add abbreviations to `init.msh` instead.
+- The interactive shell's personal key sequences are gone: `jf`, `vl`, `qq`, `;r`, `;j`, F1 and Alt-D.
+  Letters typed in those pairs now appear at once, and `vlc` and `qq` can be typed. Add any you want back to `init.msh` with `bindingAdd`.
+- Modifiers on Home, End, the arrows and Delete, and Alt with any key, are now read as keys that can be bound, instead of being dropped.
+- A lone Escape is a key in the old terminal encoding, and acts when it is pressed.
+  Escape and a key arrive together only as Alt and the key; Escape and then a key, typed one after the other, is no longer Alt and that key.
+- `msh fm` loads the standard library and `init.msh`, as a script does, so bindings and definitions work there.
+  Programs the file manager runs, such as `$EDITOR`, write to the terminal, not to the standard output of `msh fm`.
+- A paste in the file manager no longer runs as keys: it goes into the prompt line, and elsewhere it is refused with a message.
+- The interactive shell writes a debug log only when started with `--debug`.
+  The log is `mshell.log` in the history directory, readable only by you, instead of `/tmp/mshell.log`.
+  Without `--debug`, no log file is opened, so a key press no longer waits on an fsync,
+  and the shell no longer fails to start when the log file cannot be opened.
 - Every script is type-checked before it runs, and runs only if it checks: a file, `-c` code, or code read from standard input.
   There is no way to run a script unchecked; `--check-types` is still accepted and changes nothing.
   `--type-check-only` checks and exits, as before.
@@ -100,6 +201,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Startup is faster on Linux and macOS: `msh` no longer reads every directory on `PATH` when it starts.
   A command's path is looked up when it first runs, and the full list is read only for completion and `binPaths`.
   A one-line script went from about 25 ms to 7 ms on a machine with 6,000 files on `PATH`.
+- `toCsv` also takes a `Grid` or `GridView`, writing a header row of the column names and then one line per row.
+  `none` is an empty cell, `just v` is written as `v`, and any other value is written in its `str` form.
+  `toCsv` is now a built-in, and is about 25 times faster on a list of rows.
 - Format string interpolations can hold any code: string literals, dictionaries, and nested format strings all work inside `{...}`.
   Interpolations are parsed once when the script is read, not each time the string is built,
   and errors inside them point at the right line and column.
@@ -144,6 +248,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tab quotes an argument that would mean something else typed bare:
+  `2.0` (the number 2), `@preview/x` (a variable), `<intro>` (a redirect), `true`, or the name of a built-in or definition.
+  A file name is put in backticks, a completion definition's value in single quotes.
+- `msh completions fish` completes a script file as the first word, offers `--type-check-only` and `fm`, completes directories after `fm` and bin names after `bin remove` and `bin debug`,
+  and no longer repeats subcommands or offers files where they don't belong.
+  The bash, nushell and elvish completions also offer `--type-check-only` and `fm`.
+- The file manager's rename and search lines take any character, such as `é`, Delete in the rename line deletes instead of typing `~`, and Up or Down no longer closes the search line.
+- Binary data works with `len` and `+`, and takes negative indexes and slices (`-16:`) as strings do.
 - Pressing TAB to complete a command's arguments no longer changes the interactive shell's variables: completion definitions run in a scope of their own.
 - Running or type checking a startup file itself (the init file, or the standard library through `MSHSTDLIB`) no longer also loads it as a startup file first, which defined everything in it twice.
 
@@ -185,9 +297,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A single valid reading is accepted, so `12/16/25` and `16/06/2025` now parse
   (`12/16/25` previously became `2013-04-25`). When several readings are valid, like
   `01/02/2026`, the order learned from the most recent unambiguous non-ISO date in the same
-  evaluation is used. With no such evidence the result is `none`, where it previously
+  evaluation is used. With no such evidence the result is an `err`, where it previously
   assumed US month/day/year. Dates with a leading four digit year are unaffected.
-- `toDt` now returns `none` for out of range components such as month 13, Feb 30, or hour 25,
+- `toDt` now returns an `err` for out of range components such as month 13, Feb 30, or hour 25,
   instead of silently rolling them over into the next month or day.
 - `return` inside an `if` or `match` now leaves the whole definition when the definition was called from a quotation run by a function like `map` or `each`.
   It used to leave only the `if` or `match`, and the rest of the definition kept running.

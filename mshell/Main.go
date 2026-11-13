@@ -602,6 +602,11 @@ func main() {
 		return
 	}
 
+	if len(os.Args) >= 2 && os.Args[1] == "keys" {
+		os.Exit(runKeysCommand(os.Args[2:]))
+		return
+	}
+
 	if len(os.Args) >= 2 && os.Args[1] == "fm" {
 		startDir := ""
 		if len(os.Args) >= 3 {
@@ -628,6 +633,9 @@ func main() {
 	// 26). --check-types is accepted and changes nothing.
 	typeCheckOnly := false
 	inputFromStdin := false
+	// --debug opens the interactive debug log. It is for development, so
+	// it is left out of --help and the completions.
+	debugLog := false
 
 	if len(os.Args) == 1 {
 		// Enter interactive mode
@@ -659,6 +667,7 @@ func main() {
 			fmt.Println("Usage: msh completions <shell>")
 			fmt.Println("Usage: msh lsp")
 			fmt.Println("Usage: msh fm")
+			fmt.Println("Usage: msh keys")
 			fmt.Println("")
 			fmt.Println("Options:")
 			fmt.Println("  --html       Render the input as HTML")
@@ -674,11 +683,14 @@ func main() {
 			fmt.Println("  edit         Edit common msh files")
 			fmt.Println("  completions  Print shell completion script")
 			fmt.Println("  fm           Open the built-in file manager")
+			fmt.Println("  keys         Show each key pressed as a key binding writes it")
 			os.Exit(0)
 			return
 		} else if arg == "--version" {
 			fmt.Fprintln(os.Stdout, mshellVersion)
 			os.Exit(0)
+		} else if arg == "--debug" {
+			debugLog = true
 		} else if arg == "--check-terminal" {
 			os.Exit(runTerminalCheck())
 		} else if arg == "-c" {
@@ -751,38 +763,11 @@ func main() {
 			os.Exit(1)
 		}
 
-		// For debugging, write number of bytes read and bytes to /tmp/mshell.log
-		// If on Windows
 		var f *os.File
-		if runtime.GOOS == "windows" {
-			local_app_data, ok := os.LookupEnv("LOCALAPPDATA")
-			if !ok {
-				fmt.Fprintf(os.Stderr, "Error getting LOCALAPPDATA environment variable\n")
-				os.Exit(1)
-				return
-			}
-
-			// Make dir LOCALAPPDATA/msh if it doesn't exist
-			err = os.MkdirAll(local_app_data+"/msh", 0755)
+		if debugLog {
+			f, err = openDebugLog()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error creating directory %s/msh: %s\n", local_app_data, err)
-				os.Exit(1)
-				return
-			}
-
-			// Open file for writing
-			f, err = os.OpenFile(local_app_data+"/msh/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error opening file %s/msh/mshell.log: %s\n", local_app_data, err)
-				os.Exit(1)
-				return
-			}
-			defer f.Close()
-		} else {
-			// Open file for writing
-			f, err = os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+				fmt.Fprintf(os.Stderr, "Error opening debug log: %s\n", err)
 				os.Exit(1)
 				return
 			}
@@ -1070,6 +1055,20 @@ type TermState struct {
 	promptStyles   []promptStyle // Escape sequences within promptText.
 	// promptProblem is the last error the prompt quote gave, printed once.
 	promptProblem string
+	// abbrProblem is the last error an abbreviation's quote gave, and
+	// abbrMessage the one shown below the command line until the next key
+	// (Abbr.go).
+	abbrProblem string
+	abbrMessage string
+	// keys is what the key resolver keeps between keys, and abbrCursor
+	// where an abbreviation the running program expanded put its cursor
+	// marker (Bindings.go).
+	keys       keyResolver[editSnapshot, editMode, *bindingEntry]
+	abbrCursor abbrExpansion
+	// lineArena holds the command line's strings, and lineTokens its
+	// tokens, lexed once per edit (CommandBuffers.go).
+	lineArena  lineArena
+	lineTokens lineTokens
 	// What the prompt quote is told about the last line that was not empty
 	// (Prompt.go): whether it ran without an error, the exit code of the
 	// last process it ran, and how long it took.
@@ -1093,11 +1092,15 @@ type TermState struct {
 	l              *Lexer
 	p              *MShellParser
 	historyIndex   int
-	f              *os.File // This is log file.
+	f              *os.File // The debug log, nil unless --debug was given.
 	logInstanceID  string
 	// tokenChan chan TerminalToken
 	stdInState *StdinReaderState
 	bracketedPasteEnabled bool
+	// kittyKeys is whether the terminal has the kitty keyboard protocol,
+	// and kittyKeysPushed whether its flags are pushed now (TerminalMode.go).
+	kittyKeys       bool
+	kittyKeysPushed bool
 
 	previousHistory []HistoryItem // Previous history items loaded from file
 
@@ -1118,6 +1121,11 @@ type TermState struct {
 	tabCycleTokenType  TokenType
 	tabCycleAllFiles   bool
 	tabCycleMatches    []string
+	// tabCycleQuoteWords[i] is quotesWords for tabCycleMatches[i].
+	tabCycleQuoteWords []bool
+	// insertTokens is reused by buildCompletionInsert and
+	// buildSharedCompletionInsert to lex a match without allocating.
+	insertTokens []Token
 	lastArgCycleActive bool
 	lastArgCycleIndex  int
 	lastArgCycleStart  ByteOffset
@@ -1722,6 +1730,18 @@ func newLogInstanceID() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
+// openDebugLog opens the debug log for appending, next to the history
+// files, private to the current user.
+func openDebugLog() (*os.File, error) {
+	dir, err := GetHistoryDir()
+	if err != nil {
+		return nil, err
+	}
+	return openHistoryFile(filepath.Join(dir, "mshell.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY)
+}
+
+// Logf writes to the debug log. Without --debug it returns at once, so
+// keep calls off the per-key path.
 func (state *TermState) Logf(format string, args ...interface{}) {
 	if state == nil || state.f == nil {
 		return
@@ -1760,6 +1780,7 @@ func (state *TermState) resetTabCycle() {
 	if state.tabCycleMatches != nil {
 		state.tabCycleMatches = state.tabCycleMatches[:0]
 	}
+	state.tabCycleQuoteWords = state.tabCycleQuoteWords[:0]
 }
 
 func (state *TermState) resetLastArgCycle() {
@@ -1772,7 +1793,7 @@ func (state *TermState) resetLastArgCycle() {
 
 func isAltDotWordToken(tokenType TokenType) bool {
 	switch tokenType {
-	case LITERAL, STRING, SINGLEQUOTESTRING, PATH, INTEGER, FLOAT, DATETIME, FORMATSTRING, TRUE, FALSE:
+	case LITERAL, STRING, SINGLEQUOTESTRING, PATH, INTEGER, FLOAT, DATETIME, RUNE, FORMATSTRING, TRUE, FALSE:
 		return true
 	case VARRETRIEVE, VARSTORE, ENVRETREIVE, ENVSTORE, ENVCHECK, POSITIONAL, TILDEEXPANSION:
 		return true
@@ -2068,35 +2089,6 @@ func completionDisplayedCount(layout completionLayout, rows int) int {
 }
 
 // TODO: Why is this necessary.
-func (state *TermState) isTabToken(token TerminalToken) bool {
-	if t, ok := token.(AsciiToken); ok && t.Char == 9 {
-		return true
-	}
-	if t, ok := token.(SpecialKey); ok && t == KEY_SHIFT_TAB {
-		return true
-	}
-	return false
-}
-
-func (state *TermState) isTabCycleNav(token TerminalToken) bool {
-	if state.isTabToken(token) {
-		return true
-	}
-	if t, ok := token.(SpecialKey); ok {
-		if t == KEY_UP || t == KEY_DOWN || t == KEY_LEFT || t == KEY_RIGHT {
-			return true
-		}
-	}
-	if t, ok := token.(AsciiToken); ok {
-		// Tab cycle nav keys: Ctrl-N (14), Ctrl-P (16), Enter (13)
-		// Enter is included so we can accept completion without executing
-		if t.Char == 14 || t.Char == 16 || t.Char == 13 {
-			return true
-		}
-	}
-	return false
-}
-
 func (state *TermState) setTabCompletions(matches []string) {
 	if state.currentTabComplete == 0 {
 		state.tabCompletions0 = append(state.tabCompletions0, matches...)
@@ -2126,12 +2118,50 @@ func escapeFormatStringText(text string) string {
 
 var formatStringTextEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `{`, `\{`, `}`, `\}`)
 
-func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, preferPathQuote bool) string {
+// quotesWords reports whether a match of this kind is an argument, which
+// is quoted when typing it bare would mean something else: `2.0` is read
+// as the number 2, `@x` as a variable, and `sort` runs the builtin. A
+// binary, builtin or definition name is left as it is.
+func quotesWords(kind TabMatchType) bool {
+	return kind == TABMATCHVALUE || kind == TABMATCHFILE
+}
+
+// wordReadsAsText reports whether tok, the only token of text, is read as
+// the string text in a command list: a plain word that is not a builtin,
+// a definition or an enum member, or an integer written the way it prints.
+func (state *TermState) wordReadsAsText(tok Token, text string) bool {
+	switch tok.Type {
+	case LITERAL:
+		if tok.Lexeme != text {
+			return false
+		}
+		if _, ok := BuiltInList[text]; ok {
+			return false
+		}
+		if _, ok := state.evalState.EnumMembers[text]; ok {
+			return false
+		}
+		return !IsDefinitionDefined(text, state.stdLibDefs)
+	case INTEGER:
+		n, err := parseIntLiteral(text)
+		return err == nil && strconv.Itoa(n) == text
+	}
+	return false
+}
+
+// buildCompletionInsert gives the text that replaces the typed prefix with
+// match. quoteWords is quotesWords for the match's kind.
+func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, preferPathQuote bool, quoteWords bool) string {
 	switch tokenType {
 	case UNFINISHEDFORMATSTRING:
 		// Replaces only the text after the opener; see completionTokenPrefix.
 		return escapeFormatStringText(match)
 	case UNFINISHEDSINGLEQUOTESTRING:
+		// A value is a whole argument, so its string is closed. A file
+		// name stays open, since it may be a directory to go on into.
+		if quoteWords && !preferPathQuote {
+			return "'" + match + "'"
+		}
 		return "'" + match
 	case UNFINISHEDPATH:
 		insertString := "`" + match
@@ -2141,9 +2171,13 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType,
 		return insertString
 	default:
 		state.l.resetInput(match)
-		tokens, err := state.l.Tokenize()
-		if len(tokens) > 2 && err == nil {
-			// Quote when the completion needs multiple tokens to parse.
+		tokens, err := state.l.TokenizeInto(state.insertTokens)
+		state.insertTokens = tokens
+		// Quote when the completion needs multiple tokens to parse, or when
+		// its one token would not be read as its own text.
+		needsQuote := err == nil && (len(tokens) > 2 ||
+			(quoteWords && len(tokens) == 2 && !state.wordReadsAsText(tokens[0], match)))
+		if needsQuote {
 			if preferPathQuote {
 				insertString := "`" + match
 				if !strings.HasSuffix(match, string(os.PathSeparator)) {
@@ -2157,7 +2191,10 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType,
 	}
 }
 
-func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, allFileMatches bool) string {
+// buildSharedCompletionInsert gives the text that replaces the typed prefix
+// with the start every match shares. quoteWords is true when every match
+// is quoted as an argument (quotesWords).
+func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, allFileMatches bool, quoteWords bool) string {
 	switch tokenType {
 	case UNFINISHEDFORMATSTRING:
 		return escapeFormatStringText(longestCommonPrefix)
@@ -2168,8 +2205,20 @@ func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, 
 	default:
 		needsQuoteForWhitespace := strings.ContainsAny(longestCommonPrefix, " \t\r\n")
 		state.l.resetInput(longestCommonPrefix)
-		tokens, err := state.l.Tokenize()
-		if (len(tokens) > 2 && err == nil) || needsQuoteForWhitespace {
+		tokens, err := state.l.TokenizeInto(state.insertTokens)
+		state.insertTokens = tokens
+		needsQuote := (len(tokens) > 2 && err == nil) || needsQuoteForWhitespace
+		if !needsQuote && quoteWords && err == nil && len(tokens) == 2 {
+			switch tokens[0].Type {
+			case LITERAL, MINUS, DOUBLEDASH, INTEGER, FLOAT:
+				// The start of a word, an option or a number: what it
+				// reads as is decided once the whole match is in.
+			default:
+				// `@preview/` or `<`: no match can be typed bare.
+				needsQuote = true
+			}
+		}
+		if needsQuote {
 			// Add only the opening quote while user keeps typing to disambiguate.
 			if allFileMatches {
 				return "`" + longestCommonPrefix
@@ -2178,6 +2227,11 @@ func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, 
 		}
 		return longestCommonPrefix
 	}
+}
+
+// tabCycleQuotesWords is quotesWords for the cycled match i.
+func (state *TermState) tabCycleQuotesWords(i int) bool {
+	return i < len(state.tabCycleQuoteWords) && state.tabCycleQuoteWords[i]
 }
 
 func (state *TermState) cycleTabCompletion(direction int) {
@@ -2190,7 +2244,7 @@ func (state *TermState) cycleTabCompletion(direction int) {
 	} else if state.tabCycleIndex < 0 {
 		state.tabCycleIndex = len(state.tabCycleMatches) - 1
 	}
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles, state.tabCycleQuotesWords(state.tabCycleIndex))
 	state.currentCommand = state.tabCycleSource
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.setTabCompletions(state.tabCycleMatches)
@@ -2207,7 +2261,7 @@ func (state *TermState) selectTabCompletion(index int) {
 		index = len(state.tabCycleMatches) - 1
 	}
 	state.tabCycleIndex = index
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles, state.tabCycleQuotesWords(state.tabCycleIndex))
 	state.currentCommand = state.tabCycleSource
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.setTabCompletions(state.tabCycleMatches)
@@ -2712,7 +2766,6 @@ func (state *TermState) ClearScreen() {
 	// state.promptRow = state.numPromptLines
 }
 
-var aliases map[string]string
 var history []string
 
 var historyToSave []HistoryItem
@@ -2736,7 +2789,7 @@ func (state *TermState) replaceText(newText string, replaceStart ByteOffset, rep
 		replaceStart = graphemeFloor(state.currentCommand, replaceStart)
 		replaceEnd = graphemeCeil(state.currentCommand, replaceEnd)
 	}
-	state.currentCommand = state.currentCommand[:replaceStart] + SourceText(newText) + state.currentCommand[replaceEnd:]
+	state.currentCommand = SourceText(state.lineArena.concat(string(state.currentCommand[:replaceStart]), newText, string(state.currentCommand[replaceEnd:])))
 	state.index = graphemeCeil(state.currentCommand, replaceStart + ByteOffset(len(newText)))
 	state.resetHistorySearch()
 }
@@ -3003,45 +3056,57 @@ type StdinReaderState struct {
 	array []byte
 	i     int
 	n     int
+	// record, when not nil, gets every byte read (msh keys).
+	record *[]byte
+	// read, when not nil, fills the buffer in place of standard input.
+	read func([]byte) (int, error)
 }
 
 // UnreadByte pushes back the byte most recently returned by ReadByte so the
 // next ReadByte returns it again. Every returned byte came from the buffer,
 // so one step back is always valid; calling this twice in a row is not.
-func (state *StdinReaderState) UnreadByte() {
-	if state.i > 0 {
-		state.i--
+// It has the io.ByteScanner signature; the error is returned only when
+// nothing has been read from the buffer.
+func (state *StdinReaderState) UnreadByte() error {
+	if state.i == 0 {
+		return errors.New("UnreadByte: no byte to unread")
 	}
+	state.i--
+	if state.record != nil && len(*state.record) > 0 {
+		*state.record = (*state.record)[:len(*state.record)-1]
+	}
+	return nil
 }
 
 func (state *StdinReaderState) ReadByte() (byte, error) {
 	if state.i >= state.n {
-		// Do fresh read
-		// fmt.Fprintf(f, "Reading from stdin...\n")
-		// fmt.Fprintf(f, "%s", debug.Stack())
-		if err := processShellInputGate.beginRead(); err != nil {
-			return 0, err
+		var n int
+		var err error
+		if state.read != nil {
+			n, err = state.read(state.array)
+		} else {
+			if err := processShellInputGate.beginRead(); err != nil {
+				return 0, err
+			}
+			n, err = os.Stdin.Read(state.array)
+			processShellInputGate.endRead()
 		}
-		n, err := os.Stdin.Read(state.array)
-		processShellInputGate.endRead()
-		// fmt.Fprintf(f, "Read %d from stdin...\n", n)
-
+		if err == nil && n == 0 {
+			err = io.EOF
+		}
 		if err != nil {
 			return 0, err
 		}
 
 		state.n = n
 		state.i = 0
-
-		b := state.array[state.i]
-		state.i++
-		return b, nil
-	} else {
-		// fmt.Fprintf(f, "Reading from buffer at %d..\n", state.i)
-		b := state.array[state.i]
-		state.i++
-		return b, nil
 	}
+	b := state.array[state.i]
+	state.i++
+	if state.record != nil {
+		*state.record = append(*state.record, b)
+	}
+	return b, nil
 }
 
 func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
@@ -3171,6 +3236,11 @@ func readBracketedPaste(reader *StdinReaderState) (TerminalToken, error) {
 	}
 }
 
+// maxCsiParamBytes bounds the parameters of a CSI sequence the lexer
+// reads before it gives up on the sequence. Keys and terminal replies are
+// far shorter.
+const maxCsiParamBytes = 256
+
 // maxControlStringBytes bounds how much of an unterminated control string
 // the lexer will swallow before giving up, so a stray ESC ] in pasted text
 // cannot eat every following keystroke.
@@ -3250,7 +3320,12 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 			// If the character is a printable ASCII character, send it to the channel.
 			return AsciiToken{Char: c}, nil
 		} else if c == 27 { // ESC
-			// c = <-inputChan
+			// An ESC that ends what one read returned is Escape: a key's
+			// bytes arrive in one read. A read that filled the buffer has
+			// more bytes waiting (ai/fm-bindings.typ, section 10.2).
+			if stdinReaderState.i >= stdinReaderState.n && stdinReaderState.n < len(stdinReaderState.array) {
+				return KeyToken{Code: NamedEscape}, nil
+			}
 			c, err = stdinReaderState.ReadByte()
 			if err != nil {
 				if err == io.EOF {
@@ -3342,6 +3417,8 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						return KEY_HOME, nil
 					} else if c == 90 {
 						return KEY_SHIFT_TAB, nil
+					} else if c == 'P' || c == 'Q' || c == 'S' { // F1, F2, F4 (kitty)
+						return KeyToken{Code: letterKeys[c]}, nil
 					} else {
 						// Unknown escape sequence
 						state.Logf("Unknown escape sequence: ESC [ %d\n", c)
@@ -3372,12 +3449,19 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 								return KEY_CTRL_DELETE, nil
 							} else if c == '~' && params == "3" {
 								return KEY_DELETE, nil
-							} else if key, ok := homeEndKey(c, params); ok {
+							} else if key, ok := homeEndKey(c, params); ok && !strings.Contains(params, ";") {
 								return key, nil
+							} else if key, ok := decodeCsiKey(c, params); ok {
+								return KeyToken{Code: key}, nil
 							} else {
 								// fmt.Fprintf(f, "Sent CSI token: %d %d\n", c, byteArray)
 								return CsiToken{FinalChar: c, Params: byteArray}, nil
 							}
+						}
+						if len(byteArray) >= maxCsiParamBytes {
+							// No key or reply is this long: stop waiting for
+							// its end.
+							return UnknownToken{}, nil
 						}
 						byteArray = append(byteArray, c)
 					}
@@ -3395,29 +3479,19 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					return nil, fmt.Errorf("Error reading from stdin: %w", err)
 				}
 				return UnknownToken{}, nil
-			} else if c == 98 { // Alt-B
-				// Move cursor left by word
-				return KEY_ALT_B, nil
-			} else if c == 100 { // Alt-D
-				return KEY_ALT_D, nil
-			} else if c == 102 { // Alt-F
-				// Move cursor right by word
-				return KEY_ALT_F, nil
-			} else if c == 111 { // Alt-O
-				return KEY_ALT_O, nil
-			} else if c == 'R' { // Alt-Shift-R
-				return KEY_ALT_SHIFT_R, nil
-			} else if c == 46 { // Alt-.
-				return KEY_ALT_DOT, nil
-				// Quit
 			} else {
-				// A lone Escape: the next byte is not a CSI, SS3, or bound Alt
-				// chord, so it is an ordinary key typed after Esc. Push it back
-				// and lex it on its own rather than swallowing it. Escape itself
-				// has no binding, so nothing is returned for it.
-				state.Logf("Ignoring lone ESC before byte %d\n", c)
+				// ESC and a key in one read: Alt and the key, as the legacy
+				// encoding sends it. When Alt and the key has no binding, it
+				// is Escape and then the key (HandleToken).
 				stdinReaderState.UnreadByte()
-				continue
+				inner, err := state.InteractiveLexer(stdinReaderState)
+				if err != nil {
+					return nil, err
+				}
+				if k, ok := keyOfToken(inner); ok {
+					return KeyToken{Code: altKey(k), EscOf: k}, nil
+				}
+				return inner, nil
 			}
 		} else if c >= 192 && c <= 223 { // 192-223 are the first byte of a 2-byte UTF-8 character{
 			// Read the next byte
@@ -3432,7 +3506,6 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 			}
 
 			if b2 >= 128 && b2 <= 191 { // 128-191 are the second byte of a 2-byte UTF-8 character
-				state.Logf("Got 2-byte UTF-8 character: %d %d\n", c, b2)
 				// Return the 2-byte UTF-8 character as a single token
 				// Convert to rune
 				r := rune((int32(b2) & 0x3F) | ((int32(c) & 0x1F) << 6))
@@ -3460,7 +3533,6 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				}
 
 				if b3 >= 128 && b3 <= 191 { // 128-191 are the third byte of a 3-byte UTF-8 character
-					state.Logf("Got 3-byte UTF-8 character: %d %d %d (%x %x %x)\n", c, b2, b3, c, b2, b3)
 					// Return the 3-byte UTF-8 character as a single token
 					// Convert to rune
 					r := rune((int32(c&0x0F) << 12) | (int32(b2&0x3F) << 6) | int32(b3&0x3F))
@@ -3503,7 +3575,6 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					}
 
 					if b4 >= 128 && b4 <= 191 { // 128-191 are the fourth byte of a 4-byte UTF-8 character
-						state.Logf("Got 4-byte UTF-8 character: %d %d %d %d\n", c, b2, b3, b4)
 						// Return the 4-byte UTF-8 character as a single token
 						// Convert to rune
 						r := rune((int32(c&0x07) << 18) | (int32(b2&0x3F) << 12) | (int32(b3&0x3F) << 6) | int32(b4&0x3F))
@@ -3538,23 +3609,22 @@ func (state *TermState) InteractiveMode() error {
 
 	state.stdInState = stdInState
 
-	// TODO: Read from file? Something like a snippet engine?
-	aliases = map[string]string{
-		"s":  "git status -u",
-		"v":  "nvim",
-		"mk": "mkdir",
-		"ls": "eza -l",
-		"gi": "nvim .gitignore",
-		"a":  "git add",
-		"d":  "git diff -w",
-		"dc": "git diff -w --cached",
-		"c":  "git commit",
-		"p":  "git push",
-		"u":  "'..' cd",
-		"gu": "[git add -u]? ([git status -u];) iff",
-		"ga": "[git add -A]? ([git status -u];) iff",
-		"fp": "git fetch --prune",
-	}
+	// The abbreviations that were built in, until they move to init.msh
+	// (abbrAdd, ai/abbr.typ):
+	// "s":  "git status -u",
+	// "v":  "nvim",
+	// "mk": "mkdir",
+	// "ls": "eza -l",
+	// "gi": "nvim .gitignore",
+	// "a":  "git add",
+	// "d":  "git diff -w",
+	// "dc": "git diff -w --cached",
+	// "c":  "git commit",
+	// "p":  "git push",
+	// "u":  "'..' cd",
+	// "gu": "[git add -u]? ([git status -u];) iff",
+	// "ga": "[git add -A]? ([git status -u];) iff",
+	// "fp": "git fetch --prune",
 
 	// Save the cooked state once, then apply the explicit raw definition.
 	if err := state.saveTerminalState(); err != nil {
@@ -3569,6 +3639,11 @@ func (state *TermState) InteractiveMode() error {
 
 	state.l = NewLexer("", &TokenFile{"REPL"})
 	state.p = &MShellParser{lexer: state.l}
+
+	state.detectKittyKeys()
+	if err := state.setKittyKeys(true); err != nil {
+		return fmt.Errorf("Error enabling the kitty keyboard protocol: %s", err)
+	}
 
 	stdLibDefs, err := stdLibDefinitions(&state.stack, state.context, &state.evalState)
 	if err != nil {
@@ -3596,6 +3671,13 @@ func (state *TermState) InteractiveMode() error {
 				fmt.Fprintln(os.Stderr, terminalSafeText(e, true))
 			}
 		}
+		if err := state.enterRawMode(); err != nil {
+			return err
+		}
+	}
+	if len(state.evalState.AbbrWarnings) > 0 {
+		state.leaveRawMode()
+		state.evalState.printAbbrWarnings()
 		if err := state.enterRawMode(); err != nil {
 			return err
 		}
@@ -3650,9 +3732,6 @@ func (state *TermState) InteractiveMode() error {
 			state.tabCompletions1 = state.tabCompletions1[:0]
 		}
 
-		// state.Logf("Waiting for token...\n")
-		state.f.Sync()
-
 		token, err = state.readInputToken()
 
 		if err != nil {
@@ -3666,6 +3745,8 @@ func (state *TermState) InteractiveMode() error {
 		}
 
 
+		// A message about an abbreviation's quote lasts until the next key.
+		state.abbrMessage = ""
 		end, err = state.HandleToken(token)
 		if err != nil {
 			return err
@@ -3848,33 +3929,9 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	state.tabCompletions0 = state.tabCompletions0[:0]
 	state.tabCompletions1 = state.tabCompletions1[:0]
 
-	// Add command to history
-	currentCommandStr := string(state.currentCommand)
-
-	if state.index == state.commandEnd() {
-		// Walk back to last whitespace, check if final element is an alias.
-		i := state.index
-		for {
-			if i == 0 || state.currentCommand[i-1] == ' ' || state.currentCommand[i-1] == '[' {
-				break
-			}
-			i--
-		}
-
-		lastWord := string(state.currentCommand[i:state.index])
-		alias, aliasSet := aliases[lastWord]
-		if aliasSet {
-			state.replaceText(alias, i, state.index)
-			currentCommandStr = string(state.currentCommand)
-		}
-
-		// // Update the UI.
-		// state.clearToPrompt()
-		// fmt.Fprintf(os.Stdout, "%s", currentCommandStr)
-		// state.currentCommand = SourceText(currentCommandStr)
-		// // Move cursor to end
-		// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.legacyCursorColumn()+1)
-	}
+	// Add command to history. History and the evaluator keep the line, so
+	// it is copied out of the editor's arena.
+	currentCommandStr := strings.Clone(string(state.currentCommand))
 
 	// Park the cursor after the last byte so the final echo leaves the
 	// terminal cursor on the command's last painted row. The newline below
@@ -3883,7 +3940,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	// after it.
 	state.index = state.commandEnd()
 
-	// This render should handle stored tokens on aliases, cleared out history completion/tab completion.
+	// This render clears out history completion and tab completion.
 	if err := state.refreshInteractiveDisplay(false); err != nil {
 		state.Logf("Error painting submitted command: %s\n", err)
 	}
@@ -3916,6 +3973,11 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	state.leaveRawMode()
 	state.resetCursorShape()
 	fmt.Fprintln(os.Stdout)
+	// An abbreviation's quote that failed on Enter left the word as it was.
+	if state.abbrMessage != "" {
+		fmt.Fprint(os.Stderr, terminalSafeText(state.abbrMessage, true))
+		state.abbrMessage = ""
+	}
 
 	p := state.p
 	l := state.l
@@ -4040,6 +4102,7 @@ ParseError:
 		state.initCallStackItem.MShellParseItem = parsed.Items[0]
 		state.evalState.ReturnedAtTop = false
 		result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem)
+		state.evalState.printAbbrWarnings()
 
 		if result.ExitCalled {
 			return true, result.ExitCode
@@ -4389,520 +4452,234 @@ func WriteToHistory(command string, directory string, historyFilePath string) er
 	return nil
 }
 
-// Returns boolean on whether to end the CLI. Think CTRL-c/d or other exit command.
+// HandleToken handles one token from the terminal. A paste is inserted as
+// it is; a key goes to the key bindings (Bindings.go). It returns whether
+// the shell should end.
 func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
-	var err error
-
-	if !state.isTabCycleNav(token) {
+	if t, ok := token.(PasteToken); ok {
+		state.keys.event(time.Now())
 		state.resetTabCycle()
-	}
-	if sk, ok := token.(SpecialKey); ok && sk == KEY_ALT_DOT {
-	} else {
 		state.resetLastArgCycle()
-	}
-
-	switch t := token.(type) {
-	case PasteToken:
 		if t.Text != "" {
 			state.replaceText(t.Text, state.index, state.index)
 		}
-	case MutliByteToken:
-		state.PushChars([]rune{t.Char})
-	case AsciiToken:
-		// If the character is a printable ASCII character, handle it.
-		if t.Char > 32 && t.Char < 127 {
-			if t.Char == ';' {
-				// Check next token, if it's a 'r', open REPOs with lf
-				// TODO: Handle EOF token case
-				token, err = state.readInputToken()
-				if err != nil {
-					return false, err
-				}
+		return false, nil
+	}
+	code, ok := keyOfToken(token)
+	if !ok {
+		return false, nil
+	}
+	if t, ok := token.(KeyToken); ok && t.EscOf != 0 && !state.keyUsed(code) {
+		if end, err := state.resolveKey(NamedEscape, time.Now()); end || err != nil {
+			return end, err
+		}
+		code = t.EscOf
+	}
+	return state.resolveKey(code, time.Now())
+}
 
-				if t, ok := token.(AsciiToken); ok {
-					if t.Char == 'r' {
-						// Open REPOs with lf
-						// fmt.Fprintf(state.f, "Opening REPOs with lf...\n")
-						state.currentCommand = ""
-						state.index = 0
-						state.PushChars([]rune{'r'})
-						shouldExit, _ := state.ExecuteCurrentCommand()
-						return shouldExit, nil
-					} else if t.Char == 'j' {
-						state.currentCommand = ""
-						state.index = 0
-						state.PushChars([]rune{'j'})
-						shouldExit, _ := state.ExecuteCurrentCommand()
-						return shouldExit, nil
-					} else {
-						// Push both tokens
-						state.PushChars([]rune{';'})
-						state.HandleToken(token)
-					}
-				} else {
-					// Push just the semicolon
-					state.PushChars([]rune{';'})
-					return state.HandleToken(token)
-				}
-			} else if t.Char == 'j' {
-				token, err = state.readInputToken()
-				if err != nil {
-					return false, err
-				}
+// historyPrev puts the previous history entry on the line, skipping ones
+// equal to the line.
+func (state *TermState) historyPrev() {
+	for state.historyIndex >= 0 && state.historyIndex < len(history) {
+		state.historyIndex++
+		reverseIndex := len(history) - state.historyIndex
+		// Compare current command to history, if the same, skip and continue to search
+		if string(state.currentCommand) == string(history[reverseIndex]) {
+			continue
+		}
+		state.currentCommand = SourceText(history[reverseIndex])
+		state.index = state.commandEnd()
+		state.resetHistorySearch()
+		break
+	}
+}
 
-				if t, ok := token.(AsciiToken); ok {
-					if t.Char == 'f' {
-						return state.HandleToken(AsciiToken{Char: 13})
-					} else {
-						// Push both tokens
-						state.PushChars([]rune{'j'})
-						return state.HandleToken(token)
-					}
-				} else {
-					// Push just the semicolon
-					state.PushChars([]rune{'j'})
-					return state.HandleToken(token)
-				}
-			} else if t.Char == 'v' {
-				// Check if next token is 'l', then clear screen
-				token, err = state.readInputToken()
-				if err != nil {
-					return false, err
-				}
-
-				if t, ok := token.(AsciiToken); ok {
-					if t.Char == 'l' {
-						// Clear screen
-						state.ClearScreen()
-					} else {
-						// Push both tokens
-						state.PushChars([]rune{'v'})
-						return state.HandleToken(token)
-					}
-				} else {
-					// Push just the 'v'
-					state.PushChars([]rune{'v'})
-					return state.HandleToken(token)
-				}
-			} else if t.Char == 'q' {
-				// Check if next token is 'l', then clear screen
-				token, err = state.readInputToken()
-				if err != nil {
-					return false, err
-				}
-
-				if t, ok := token.(AsciiToken); ok {
-					if t.Char == 'q' {
-						state.currentCommand = ""
-						state.index = 0
-						state.PushChars([]rune("0 exit"))
-						shouldExit, _ := state.ExecuteCurrentCommand()
-						return shouldExit, nil
-					} else {
-						// Push both tokens
-						state.PushChars([]rune{'q'})
-						return state.HandleToken(token)
-					}
-				} else {
-					// Push just the 'q'
-					state.PushChars([]rune{'q'})
-					return state.HandleToken(token)
-				}
-			} else {
-				state.PushChars([]rune{rune(t.Char)})
-				// state.currentCommand = append(state.currentCommand, rune(t.Char))
-			}
-
-			// // Add chars to current command at current index
-			// // fmt.Fprintf(state.f, "AsciiToken: %d\n", t.Char)
-			// fmt.Fprintf(os.Stdout, "\033[K")
-			// fmt.Fprintf(os.Stdout, "%c", t.Char)
-			// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.legacyCursorColumn()+1)
-
-			// state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(t.Char)}, state.currentCommand[state.index:]...)...)
-			// state.index++
-		} else if t.Char == 0 { // Ctrl-Space
-			state.PushChars([]rune{' '})
-		} else if t.Char == 32 {
-			// Space
-			// Check for aliases. Split current command by whitespace, and check if last word is in aliases.
-			// If it is, replace last word with alias value.
-
-			i := state.index - 1
-			if len(state.currentCommand) > 0 {
-				for {
-					if i < 0 || state.currentCommand[i] == ' ' || state.currentCommand[i] == '[' {
-						break
-					}
-					i--
-				}
-			}
-
-			lastWord := string(state.currentCommand[i+1 : state.index])
-
-			aliasValue, aliasSet := aliases[lastWord]
-			if aliasSet {
-				state.replaceText(aliasValue + " ", i + 1, state.index)
-				state.Logf("Alias: %s -> %s\n", lastWord, aliasValue)
-			} else {
-				state.PushChars([]rune{rune(t.Char)})
-			}
-		} else if t.Char == 1 { // Ctrl-A
-			// Move cursor to beginning of line.
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-			state.index = 0
-		} else if t.Char == 2 { // CTRL-B
-			return state.HandleToken(KEY_LEFT)
-		} else if t.Char == 3 || t.Char == 4 {
-			// Ctrl-C or Ctrl-D
-			fmt.Fprintf(os.Stdout, "\r\n") // Print a nice clean newline.
-			return true, nil
-		} else if t.Char == 5 { // Ctrl-E
-			// Move cursor to end of line
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
-			state.index = state.commandEnd()
-		} else if t.Char == 6 { // Ctrl-F
-			if state.index == state.commandEnd() {
-				state.acceptHistoryCompletion()
-			} else if state.index < state.commandEnd() {
-				return state.HandleToken(KEY_RIGHT)
-			}
-		} else if t.Char == 14 { // Ctrl-N
-			if state.tabCycleActive {
-				state.cycleTabCompletion(1)
-			} else {
-				state.historySearch(1)
-			}
-		} else if t.Char == 16 { // Ctrl-P
-			if state.tabCycleActive {
-				state.cycleTabCompletion(-1)
-			} else {
-				state.historySearch(-1)
-			}
-		} else if t.Char == 8 { // Backspace (or more typically CTRL-Backspace)
-			state.deletePreviousWord()
-		} else if t.Char == 9 { // Tab complete
-			// Get all files in the current directory
-
-			state.l.allowUnterminatedString = true
-			defer func() {
-				state.l.allowUnterminatedString = false
-			}()
-
-			// Short circuit if we are actively in tab completion mode.
-			if state.tabCycleActive && len(state.tabCycleMatches) > 0 {
-				state.cycleTabCompletion(1)
-				return false, nil
-			}
-
-			state.resetTabCycle()
-
-			state.l.resetInput(string(state.currentCommand[0:state.index]))
-			tokens, err := state.l.Tokenize()
-			if err != nil {
-				return false, nil
-			}
-			lastToken := tokens[len(tokens)-1] // EOF when the command has no tokens.
-			if len(tokens) > 1 {
-				lastToken = tokens[len(tokens)-2]
-			}
-			prefix, replaceStart := completionTokenPrefix(state.currentCommand, state.index, lastToken)
-
-			// Check if we are in binary completion
-			binaryToken, binaryCompletion := state.isFirstTokenBinary(tokens)
-
-			completionSource := state.currentCommand
-			replaceEnd := state.index
-
-			state.Logf("Last token: %s %d\n", lastToken, len(tokens))
-			state.Logf("Prefix: %s\n", prefix)
-
-			// Binary specific completions decide what the argument offers.
-			var spec *CompletionSpec
-			if binaryCompletion {
-				isCompletingBinary := prefix != "" && lastToken.Start == binaryToken.Start && lastToken.Line == binaryToken.Line
-				if !isCompletingBinary {
-					defs := state.evalState.CompletionDefinitions[binaryToken.Lexeme]
-					if len(defs) > 0 {
-						args := state.completionArgsFromTokens(string(state.currentCommand[0:state.index]), tokens, prefix)
-						if defSpec, ok := state.runCompletionDefinitions(defs, args); ok {
-							spec = &defSpec
-						}
-					}
-				}
-			}
-
-			// Build completion dependencies from current state
-			variables := make(map[string]struct{}, len(state.context.Variables))
-			for v := range state.context.Variables {
-				variables[v] = struct{}{}
-			}
-
-			definitions := make([]string, len(state.stdLibDefs))
-			for i, def := range state.stdLibDefs {
-				definitions[i] = def.Name
-			}
-
-			deps := CompletionDeps{
-				FS:          OSCompletionFS{Listing: &state.completionListing},
-				Env:         OSCompletionEnv{},
-				Binaries:    state.context.Pbm,
-				Variables:   variables,
-				BuiltIns:    BuiltInList,
-				Definitions: definitions,
-			}
-
-			prevTokenType := EOF
-			if len(tokens) > 1 {
-				if replaceStart == state.index {
-					prevTokenType = lastToken.Type
-				} else if len(tokens) >= 3 {
-					prevTokenType = tokens[len(tokens)-3].Type
-				}
-			}
-
-			input := CompletionInput{
-				Prefix:        prefix,
-				LastTokenType: lastToken.Type,
-				PrevTokenType: prevTokenType,
-				NumTokens:     len(tokens),
-				InBinaryMode:  binaryCompletion,
-				Spec:          spec,
-			}
-
-			// Generate completions using the extracted function
-			matches := GenerateCompletions(input, deps)
-			allFileMatches := allMatchesAreFiles(matches)
-
-			var insertString string
-			state.Logf("Len matches: '%d'\n", len(matches))
-
-			if len(matches) < 5 {
-				// Print matches
-				state.Logf("Matches: %s\n", strings.Join(GetMatchTexts(matches), ", "))
-			}
-
-			if len(matches) == 0 {
-				fmt.Fprintf(os.Stdout, "\a")
-			} else if len(matches) == 1 {
-				// Lex the match and check if we have to quote around it
-				insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE)
-
-				// Replace the prefex
-				state.replaceText(insertString, replaceStart, replaceEnd)
-			} else {
-				// Print out the longest common prefix
-				longestCommonPrefix := completionGraphemePrefix(GetMatchTexts(matches))
-				state.Logf("Longest common prefix: '%s'\n", longestCommonPrefix)
-
-				if len(longestCommonPrefix) <= len(prefix) {
-					// Print bell
-					fmt.Fprintf(os.Stdout, "\a")
-				} else {
-					longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, allFileMatches)
-
-					// Replace the prefix
-					state.replaceText(longestCommonPrefix, replaceStart, replaceEnd)
-				}
-
-				tabMatchTexts := GetMatchTexts(matches)
-				state.tabCycleActive = true
-				state.tabCycleIndex = -1
-				state.tabCycleSource = completionSource
-				state.tabCycleStart = replaceStart
-				state.tabCycleEnd = replaceEnd
-				state.tabCycleTokenType = lastToken.Type
-				state.tabCycleAllFiles = allFileMatches
-				state.tabCycleMatches = append(state.tabCycleMatches[:0], tabMatchTexts...)
-				state.setTabCompletions(tabMatchTexts)
-			}
-		} else if t.Char == 11 { // Ctrl-K
-			// Erase to end of line
-			// fmt.Fprintf(os.Stdout, "\033[K")
-			state.replaceText("", state.index, state.commandEnd())
-		} else if t.Char == 12 { // Ctrl-L
-			state.ClearScreen()
-		} else if t.Char == 15 { // Ctrl-O - file manager
-			if err := state.setBracketedPaste(false); err != nil {
-				return false, err
-			}
-			newDir := RunFileManagerInteractive(state.stdInFd, &state.oldState, "")
-			if newDir != "" {
-				state.evalState.ChangeDirectory(newDir, "file manager")
-			}
-			// Refresh terminal size
-			cols, rows, sizeErr := term.GetSize(int(os.Stdout.Fd()))
-			if sizeErr == nil {
-				state.numRows = rows
-				state.numCols = cols
-			}
-			fmt.Fprintf(os.Stdout, "\033[H\033[2J")
+// historyNext puts the next history entry on the line, or an empty line
+// after the newest.
+func (state *TermState) historyNext() {
+	if state.historyIndex <= 0 {
+		state.historyIndex = 0
+		return
+	}
+	if state.historyIndex > len(history) {
+		state.historyIndex = len(history)
+		return
+	}
+	for state.historyIndex > 0 && state.historyIndex <= len(history)+1 {
+		state.historyIndex--
+		if state.historyIndex == 0 {
 			state.currentCommand = ""
 			state.index = 0
-			err = state.printPrompt()
-			if err != nil {
-				return false, err
+			state.resetHistorySearch()
+		} else {
+			reverseIndex := len(history) - state.historyIndex
+			// Compare current command to history, if the same, skip and continue to search
+			if string(state.currentCommand) == string(history[reverseIndex]) {
+				continue
 			}
-		} else if t.Char == 13 { // Enter
-			// If in tab completion mode, accept the completion without executing
-			if state.tabCycleActive {
-				state.resetTabCycle()
-				state.tabCompletions0 = state.tabCompletions0[:0]
-				state.tabCompletions1 = state.tabCompletions1[:0]
-				return false, nil
-			}
-			// Add command to history
-			shouldExit, _ := state.ExecuteCurrentCommand()
-			if shouldExit {
-				return true, nil
-			}
-		} else if t.Char == 21 { // Ctrl-U
-			state.replaceText("", 0, state.index)
-		} else if t.Char == 23 { // Ctrl-W
-			state.deletePreviousWord()
-		} else if t.Char == 25 { // Ctrl-Y
-			// Ctrl-y to complete history
-			state.acceptHistoryCompletion()
-		} else if t.Char == 127 { // Backspace
-			// Erase last char
-			if state.index > 0 {
-				if end, err := state.HandleToken(KEY_LEFT); err != nil || end {
-					return end, err
-				}
-				return state.HandleToken(KEY_DELETE)
-
-				// fmt.Fprintf(os.Stdout, "\033[D")
-				// fmt.Fprintf(os.Stdout, "\033[K")
-				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.legacyCursorColumn())
-			}
+			state.currentCommand = SourceText(history[reverseIndex])
+			state.index = state.commandEnd()
+			state.resetHistorySearch()
 		}
-	case SpecialKey:
-		if t == KEY_F1 {
-			// Set state.currentCommand to "lf"
-			state.currentCommand = "lf"
-			state.index = state.commandEnd()
-			shouldExit, _ := state.ExecuteCurrentCommand()
-			if shouldExit {
-				return true, nil
-			}
-		} else if t == KEY_ALT_B {
-			state.index = wordLeft(state.currentCommand, state.index)
-		} else if t == KEY_ALT_F { // Alt-F
-			state.index = wordRight(state.currentCommand, state.index)
-		} else if t == KEY_ALT_O { // Alt-O
-			// Quit
-			fmt.Fprintf(os.Stdout, "\r\n")
-			state.Logf("Exiting mshell using ALT-o...\n")
-			return true, nil
-		} else if t == KEY_ALT_D {
-			dateStr := time.Now().Format("2006-01-02")
-			state.PushChars([]rune(dateStr))
-		} else if t == KEY_ALT_SHIFT_R {
-			// The user's reset for measured widths after a reattach, font change,
-			// or any odd frame: forget every observation and measure again on
-			// the next repaint. There is no automatic epoch tracking.
-			clear(state.widthCache.Entries)
-			state.widthProbesBlocked = false
-		} else if t == KEY_ALT_DOT {
-			state.cycleLastArgument()
-		} else if t == KEY_SHIFT_TAB {
-			if state.tabCycleActive && len(state.tabCycleMatches) > 0 {
-				state.cycleTabCompletion(-1)
-			} else {
-				return state.HandleToken(AsciiToken{Char: 9})
-			}
-		} else if t == KEY_UP {
-			if state.tabCycleActive {
-				state.cycleTabCompletion(-1)
-				return false, nil
-			}
-			// Up arrow
-			for state.historyIndex >= 0 && state.historyIndex < len(history) {
-				state.historyIndex++
-				reverseIndex := len(history) - state.historyIndex
-				// Compare current command to history, if the same, skip and continue to search
-				if string(state.currentCommand) == string(history[reverseIndex]) {
-					continue
-				}
+		break
+	}
+}
 
-				// Clear back to prompt
-				// state.clearToPrompt()
-				// state.printPrompt()
-				// fmt.Fprint(os.Stdout, history[reverseIndex])
-				// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
-				state.currentCommand = SourceText(history[reverseIndex])
-				state.index = state.commandEnd()
-				state.resetHistorySearch()
-				break
-			}
-		} else if t == KEY_DOWN {
-			if state.tabCycleActive {
-				state.cycleTabCompletion(1)
-				return false, nil
-			}
-			if state.historyIndex <= 0 {
-				state.historyIndex = 0
-			} else if state.historyIndex > len(history) {
-				state.historyIndex = len(history)
-			} else {
-				// Down arrow
-				for state.historyIndex > 0 && state.historyIndex <= len(history)+1 {
-					state.historyIndex--
-					// state.clearToPrompt()
-					if state.historyIndex == 0 {
-						// state.printPrompt()
-						// fmt.Fprintf(os.Stdout, "mshell> ")
-						state.currentCommand = ""
-						state.index = 0
-						state.resetHistorySearch()
-					} else {
-						reverseIndex := len(history) - state.historyIndex
-						// Compare current command to history, if the same, skip and continue to search
-						if string(state.currentCommand) == string(history[reverseIndex]) {
-							continue
-						}
-						// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
-						// state.printPrompt()
-						// fmt.Fprint(os.Stdout, history[reverseIndex])
-						state.currentCommand = SourceText(history[reverseIndex])
-						state.index = state.commandEnd()
-						state.resetHistorySearch()
-					}
-					break
+// completeAtCursor completes the token before the cursor: one match
+// replaces it, several replace it with their longest common prefix and
+// start tab cycling.
+func (state *TermState) completeAtCursor() {
+	// Get all files in the current directory
+
+	state.l.allowUnterminatedString = true
+	defer func() {
+		state.l.allowUnterminatedString = false
+	}()
+
+	// Short circuit if we are actively in tab completion mode.
+	if state.tabCycleActive && len(state.tabCycleMatches) > 0 {
+		state.cycleTabCompletion(1)
+		return
+	}
+
+	state.resetTabCycle()
+
+	// Completion definitions may keep their arguments, so they get
+	// a copy of the line rather than the editor's arena.
+	state.l.resetInput(strings.Clone(string(state.currentCommand[0:state.index])))
+	tokens, err := state.l.Tokenize()
+	if err != nil {
+		return
+	}
+	lastToken := tokens[len(tokens)-1] // EOF when the command has no tokens.
+	if len(tokens) > 1 {
+		lastToken = tokens[len(tokens)-2]
+	}
+	prefix, replaceStart := completionTokenPrefix(state.currentCommand, state.index, lastToken)
+
+	// Check if we are in binary completion
+	binaryToken, binaryCompletion := state.isFirstTokenBinary(tokens)
+
+	completionSource := state.currentCommand
+	replaceEnd := state.index
+
+	state.Logf("Last token: %s %d\n", lastToken, len(tokens))
+	state.Logf("Prefix: %s\n", prefix)
+
+	// Binary specific completions decide what the argument offers.
+	var spec *CompletionSpec
+	if binaryCompletion {
+		isCompletingBinary := prefix != "" && lastToken.Start == binaryToken.Start && lastToken.Line == binaryToken.Line
+		if !isCompletingBinary {
+			defs := state.evalState.CompletionDefinitions[binaryToken.Lexeme]
+			if len(defs) > 0 {
+				args := state.completionArgsFromTokens(string(state.currentCommand[0:state.index]), tokens, prefix)
+				if defSpec, ok := state.runCompletionDefinitions(defs, args); ok {
+					spec = &defSpec
 				}
-			}
-		} else if t == KEY_RIGHT {
-			if state.tabCycleActive {
-				state.cycleTabCompletionColumn(1)
-				return false, nil
-			}
-			state.index = graphemeNext(state.currentCommand, state.index)
-		} else if t == KEY_LEFT {
-			if state.tabCycleActive {
-				state.cycleTabCompletionColumn(-1)
-				return false, nil
-			}
-			state.index = graphemePrevious(state.currentCommand, state.index)
-		} else if t == KEY_HOME {
-			// Move cursor to beginning of line.
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-			state.index = 0
-		} else if t == KEY_END {
-			// Move cursor to end of line
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
-			state.index = state.commandEnd()
-		} else if t == KEY_DELETE {
-			if state.index < state.commandEnd() {
-				start := graphemeFloor(state.currentCommand, state.index)
-				end := graphemeNext(state.currentCommand, state.index)
-				state.replaceText("", start, end)
 			}
 		}
 	}
 
-	return false, nil
+	// Build completion dependencies from current state
+	variables := make(map[string]struct{}, len(state.context.Variables))
+	for v := range state.context.Variables {
+		variables[v] = struct{}{}
+	}
+
+	definitions := make([]string, len(state.stdLibDefs))
+	for i, def := range state.stdLibDefs {
+		definitions[i] = def.Name
+	}
+
+	deps := CompletionDeps{
+		FS:          OSCompletionFS{Listing: &state.completionListing},
+		Env:         OSCompletionEnv{},
+		Binaries:    state.context.Pbm,
+		Variables:   variables,
+		BuiltIns:    BuiltInList,
+		Definitions: definitions,
+		Abbreviations: state.evalState.commandAbbrWords(),
+	}
+
+	prevTokenType := EOF
+	if len(tokens) > 1 {
+		if replaceStart == state.index {
+			prevTokenType = lastToken.Type
+		} else if len(tokens) >= 3 {
+			prevTokenType = tokens[len(tokens)-3].Type
+		}
+	}
+
+	input := CompletionInput{
+		Prefix:        prefix,
+		LastTokenType: lastToken.Type,
+		PrevTokenType: prevTokenType,
+		NumTokens:     len(tokens),
+		InBinaryMode:  binaryCompletion,
+		Spec:          spec,
+	}
+
+	// Generate completions using the extracted function
+	matches, rank := generateRankedCompletions(input, deps)
+	allFileMatches := allMatchesAreFiles(matches)
+
+	var insertString string
+	state.Logf("Len matches: '%d'\n", len(matches))
+
+	if len(matches) < 5 {
+		// Print matches
+		state.Logf("Matches: %s\n", strings.Join(GetMatchTexts(matches), ", "))
+	}
+
+	if len(matches) == 0 {
+		fmt.Fprintf(os.Stdout, "\a")
+	} else if len(matches) == 1 {
+		// Lex the match and check if we have to quote around it
+		insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE, quotesWords(matches[0].TabMatchType))
+
+		// Replace the prefex
+		state.replaceText(insertString, replaceStart, replaceEnd)
+	} else {
+		// Print out the longest common prefix. When the typed text is in the
+		// middle of the matches, a shared start would replace it with
+		// something it is not the start of, so nothing is inserted.
+		longestCommonPrefix := ""
+		if rank <= rankPrefixIgnoreCase {
+			longestCommonPrefix = completionGraphemePrefix(GetMatchTexts(matches))
+		}
+		state.Logf("Longest common prefix: '%s'\n", longestCommonPrefix)
+
+		if len(longestCommonPrefix) <= len(prefix) {
+			// Print bell
+			fmt.Fprintf(os.Stdout, "\a")
+		} else {
+			allQuoteWords := true
+			for _, m := range matches {
+				allQuoteWords = allQuoteWords && quotesWords(m.TabMatchType)
+			}
+			longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, allFileMatches, allQuoteWords)
+
+			// Replace the prefix
+			state.replaceText(longestCommonPrefix, replaceStart, replaceEnd)
+		}
+
+		tabMatchTexts := GetMatchTexts(matches)
+		state.tabCycleActive = true
+		state.tabCycleIndex = -1
+		state.tabCycleSource = completionSource
+		state.tabCycleStart = replaceStart
+		state.tabCycleEnd = replaceEnd
+		state.tabCycleTokenType = lastToken.Type
+		state.tabCycleAllFiles = allFileMatches
+		state.tabCycleMatches = append(state.tabCycleMatches[:0], tabMatchTexts...)
+		state.tabCycleQuoteWords = state.tabCycleQuoteWords[:0]
+		for _, m := range matches {
+			state.tabCycleQuoteWords = append(state.tabCycleQuoteWords, quotesWords(m.TabMatchType))
+		}
+		state.setTabCompletions(tabMatchTexts)
+	}
 }
 
 func UnmodifiedDir(path string) string {
@@ -4949,7 +4726,7 @@ func htmlBaseTypeName(tokens []Token, i int) bool {
 		return false
 	}
 	switch tokens[i].Lexeme {
-	case "path", "datetime", "binary", "null":
+	case "path", "datetime", "rune", "binary", "null":
 	default:
 		return false
 	}
@@ -5085,10 +4862,10 @@ _msh_completion() {
 
     if [[ $COMP_CWORD -eq 1 ]]; then
         if [[ "$cur" == -* ]]; then
-            COMPREPLY=( $(compgen -W "--html --lex --parse --version --help -h -c" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--html --lex --parse --type-check-only --version --help -h -c" -- "$cur") )
             return 0
         fi
-        COMPREPLY=( $(compgen -W "bin edit lsp completions" -- "$cur") )
+        COMPREPLY=( $(compgen -W "bin edit lsp completions keys fm" -- "$cur") )
         return 0
     fi
 
@@ -5117,7 +4894,7 @@ _msh_completion() {
     esac
 
     if [[ "$cur" == -* ]]; then
-        COMPREPLY=( $(compgen -W "--html --lex --parse --version --help -h -c" -- "$cur") )
+        COMPREPLY=( $(compgen -W "--html --lex --parse --type-check-only --version --help -h -c" -- "$cur") )
         return 0
     fi
 
@@ -5130,18 +4907,94 @@ complete -F _msh_completion msh mshell
 }
 
 func fishCompletionScript() string {
-	return `function __msh_register_completions --argument-names cmd
-    complete -c $cmd -f -l html -d 'Render the input as HTML'
-    complete -c $cmd -f -l lex -d 'Print tokens from the input'
-    complete -c $cmd -f -l parse -d 'Print the parsed AST as JSON'
-    complete -c $cmd -f -l version -d 'Print version information'
-    complete -c $cmd -f -s c -r -d 'Execute INPUT as the program'
-    complete -c $cmd -f -s h -l help -d 'Show help'
+	return `# Succeeds when the words between the command name and the cursor match
+# the patterns in $argv, one pattern per word.
+function __msh_words_match
+    set -l words (commandline -opc)
+    set -e words[1]
+    test (count $words) -eq (count $argv); or return 1
+    for i in (seq (count $argv))
+        string match -q -- $argv[$i] $words[$i]; or return 1
+    end
+    return 0
+end
 
-    complete -c $cmd -f -n '__fish_use_subcommand' -a 'bin edit lsp completions'
-    complete -c $cmd -f -n '__fish_seen_subcommand_from bin' -a 'add remove list path edit audit debug'
-    complete -c $cmd -f -n '__fish_seen_subcommand_from edit' -a 'init'
-    complete -c $cmd -x -n '__fish_seen_subcommand_from completions' -a 'bash fish nushell elvish'
+# Succeeds when every word in $argv is an option.
+function __msh_all_options
+    for word in $argv
+        switch $word
+            case -c -
+                return 1
+            case '-*'
+                continue
+            case '*'
+                return 1
+        end
+    end
+    return 0
+end
+
+# Succeeds while every word after the command name is an option.
+# Options must come before the script; later words go to the script.
+function __msh_before_script
+    set -l words (commandline -opc)
+    set -e words[1]
+    __msh_all_options $words
+end
+
+# Succeeds when the next word cannot be a file.
+function __msh_no_files
+    set -l words (commandline -opc)
+    set -e words[1]
+    # The word after -c is the program text.
+    if test "$words[-1]" = -c
+        set -e words[-1]
+        __msh_all_options $words; and return 0
+    end
+    switch "$words[1]"
+        case bin
+            # Only 'bin add' takes a path: add <path> or add <name> <path>.
+            if test "$words[2]" = add; and test (count $words) -le 3
+                return 1
+            end
+            return 0
+        case edit completions lsp keys fm
+            return 0
+    end
+    return 1
+end
+
+function __msh_register_completions --argument-names cmd
+    complete -c $cmd -n __msh_before_script -l html -d 'Render the input as HTML'
+    complete -c $cmd -n __msh_before_script -l lex -d 'Print tokens from the input'
+    complete -c $cmd -n __msh_before_script -l parse -d 'Print the parsed AST as JSON'
+    complete -c $cmd -n __msh_before_script -l type-check-only -d 'Type check the input without running it'
+    complete -c $cmd -n __msh_before_script -l version -d 'Print version information'
+    complete -c $cmd -n __msh_before_script -s c -x -d 'Execute INPUT as the program'
+    complete -c $cmd -n __msh_before_script -s h -l help -d 'Show help'
+
+    complete -c $cmd -n __msh_words_match -a bin -d 'Manage msh_bins.txt entries'
+    complete -c $cmd -n __msh_words_match -a edit -d 'Edit common msh files'
+    complete -c $cmd -n __msh_words_match -a completions -d 'Print shell completion script'
+    complete -c $cmd -n __msh_words_match -a lsp -d 'Run the language server'
+    complete -c $cmd -n __msh_words_match -a fm -d 'Open the built-in file manager'
+    complete -c $cmd -n __msh_words_match -a keys -d 'Show each key pressed as a key binding writes it'
+
+    complete -c $cmd -f -n __msh_no_files
+
+    complete -c $cmd -n '__msh_words_match bin' -a add -d 'Add/replace a bin entry'
+    complete -c $cmd -n '__msh_words_match bin' -a remove -d 'Remove a bin entry by binary name'
+    complete -c $cmd -n '__msh_words_match bin' -a list -d 'Print the bin map file contents'
+    complete -c $cmd -n '__msh_words_match bin' -a path -d 'Print the msh_bins.txt file path'
+    complete -c $cmd -n '__msh_words_match bin' -a edit -d 'Edit the bin map file'
+    complete -c $cmd -n '__msh_words_match bin' -a audit -d 'Report invalid or missing bin map entries'
+    complete -c $cmd -n '__msh_words_match bin' -a debug -d 'Print PATH/bin map lookup details for a binary'
+    complete -c $cmd -n '__msh_words_match bin remove' -a "($cmd bin list 2>/dev/null)"
+    complete -c $cmd -n '__msh_words_match bin debug' -a "($cmd bin list 2>/dev/null) (__fish_complete_command)"
+
+    complete -c $cmd -n '__msh_words_match edit' -a init -d 'Edit init.msh'
+    complete -c $cmd -n '__msh_words_match completions' -a 'bash fish nushell elvish'
+    complete -c $cmd -n '__msh_words_match fm' -a '(__fish_complete_directories)'
 end
 
 __msh_register_completions msh
@@ -5155,7 +5008,7 @@ func nushellCompletionScript() string {
 }
 
 def "msh_commands" [] {
-  [bin edit lsp completions]
+  [bin edit lsp completions keys fm]
 }
 
 def "msh_bin_subcommands" [] {
@@ -5170,6 +5023,7 @@ export extern "msh" [
   --html
   --lex
   --parse
+  --type-check-only
   --version
   --help
   -h
@@ -5196,6 +5050,7 @@ export extern "mshell" [
   --html
   --lex
   --parse
+  --type-check-only
   --version
   --help
   -h
@@ -5223,7 +5078,7 @@ export extern "mshell completions" [
 func elvishCompletionScript() string {
 	return `fn _msh_complete { |@args|
   if (== (count $args) 0) {
-    put bin edit lsp completions --html --lex --parse --version --help -h -c
+    put bin edit lsp completions keys fm --html --lex --parse --type-check-only --version --help -h -c
     return
   }
 
@@ -5288,6 +5143,8 @@ func defaultAppCommand(path string, goos string) (string, []string, error) {
 	}
 }
 
+// runAttachedCommand runs a program with the terminal attached, as an
+// editor needs.
 var runAttachedCommand = func(name string, args []string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Stdin = os.Stdin
@@ -5296,30 +5153,238 @@ var runAttachedCommand = func(name string, args []string) error {
 	return cmd.Run()
 }
 
+// defaultOpenerTimeout is how long msh waits for the default opener.
+const defaultOpenerTimeout = 10 * time.Second
+
+var errDefaultOpenerTimedOut = errors.New("default opener timed out")
+
+// runDefaultOpener runs the platform's default opener and returns what it
+// wrote to stderr. Stderr goes to a temporary file rather than a pipe: a
+// program the opener starts in the background keeps the opener's stderr,
+// and waiting on a pipe would wait for that program to exit.
+var runDefaultOpener = func(name string, args []string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultOpenerTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = nil
+
+	stderrFile, tempErr := os.CreateTemp("", "msh-opener-*.txt")
+	if tempErr == nil {
+		defer os.Remove(stderrFile.Name())
+		defer stderrFile.Close()
+		cmd.Stderr = stderrFile
+	}
+
+	err := cmd.Run()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = errDefaultOpenerTimedOut
+	}
+
+	output := ""
+	if tempErr == nil {
+		if _, seekErr := stderrFile.Seek(0, io.SeekStart); seekErr == nil {
+			data, _ := io.ReadAll(io.LimitReader(stderrFile, 8192))
+			output = string(data)
+		}
+	}
+	return output, err
+}
+
+// openFileError says why a file could not be opened: what msh tried, how
+// each attempt went, and what the user can do about it.
+type openFileError struct {
+	steps []string
+	hint  string
+}
+
+func (e *openFileError) Error() string {
+	text := strings.Join(e.steps, "\n")
+	if e.hint != "" {
+		text += "\n" + e.hint
+	}
+	return text
+}
+
+// describeStartFailure says why program could not be started. label
+// names the program in the message, for example "The editor in EDITOR
+// (nvim)".
+func describeStartFailure(label string, program string, err error) string {
+	// An *exec.Error means the program was not found before starting it.
+	// Any other error came from the system when starting it.
+	var lookErr *exec.Error
+	if errors.As(err, &lookErr) {
+		switch {
+		case errors.Is(err, exec.ErrNotFound):
+			return fmt.Sprintf("%s was not found on PATH.", label)
+		case errors.Is(err, os.ErrNotExist):
+			return fmt.Sprintf("%s does not exist.", label)
+		case errors.Is(err, os.ErrPermission):
+			return fmt.Sprintf("%s is not executable.", label)
+		default:
+			return fmt.Sprintf("%s could not be found: %s", label, lookErr.Err)
+		}
+	}
+
+	// A program named by a path is not looked up first, so a missing or
+	// non-executable file shows up here, when starting it.
+	if !strings.ContainsAny(program, `/\`) {
+		if resolved, err := exec.LookPath(program); err == nil {
+			program = resolved
+		}
+	}
+	info, statErr := os.Stat(program)
+	switch {
+	case errors.Is(statErr, os.ErrNotExist):
+		return fmt.Sprintf("%s does not exist.", label)
+	case statErr == nil && info.IsDir():
+		return fmt.Sprintf("%s is a directory, not a program.", label)
+	case statErr == nil && runtime.GOOS != "windows" && info.Mode()&0111 == 0:
+		return fmt.Sprintf("%s is not executable.", label)
+	}
+
+	reason := err
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		reason = pathErr.Err
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Sprintf("%s exists, but could not be started: %s. If it is a script, the interpreter on its #! line may be missing.", label, reason)
+	}
+	return fmt.Sprintf("%s could not be started: %s.", label, reason)
+}
+
+// indentOutput indents each line of a program's output under a step.
+func indentOutput(output string) string {
+	lines := strings.Split(strings.TrimRight(output, "\r\n \t"), "\n")
+	for i, line := range lines {
+		lines[i] = "    " + strings.TrimRight(line, "\r")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// xdgOpenExitMeaning says what an xdg-open exit status means, from the
+// xdg-open manual.
+func xdgOpenExitMeaning(code int) string {
+	switch code {
+	case 1:
+		return "xdg-open rejected its arguments."
+	case 2:
+		return "xdg-open could not find the file."
+	case 3:
+		return "xdg-open found no program it could use to open this kind of file."
+	case 4:
+		return "xdg-open started a program to open the file, and that program failed."
+	case 5:
+		return "xdg-open does not have permission to read the file."
+	default:
+		return ""
+	}
+}
+
+// openPathInEditorOrDefaultApp opens path in EDITOR. When EDITOR is not
+// set, or its program cannot be started, it opens path with the
+// platform's default opener. An editor that starts and then fails is
+// reported as is: the default opener is not tried after it.
 func openPathInEditorOrDefaultApp(path string) error {
+	failure := &openFileError{}
+
 	editor := strings.TrimSpace(os.Getenv("EDITOR"))
-	if editor != "" {
-		if err := runAttachedCommand(editor, []string{path}); err == nil {
+	editorHint := ""
+	if editor == "" {
+		failure.steps = append(failure.steps, "EDITOR is not set, so msh tried the system's default opener.")
+		editorHint = "To fix this, set EDITOR to the editor you use (for example, nvim), or open the file yourself."
+	} else {
+		err := runAttachedCommand(editor, []string{path})
+		if err == nil {
 			return nil
 		}
+
+		label := fmt.Sprintf("The editor in EDITOR (%s)", editor)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			failure.steps = append(failure.steps, fmt.Sprintf("%s started, but failed: %s.", label, exitErr))
+			failure.hint = "The editor's own messages, if it printed any, are above."
+			return failure
+		}
+
+		failure.steps = append(failure.steps, describeStartFailure(label, editor, err))
+		if fields := strings.Fields(editor); len(fields) > 1 {
+			if _, lookErr := exec.LookPath(fields[0]); lookErr == nil {
+				failure.steps = append(failure.steps, fmt.Sprintf("msh runs EDITOR as one program name and does not split arguments off it, so it looked for a program named '%s' rather than running %s with arguments.", editor, fields[0]))
+			}
+		}
+		failure.steps = append(failure.steps, "msh then tried the system's default opener.")
+		editorHint = "To fix this, set EDITOR to the name of an editor on PATH or to the full path of one, or open the file yourself."
 	}
 
 	command, args, err := defaultAppCommand(path, runtime.GOOS)
 	if err != nil {
-		return err
+		failure.steps = append(failure.steps, err.Error()+".")
+		failure.hint = editorHint
+		return failure
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Stdin = nil
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("default opener timed out")
-		}
-		return err
+	output, err := runDefaultOpener(command, args)
+	if err == nil {
+		return nil
 	}
-	return nil
+
+	var exitErr *exec.ExitError
+	switch {
+	case errors.Is(err, errDefaultOpenerTimedOut):
+		failure.steps = append(failure.steps, fmt.Sprintf("The default opener (%s) did not finish within %s, so msh stopped it.", command, defaultOpenerTimeout))
+	case errors.As(err, &exitErr):
+		failure.steps = append(failure.steps, fmt.Sprintf("The default opener (%s) failed: %s.", command, exitErr))
+		if command == "xdg-open" {
+			if meaning := xdgOpenExitMeaning(exitErr.ExitCode()); meaning != "" {
+				failure.steps = append(failure.steps, meaning)
+			}
+		}
+	default:
+		failure.steps = append(failure.steps, describeStartFailure(fmt.Sprintf("The default opener (%s)", command), command, err))
+		if command == "xdg-open" && errors.Is(err, exec.ErrNotFound) {
+			failure.steps = append(failure.steps, "xdg-open usually comes in the xdg-utils package.")
+		}
+	}
+
+	if strings.TrimSpace(output) != "" {
+		failure.steps = append(failure.steps, fmt.Sprintf("%s printed:\n%s", command, indentOutput(output)))
+	}
+
+	// xdg-open only starts graphical programs when one of these is set.
+	ranOpener := exitErr != nil || errors.Is(err, errDefaultOpenerTimedOut)
+	if command == "xdg-open" && ranOpener && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+		failure.steps = append(failure.steps, "Neither DISPLAY nor WAYLAND_DISPLAY is set, so xdg-open cannot start a graphical program. A shell started outside the desktop session, for example through sudo, su, or ssh, often lacks them. In WSL, WSLg sets them.")
+	}
+
+	failure.hint = editorHint
+	return failure
+}
+
+// printOpenFileError reports that the file at path, described by
+// description (for example "user init file for v0.14.0"), could not be
+// opened for editing.
+func printOpenFileError(description string, path string, err error) {
+	fmt.Fprintf(os.Stderr, "Error: could not open the %s: %s\n", description, path)
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+		if _, dirErr := os.Stat(filepath.Dir(path)); errors.Is(dirErr, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "  The file does not exist yet, and neither does its directory %s.\n", filepath.Dir(path))
+		} else {
+			fmt.Fprintln(os.Stderr, "  The file does not exist yet.")
+		}
+	}
+
+	var openErr *openFileError
+	if !errors.As(err, &openErr) {
+		fmt.Fprintf(os.Stderr, "  %s\n", err)
+		return
+	}
+	for _, step := range openErr.steps {
+		fmt.Fprintf(os.Stderr, "  %s\n", step)
+	}
+	if openErr.hint != "" {
+		fmt.Fprintln(os.Stderr, openErr.hint)
+	}
 }
 
 func binAddCommand(nameArg string, pathArg string) int {
@@ -5450,7 +5515,7 @@ func binEditCommand() int {
 	}
 
 	if err := openPathInEditorOrDefaultApp(path); err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening bin map file: %s\n", err)
+		printOpenFileError("bin map file", path, err)
 		return 1
 	}
 
@@ -5469,7 +5534,7 @@ func editInitCommand() int {
 	}
 
 	if err := openPathInEditorOrDefaultApp(initSpec.path); err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening init file: %s\n", err)
+		printOpenFileError(initSpec.description, initSpec.path, err)
 		return 1
 	}
 

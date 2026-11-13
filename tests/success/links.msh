@@ -10,7 +10,7 @@ tempFile f!
 "linkCount" wl
 @f linkCount ? str wl
 @s linkCount ? str wl
-"missing-msh-links-test" linkCount isNone str wl
+"missing-msh-links-test" linkCount match ok _: "ok", err e: @e, end wl
 
 "sameFile" wl
 @f @h sameFile str wl
@@ -23,7 +23,7 @@ tempFile f!
 "evalSymLinks" wl
 @s evalSymLinks ? str @f evalSymLinks ? str = str wl
 @h evalSymLinks ? str @h str = str wl
-@b evalSymLinks isNone str wl
-"missing-msh-links-test" evalSymLinks isNone str wl
+@b evalSymLinks match ok _: "ok", err e: @e "nowhere-msh-links-test" in str, end wl
+"missing-msh-links-test" evalSymLinks match ok _: "ok", err e: @e, end wl
 
 [@f @h @s @b] (rm) each

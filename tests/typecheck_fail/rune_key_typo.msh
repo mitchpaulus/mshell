@@ -1,0 +1,5 @@
+enum TestModKey = keyCtl TestKey | keyMeta TestKey end
+type TestKey = rune | TestModKey
+def takeKeys ([TestKey] -- ) drop end
+[r'x' keyCtl r'e' keyCtl] takeKeys
+[r'x' ctlr] takeKeys

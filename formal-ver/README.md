@@ -3,12 +3,19 @@
 A Rocq development of the core calculus in `ai/type-core-calculus.typ`, with a machine-checked
 type soundness theorem.
 
+Built with [redo-msh](https://github.com/mitchpaulus/redo-msh); the do-files are mshell scripts.
+
 ```
-make          # build (needs Rocq 9.1; defaults to ~/.opam/rocq-mshell/bin, override with ROCQBIN=...)
-make check    # build, then print the assumptions of the main theorem
+redo          # build (needs Rocq 9.1; defaults to ~/.opam/rocq-mshell/bin, override with ROCQBIN=...)
+redo -j 8     # the same, compiling up to 8 files at once
+redo check    # build, then print the assumptions of the main theorem
+redo clean    # remove the compiled files
 ```
 
-To install Rocq into the switch the Makefile expects (opam 2.x, no `sudo`):
+Each `.vo` is rebuilt when its `.v` or a file it requires changes (the dependencies come from `rocq dep`).
+`_CoqProject` lists the files `redo` builds; it also tells editors how to load the proof.
+
+To install Rocq into the switch the build expects (opam 2.x, no `sudo`):
 
 ```
 opam init --bare -y --disable-shell-hook
@@ -16,9 +23,9 @@ opam switch create rocq-mshell ocaml-base-compiler.4.14.2
 opam install --switch rocq-mshell -y rocq-prover rocq-core.9.1.1
 ```
 
-`make check` ends with `Closed under the global context`.
+`redo check` ends with `Closed under the global context`.
 The theorem uses no axioms and no admitted lemmas.
-A clean build takes about 40 seconds.
+A clean build takes about a minute, or about 30 seconds with `redo -j 8`.
 
 ## The theorem
 
@@ -102,7 +109,7 @@ What you have to read is whether the *definitions* say what the design means:
 |---|---|---|
 | `Syntax.v` | ~420 | types (including recursive types `TMu`, their closedness and unfolding), enum identities, the built-in `Maybe`, substitution, words, values, heap objects |
 | `Interp.v` | ~490 | the interpreter matches `Evaluator.go` where it matters (see below); `eval` is `evalv validate` |
-| `Typing.v` | ~400 | each typing rule matches the doc; marks (`Sh`, `Dp`, `MList`, `MRec`) and `msub`; `genv` holds def signatures and enum declarations; `maybe_ok` |
+| `Typing.v` | ~420 | each typing rule matches the doc; marks (`Sh`, `Dp`, `MList`, `MRec`), `msub`, and `mcompat` (a mark may change where the type holds no value); `genv` holds def signatures and enum declarations; `maybe_ok` |
 | `Decide.v` (definitions only) | ~150 | `step`, `lvl`, `chk` and `rstep`, `rlvl`, `rchk` are what the Go checker will do to decide `<=` and fresh retyping |
 | `Subtyping.v` (definitions only) | ~200 | the one-level relations `subF` and `rsubF` (with `fsubR`, `subsR`, `osubR`, `vsubsR`, `frsubR`, `vrsubsR`), `sub` and `rsub` as their greatest fixed points, `immutable`, and the enum declaration checks `occ_sub`, `occ_fresh`, `wf_payload` |
 
@@ -133,11 +140,13 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | "A diverging effect absorbs what follows" | `t_div`; `diverges` and the `div_*` lemmas in `Frame.v` |
 | Branch joins | `join_slot`, `tjoin` (`tjoin_core`, then one side below the other), `join_slot_ub`, `if_join` in `Join.v`; the join is given the checker's decision procedure `le` for `<=` and fresh retyping, and the proofs assume only that it is right when it says yes (`le_ok`) |
 | The checker's join: a new arm takes a shared arm's type | `join_slot2`, `join_slot2_ub`, `if_join2` in `Join.v` (two subsumption steps per arm); `if_join2_alg` in `Decide.v` |
+| The checker's join of all the arms at once (order-independent; `{a: @xs}` / `{a: @xs, b: [2]}` stays partly new) | the checker's finite marks `fmark`, `den`; one mark for all the arms `fmergeN` (`fmergeN_ok`, brought there by `ss_mc`); the types joined under it `mjoin` (`mjoin_ub`, then `ss_m`); the shared step's targets `shjoin` (`shjoin_ub`); kinds joined apart and unioned; `joinN`, `joinN_ub`, `joinN_stack_ub`, `arm_joinN`, `if_joinN` in `PartialJoin.v`; `if_joinN_alg`, `arm_joinN_alg`, `alg_joinN_any_order` in `Decide.v`; `mtyped_mcompat` in `Partial.v` |
 | A type in a def body naming the def's generics | `as` is `t_sub`; `item_gdefs_ok`, `item_use_typed`, `item_use_never_stuck`, `item_use_runs` in `Examples.v` |
 | The decision procedures for `<=` and fresh retyping (assumption sets) | `subq`, `rsubq` in `Decide.v`; `subq_sound`, `rsubq_sound`; `le_alg_ok` discharges `le_ok`; `join_slot_ub_alg`, `if_join_alg` |
 | Caching their answers | `subq_set_sound`, `rsubq_set_sound`, `chk_confirmed`; `cache_early` |
 | Joins that meet a recursive alias (never widened inside) | `ajoin` in `Join.v`; `join_*` in `Recursive.v` |
 | `map` with a literal body | `WMap`; `tw_map`, `tw_map_imm` (fresh only when the results are immutable) |
+| Runes (`ai/runes.typ`): their own kind, so `rune \| str` is a union a kind pattern separates, and a string never passes for a rune | `TRune`, `KRune`, `WRune`, `VRune`; `str_not_rune`, `typo_not_rune_list`, `rune_kind_then`, `rune_kind_else`, `rune_prog_typed`, `rune_prog_runs` in `Examples.v` |
 | `take`, `skip`, index slices | `WTake`, `WSkip`, `WSlice`; `tw_slice` (fresh when the input was fresh or the elements are immutable); `inv_slice_dp` in `Slice.v` |
 | Objects nothing can reach (the input list a fresh `take` consumed) | `HDead` in the store typing, `live`; `dead_unreachable`, `vtyped_live` in `Slice.v` |
 | The built-in `Maybe` | the enum `EMaybe` (`TMaybe t` is `TEnum EMaybe [t]`); `just`, `none`, `?` are `wjust`, `wnone`, `wunwrap`, a constructor and a one-arm match; the environment declares it (`maybe_ok`); their typings `tw_wjust`, `tw_wnone`, `tw_wunwrap` |
@@ -405,7 +414,7 @@ write through it; `hole_literal_no_typing` shows H3, the same literal widened to
 ## Comparing the Go checker with the proof
 
 `oracle/` extracts `subq`, `rsubq` and `join_slot` to OCaml as a program that answers queries on stdin
-(`make -C oracle test`). The Go port of the decision procedures and the join is compared with it on
+(`redo test` in `oracle/`). The Go port of the decision procedures and the join is compared with it on
 generated types; see `oracle/README.md` for the query syntax and what a disagreement means.
 
 ## Not modeled

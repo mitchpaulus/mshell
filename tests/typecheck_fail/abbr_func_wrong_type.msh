@@ -1,0 +1,2 @@
+# An abbreviation's quote must leave a Maybe[str].
+{abbr: 'x' abbrWord, expansion: (drop 'text') abbrFunc} abbrAdd

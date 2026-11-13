@@ -1,0 +1,10 @@
+# Run the command given as arguments with the Rocq toolchain first on PATH,
+# so the do-files work whether or not the opam switch is active.
+# The toolchain is in $ROCQBIN, or ~/.opam/rocq-mshell/bin when that is not set.
+#   msh rocq.msh rocq c -Q . MshellCore Syntax.v
+# Unquoted so ~ becomes the home directory: there is no builtin for it.
+"ROCQBIN" getEnv [~/.opam/rocq-mshell/bin] :0: maybe rocqBin!
+runtime "windows" = if ";" else ":" end sep!
+$"{@rocqBin}{@sep}{$PATH}" $PATH!
+args cmd!
+[@cmd]!

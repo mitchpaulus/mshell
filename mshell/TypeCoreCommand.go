@@ -308,7 +308,7 @@ func (c *coreChecker) commandLineableIn(t TypeId, visiting []TypeId) bool {
 	}
 	for _, m := range members {
 		switch m {
-		case TidStr, TidPath, TidInt, TidFloat, TidDateTime, TidBottom:
+		case TidStr, TidPath, TidInt, TidFloat, TidDateTime, TidRune, TidBottom:
 		default:
 			switch c.arena.nodes[m].Kind {
 			case TKVar:

@@ -458,6 +458,17 @@ Proof.
     + intros Pk E. apply (P Pk). destruct (field_at k fs2 r2); simpl in E; congruence.
 Qed.
 
+Lemma mcompat_tsub th : forall m m' t, mcompat m m' t -> mcompat m m' (tsub th t).
+Proof.
+  induction 1; simpl.
+  - apply mc_refl.
+  - apply mc_bot.
+  - apply mc_list; auto.
+  - apply mc_rec. intros k. rewrite field_at_tsub, fty_tsub. auto.
+  - apply mc_dp_list; auto.
+  - apply mc_dp_rec; auto.
+Qed.
+
 Lemma slot_sub_subst th p q : slot_sub p q ->
   slot_sub (fst p, tsub th (snd p)) (fst q, tsub th (snd q)).
 Proof.
@@ -469,6 +480,7 @@ Proof.
   - apply ss_m; auto. apply msub_tsub; auto.
   - apply ss_m_refl; auto.
   - apply ss_m_forget; auto. apply sub_tsub; auto.
+  - apply ss_mc; auto. apply mcompat_tsub; auto.
 Qed.
 
 Lemma ssub_subst th s1 s2 : ssub s1 s2 -> ssub (ssubst th s1) (ssubst th s2).
@@ -585,6 +597,7 @@ Proof.
        T sigs (esubst th G) (lsubst th B) (lsubst th C) (rsubst th R) e (ssubst th s1) (ssubst th s2)));
     intros; ss.
   (* literals, arithmetic, shuffles *)
+  - constructor.
   - constructor.
   - constructor.
   - constructor.

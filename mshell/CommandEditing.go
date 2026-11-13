@@ -64,9 +64,13 @@ func graphemeNext(source SourceText, cursor ByteOffset) ByteOffset {
 	return graphemeCeil(source, min(ByteOffset(len(source)), max(0, cursor)+1))
 }
 
-// Word commands retain the existing ASCII-space delimiter convention.
-// A space with combining marks is one whole delimiter grapheme.
-func wordLeft(source SourceText, cursor ByteOffset) ByteOffset {
+// isSpaceByte ends a word in the shell's command line: an ASCII space. A
+// space with combining marks is one whole delimiter grapheme.
+func isSpaceByte(b byte) bool { return b == ' ' }
+
+// wordLeft and wordRight move by words that end at a grapheme whose first
+// byte delim accepts.
+func wordLeft(source SourceText, cursor ByteOffset, delim func(byte) bool) ByteOffset {
 	cursor = graphemeCeil(source, cursor)
 	rest := string(source)
 	segmentState := -1
@@ -76,7 +80,7 @@ func wordLeft(source SourceText, cursor ByteOffset) ByteOffset {
 	for len(rest) > 0 && offset < cursor {
 		var cluster string
 		cluster, rest, _, segmentState = uniseg.FirstGraphemeClusterInString(rest, segmentState)
-		space := cluster[0] == ' '
+		space := delim(cluster[0])
 		if !space && previousSpace {
 			wordStart = offset
 		}
@@ -86,7 +90,7 @@ func wordLeft(source SourceText, cursor ByteOffset) ByteOffset {
 	return wordStart
 }
 
-func wordRight(source SourceText, cursor ByteOffset) ByteOffset {
+func wordRight(source SourceText, cursor ByteOffset, delim func(byte) bool) ByteOffset {
 	cursor = graphemeFloor(source, cursor)
 	rest := string(source)
 	segmentState := -1
@@ -96,7 +100,7 @@ func wordRight(source SourceText, cursor ByteOffset) ByteOffset {
 		var cluster string
 		cluster, rest, _, segmentState = uniseg.FirstGraphemeClusterInString(rest, segmentState)
 		if offset >= cursor {
-			space := cluster[0] == ' '
+			space := delim(cluster[0])
 			if space && inWord {
 				return offset
 			}
@@ -107,10 +111,40 @@ func wordRight(source SourceText, cursor ByteOffset) ByteOffset {
 	return offset
 }
 
-func (state *TermState) deletePreviousWord() {
-	if state.index > 0 {
-		state.replaceText("", wordLeft(state.currentCommand, state.index), state.index)
+// lineMoveOrDelete is what a line edit that moves the cursor or deletes
+// does to a line, in the shell and in the file manager's prompt line: it
+// deletes the bytes start to end and leaves the cursor at start, and a move
+// gives start == end. delim says which bytes end a word. ok is false for
+// any other op.
+func lineMoveOrDelete(kind editOpKind, line SourceText, cursor ByteOffset, delim func(byte) bool) (start, end ByteOffset, ok bool) {
+	lineEnd := ByteOffset(len(line))
+	switch kind {
+	case opLeft:
+		start = graphemePrevious(line, cursor)
+	case opRight:
+		start = graphemeNext(line, cursor)
+	case opWordLeft:
+		start = wordLeft(line, cursor, delim)
+	case opWordRight:
+		start = wordRight(line, cursor, delim)
+	case opLineStart:
+		start = 0
+	case opLineEnd:
+		start = lineEnd
+	case opBackspace:
+		return graphemePrevious(line, cursor), cursor, true
+	case opDelete:
+		return graphemeFloor(line, cursor), graphemeNext(line, cursor), true
+	case opDeleteWordLeft:
+		return wordLeft(line, cursor, delim), cursor, true
+	case opDeleteToStart:
+		return 0, cursor, true
+	case opDeleteToEnd:
+		return cursor, lineEnd, true
+	default:
+		return 0, 0, false
 	}
+	return start, start, true
 }
 
 // Token.Start is a whole-input rune offset, whereas Token.Column restarts on
