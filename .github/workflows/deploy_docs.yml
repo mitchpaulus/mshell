@@ -20,8 +20,8 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        cache-dependency-path: mshell/go.sum
-        go-version-file: 'mshell/go.mod'
+        cache-dependency-path: go.sum
+        go-version-file: 'go.mod'
 
     - name: Setup SSH
       run: |
@@ -33,10 +33,8 @@ jobs:
     - name: Build go
       run: cd mshell && go build -o mshell && cp mshell msh
 
-    - name: Set Go PATH, MSHSTDLIB
-      run: |
-        realpath ./mshell >> "$GITHUB_PATH"
-        printf "MSHSTDLIB=%s\n" "$(realpath ./lib/std.msh)" >> "$GITHUB_ENV"
+    - name: Set Go PATH
+      run: realpath ./mshell >> "$GITHUB_PATH"
 
     - name: Build and deploy docs
       run: |

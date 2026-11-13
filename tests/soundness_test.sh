@@ -9,7 +9,6 @@ cd "$(dirname "$0")" || exit 1
 TMP_INIT="$(mktemp)"
 TMP_ERR="$(mktemp)"
 trap 'rm -f "$TMP_INIT" "$TMP_ERR"' EXIT
-export MSHSTDLIB="$(realpath ../lib/std.msh)"
 export MSHINIT="$TMP_INIT"
 export MSH_ERROR_KIND=1
 BINARY="$(realpath ../mshell/mshell)"

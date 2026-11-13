@@ -70,7 +70,7 @@ runs:
       if: steps.mode.outputs.mode == 'source'
       uses: actions/setup-go@v7
       with:
-        go-version-file: ${{ runner.temp }}/mshell-src/mshell/go.mod
+        go-version-file: ${{ runner.temp }}/mshell-src/go.mod
         cache: false
 
     - name: Build mshell from source
@@ -88,9 +88,6 @@ runs:
 
         cd "$SRC_DIR/mshell"
         go build -o "$HOME/.mshell/bin/$BIN"
-
-        # Releases ship std.msh in the tarball; for source builds take it from the repo.
-        cp "$SRC_DIR/lib/std.msh" "$HOME/.mshell/bin/std.msh"
 
     - name: Install mshell
       shell: bash
@@ -148,11 +145,14 @@ runs:
           CONFIG_DIR="$HOME/.config/msh"
         fi
 
-        mkdir -p "$DATA_DIR/$MSH_VERSION"
         mkdir -p "$CONFIG_DIR/$MSH_VERSION"
 
-        # std.msh is placed in the bin directory by both install modes; move it into the versioned startup location.
-        mv "$HOME/.mshell/bin/std.msh" "$DATA_DIR/$MSH_VERSION/std.msh"
+        # Releases up to v0.14.0 read the standard library from a file, std.msh in the
+        # tarball: move it into the versioned startup location.
+        if [ -f "$HOME/.mshell/bin/std.msh" ]; then
+          mkdir -p "$DATA_DIR/$MSH_VERSION"
+          mv "$HOME/.mshell/bin/std.msh" "$DATA_DIR/$MSH_VERSION/std.msh"
+        fi
 
         # Create an empty init.msh so startup succeeds on first run.
         if [ ! -f "$CONFIG_DIR/$MSH_VERSION/init.msh" ]; then

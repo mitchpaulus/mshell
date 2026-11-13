@@ -35,7 +35,7 @@ msh --type-check-only script.msh</code></pre>
 
 <p>
 The checker checks every definition body in the file, and the code outside definitions.
-It also checks the standard library and the startup file, on every run.
+It also checks the startup file, on every run.
 A definition there whose signature or body has a type error is still defined, but code that calls it is refused, with the error.
 A script that does not call it runs, and the errors are printed as a warning.
 </p>

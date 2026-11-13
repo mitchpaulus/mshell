@@ -109,7 +109,9 @@ func takeCoreBuiltins() *coreBuiltins {
 
 // NewCoreBase builds the base: the builtin table, the startup files'
 // declarations, decls, and the signatures of their defs, stdlibDefs, whose
-// bodies are checked too (checkStartupBodies).
+// bodies are checked too (checkStartupBodies). The bodies of the built-in
+// standard library's defs are not checked here: they are the same in every
+// run of a binary, and `go test` checks them (TestBuiltInStdLibChecks).
 func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBase {
 	bi := takeCoreBuiltins()
 	arena, names, res, table := bi.arena, bi.names, bi.res, bi.table
@@ -130,8 +132,9 @@ func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBa
 		b.enums, b.ctors, b.declared, b.declErrs = c.res.enums, c.ctors, c.declared, c.errs
 	}
 	// owned are the startup defs that define their names (a name a builtin
-	// or an earlier def took is refused at run time anyway).
-	var owned []int
+	// or an earlier def took is refused at run time anyway); check are the
+	// ones of them whose bodies are checked.
+	var owned, check []int
 	for i := range stdlibDefs {
 		def := &stdlibDefs[i]
 		id := names.Intern(def.Name)
@@ -139,6 +142,9 @@ func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBa
 			continue
 		}
 		owned = append(owned, i)
+		if def.File != stdLibTokenFile {
+			check = append(check, i)
+		}
 		if table.startupDefs == nil {
 			table.startupDefs = map[NameId]Token{}
 		}
@@ -166,16 +172,21 @@ func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBa
 	c := &coreChecker{arena: b.arena, names: b.names, rel: res.rel, table: b.table, res: *res,
 		defs: map[NameId]*coreSig{}, ctors: b.ctors, declared: b.declared}
 	c.uni = NewUnifier(c.arena, &c.subst, c.rel)
-	b.checkStartupBodies(c, stdlibDefs, owned)
+	// A def that is checked may call any def that owns its name.
+	for _, i := range owned {
+		id := c.names.Intern(stdlibDefs[i].Name)
+		c.defs[id] = &b.table.name(id)[0]
+	}
+	b.checkStartupBodies(c, stdlibDefs, check)
 	return b
 }
 
-// checkStartupBodies checks the bodies of the startup defs std[i] for i in
-// owned, with checker c, as a file's are checked: a body is trusted no
-// more than a script's (design doc, "Checking by default"; plan question
-// 21). A def whose body has an error stays defined, and a call to it is
-// refused with the reason.
-func (b *CoreBase) checkStartupBodies(c *coreChecker, defs []MShellDefinition, owned []int) {
+// checkStartupBodies checks the bodies of the startup defs defs[i] for i in
+// check, with checker c, as a file's are checked: an init file's body is
+// trusted no more than a script's (design doc, "Checking by default"; plan
+// question 21). A def whose body has an error stays defined, and a call to
+// it is refused with the reason.
+func (b *CoreBase) checkStartupBodies(c *coreChecker, defs []MShellDefinition, check []int) {
 	// One file at a time, so each error gets its file; a def's errors are
 	// at or after its name and before the next def's in the same file.
 	type fileDefs struct {
@@ -183,13 +194,12 @@ func (b *CoreBase) checkStartupBodies(c *coreChecker, defs []MShellDefinition, o
 		defs []MShellDefinition
 	}
 	var files []fileDefs
-	for start := 0; start < len(owned); {
-		file := defs[owned[start]].File
+	for start := 0; start < len(check); {
+		file := defs[check[start]].File
 		end := start
-		group := make([]MShellDefinition, 0, len(owned)-start)
-		for end < len(owned) && defs[owned[end]].File == file {
-			def := defs[owned[end]]
-			c.defs[c.names.Intern(def.Name)] = &b.table.name(c.names.Intern(def.Name))[0]
+		group := make([]MShellDefinition, 0, len(check)-start)
+		for end < len(check) && defs[check[end]].File == file {
+			def := defs[check[end]]
 			group = append(group, def)
 			end++
 		}

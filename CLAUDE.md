@@ -6,6 +6,10 @@ This repository is for a concatenative shell language.
 It is implemented in golang, with the go code in `mshell/`.
 User documentation is in `doc/`.
 The standard library for the language is in `lib/std.msh`.
+It is built into the binary (`lib/std.go`), so rebuild after editing it.
+To type check it, run `msh --is-std-lib lib/std.msh --type-check-only lib/std.msh` from the repository root.
+`--is-std-lib FILE` is for development and is left out of `--help` and the completions.
+In an editor, use the code action "Treat this file as the standard library" on one of its definitions.
 Always work in a separate feature branch.
 Do NOT run `gofmt` without my permission. I will tell you when it's allowed.
 

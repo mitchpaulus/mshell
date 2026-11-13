@@ -241,7 +241,7 @@ func TestHTTPCookieJarHTTPIntegration(t *testing.T) {
 	run := func(script string, wantFailure bool) string {
 		t.Helper()
 		cmd := exec.Command(filepath.Join(root, "mshell", "mshell"), "-c", strings.ReplaceAll(script, "BASE", server.URL))
-		cmd.Env = append(os.Environ(), "MSHSTDLIB="+filepath.Join(root, "lib", "std.msh"), "MSHINIT="+initFile)
+		cmd.Env = append(os.Environ(), "MSHINIT="+initFile)
 		out, err := cmd.CombinedOutput()
 		if (err != nil) != wantFailure {
 			t.Fatalf("script error %v:\n%s", err, out)

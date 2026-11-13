@@ -30,14 +30,21 @@ tar -xvf linux_amd64.tar.gz
 
 Put that file in a directory that is in your `$PATH` and make sure it is marked as executable on Linux.
 
-The other file to copy is the standard library, which is included in the release, or is at `lib/std.msh` in this repo.
-For `msh v0.13.0`, put it at `${XDG_DATA_HOME:-$HOME/.local/share}/msh/v0.13.0/std.msh` on Linux/macOS
-or `%LOCALAPPDATA%\msh\v0.13.0\std.msh` on Windows.
-Also create `${XDG_CONFIG_HOME:-$HOME/.config}/msh/v0.13.0/init.msh` on Linux/macOS
+The standard library is built into the binary, so there is no other file to install.
+
+With Go installed, you can instead build and install from source.
+This installs the binary as `mshell`:
+
+```sh
+go install github.com/mitchpaulus/mshell/mshell@latest
+```
+
+Your own startup code goes in an init file.
+For `msh v0.13.0`, create `${XDG_CONFIG_HOME:-$HOME/.config}/msh/v0.13.0/init.msh` on Linux/macOS
 or `%LOCALAPPDATA%\msh\v0.13.0\init.msh` on Windows.
 That init file is required for scripts that declare `VER "v0.13.0"`, but it is optional for interactive use and scripts without `VER`.
-For one-off overrides, `MSHSTDLIB` and `MSHINIT` can point to exact startup files for interactive use and scripts without `VER`.
-Scripts with `VER "vX.Y.Z"` always use the startup files for `vX.Y.Z`.
+For one-off overrides, `MSHINIT` can point to an exact init file for interactive use and scripts without `VER`.
+Scripts with `VER "vX.Y.Z"` always use the init file for `vX.Y.Z`.
 
 An example install script is at [install.sh](https://github.com/mitchpaulus/mshell/blob/main/install.sh) in this repository.
 
@@ -60,8 +67,6 @@ awk -f file_with_contents.awk < input_file_to_process.txt
 msh -c 'sl len wl' < input_file_to_process.txt
 awk 'END { print NR }' < input_file_to_process.txt
 ```
-
-These examples assume the standard library is installed in the normal startup location for your current `msh` version.
 
 
 *Simpler execution of common shell idioms*

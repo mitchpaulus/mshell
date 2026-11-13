@@ -4,7 +4,6 @@ TMP_ERR="$(mktemp)"
 TMP_INIT="$(mktemp)"
 trap 'rm -f "$TMP_FILE" "$TMP_ERR" "$TMP_INIT"' EXIT
 
-export MSHSTDLIB="$(realpath ../../lib/std.msh)"
 export MSHINIT="$TMP_INIT"
 
 BINARY=../../mshell/mshell
