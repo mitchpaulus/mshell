@@ -40,6 +40,8 @@
   #v(0.4em)
   #text(size: 10pt)[Draft for review, 2026-10-08, branch `modules-design` (from `main` at 594776c)]
   #v(0.1em)
+  #text(size: 10pt)[Revised 2026-11-13 for the standard library built into the binary (\#397, `main` at 4fb3564)]
+  #v(0.1em)
   #text(size: 10pt, style: "italic")[Written by Claude from six research passes (reports in `ai/modules-research/`)
   and a read of the current implementation. Your notes in `design/modules.md` and `design/startup_and_versioning.md` are the starting point.]
 ]
@@ -69,7 +71,7 @@ Every rule below was adopted by at least one mature language after the opposite 
   4. *Not transitive.* A file sees only what its own import lines bind. Re-exports are explicit and listed by name (`export s.area`); there is no `export *`.
   5. *Private by default.* An `export` line in the header lists the file's interface. An exported signature may not mention a private enum.
   6. *Declarations only.* An imported file holds `VER`, `import`, `export`, `def`, `type` and `enum`, and nothing else. Importing runs no code, pushes nothing, and registers nothing (no completions, no prompt, no env).
-  7. *`VER` fixes the bare names.* Every imported file declares `VER`. A file's bare words resolve against the builtins and std words that existed at *its* `VER`, like a Rust edition. Stdlib growth can then never break or reinterpret a published module.
+  7. *`VER` fixes the bare names.* Every imported file declares `VER`. A file's bare words resolve against the builtins and std words that existed at *its* `VER`, like a Rust edition. Stdlib growth can then never break or reinterpret a published module. Builtins and std are both part of the binary (\#397), so a release has exactly one such set.
   8. *Sealed and local files* (Dhall's rule). A file reached through a hash is _sealed_ and may import only by hash. The root script and plain local files may import local files by relative path without a hash. "Hash required to run" becomes "a hash is required to enter sealed code", which is the property that matters for sharing and security.
   9. *No version resolution, ever.* Two hashes of one library both load. Defs and structural types work across them; enums are distinct types, identified by (file, name).
   10. *No implicit network.* Running never fetches. `msh fetch` fills a content-addressed store, and the hash, not the URL, is what gets looked up.
@@ -90,8 +92,8 @@ The decisions that are yours to make are collected in @sec-decisions.
 The two biggest are whether scripts stop loading `init.msh` (I recommend yes) and the sealed/local split in item 8, which relaxes your "hash is required to run".
 
 #callout("Found along the way", none)[
-  A one-line `init.msh` holding `type T = int` turns std.msh's generic `T` into `int`.
-  I reproduced it on `main`: `foldl`, `concat` and several completion defs then fail to check on every run.
+  A one-line `init.msh` holding `type T = int` turns the standard library's generic `T` into `int`.
+  I reproduced it on `main`, and again after \#397: `foldl` then takes only ints, so a script that folds a list of strings is refused.
   Per-file type scopes fix it as a side effect; a direct fix is in @sec-incidental with the other small findings.
 ]
 
@@ -126,16 +128,18 @@ These come from reading the source and running a binary built from HEAD (details
   [`alias.name` needs no lexer change and composes with prefix quotes. Dotted words are also common command arguments (`notes.txt`, `python3.11`).],
   [`:` always ends a word. `mod:word` lexes as `mod` then the getter `:word`; `mod::word` as two `COLON`s.],
   [`:` and `::` are unavailable, and `mod:word` would be a plausible *wrong* parse (field `word` of `mod`).],
-  [There is no `source`, `import`, `include` or file `eval`. The only multi-file path is std.msh, then init.msh, then the script, concatenated into one def slice.],
+  [There is no `source`, `import`, `include` or file `eval`. The only multi-file path is the built-in standard library, then init.msh, then the script, concatenated into one def slice.],
   [Every name a program can call is known before it runs. Nothing has to be undone.],
-  [Within and across those files, forward references and mutual recursion work. std.msh can call a def from init.msh (verified: it prints 42, no warning).],
-  [Keep order-independence within a file. Across files the dependency direction must follow the import graph.],
+  [The standard library is built into the binary (\#397, `lib/std.go`). It is not read from a file and cannot be replaced: the data directory lookup and `MSHSTDLIB` are gone. Messages give its positions as `<built-in std.msh>:line:column`.],
+  [Builtins and std are one unit, fixed by the binary's version. The name set of a release has one source, and no environment variable or stray file can change what a bare word means. Std's identity is the binary's version, so it needs no hash (@sec-ver).],
+  [Within and across those files, forward references and mutual recursion work. The def table is flat, so before \#397 a std.msh could call a def that only init.msh defines. Now `go test` checks the standard library with no init file loaded, so such a call fails there as an unknown identifier.],
+  [Keep order-independence within a file. Across files the dependency direction must follow the import graph. The standard library already does: it depends on nothing outside the binary.],
   [Startup top-level code runs on the script's stack and variables. init.msh's variables and env changes are visible to the script.],
   [A module must never see this. Whether *scripts* should see it is @sec-init.],
   [All startup `type`/`enum` declarations are declared before any startup signature is resolved, and "a single letter that is not a type is a generic" is decided against that global table.],
   [The `type T = int` bug above. Type names must be per file.],
-  [Every startup def body is re-checked on every run: std.msh is about 3 ms of a roughly 9 ms start. Nothing is cached across runs *because nothing guarantees the files are unchanged* (`ai/type-system-progress.md`).],
-  [Content-addressed files remove exactly that objection. A check result can be cached by hash.],
+  [init.msh's def bodies are re-checked on every run, *because nothing guarantees the file is unchanged* (`ai/type-system-progress.md`). The standard library's were too, until \#397. Its bytes are now the same in every run of a binary, so `go test` checks its bodies once per build (`TestBuiltInStdLibChecks`) and a run checks none of them. A one-line script with an empty init went from 5.6 ms to 4.1 ms (i9-13900, binaries built from c551f62 and 4fb3564).],
+  [This is the caching argument, already applied once: fixed bytes, so one check is enough. Content-addressed files give the same guarantee for code outside the binary, and a check result can be cached by hash.],
   [`'complete'` metadata registers a completion def globally by command name, as a side effect of a file being loaded.],
   [Registration on import is Haskell's orphan-instance problem under another name (@sec-init).],
   [The Rocq core has one flat global environment: `WCall` takes a `string`, `genv` has `g_sigs` and `g_ctors`, and `tw_case` quantifies over `g_ctors` (exhaustiveness).],
@@ -377,7 +381,7 @@ The separator question is purely lexical.
   [Hashing a transport format (archives)], [Bazel and Homebrew in GitHub's January 2023 change, Roc], [Hash the file's bytes],
   [Semantic (normalized-AST) hash], [Dhall 2.0.0, Unison structural types], [Byte hash plus Merkle import lines],
   [Silent normalization before hashing], [(a hazard)], [Reject CR and BOM in sealed files, never normalize],
-  [Ambient environment changes meaning], [`.ghc.environment`, `BASH_ENV`, `NIX_PATH`, `PYTHONPATH`], [No search path; scripts don't load `init.msh` (@sec-init)],
+  [Ambient environment changes meaning], [`.ghc.environment`, `BASH_ENV`, `NIX_PATH`, `PYTHONPATH`], [No search path; std is built into the binary (`MSHSTDLIB` is gone); scripts don't load `init.msh` (@sec-init)],
   [Cycles that "work" by skipping a half-loaded file], [Factor, Forth, Python, Elvish], [Cycle error that prints the path],
   [Lazy checking of unreferenced code], [Zig], [Check everything loaded],
   [Name resolution that depends on types], [Koka, Nim], [Resolution is a pass before type checking],
@@ -559,8 +563,9 @@ It is fatal for a frozen file unless layer 3 cannot grow under it, which is what
 
 A hash pins bytes.
 What those bytes mean depends on the interpreter and std they run under.
-Today `VER` pins both for a *root* script by re-running it with `msh-<ver>`.
-One process cannot run two interpreters, so a v0.15 script importing a v0.12 library runs the library on v0.15.
+Since \#397 those are one thing: std is built into the binary, so a binary's version fixes both.
+`VER` pins them for a *root* script by re-running it with `msh-<ver>`.
+One process cannot run two interpreters, so a v0.15 script importing a v0.12 library runs the library on v0.15, with v0.15's builtins and v0.15's std.
 That leaves two hazards:
 
 - *Collision.* The library defines `chunk2`, and v0.14 adds `std.chunk2`. Under no-shadowing the library no longer loads, and its users cannot fix a hashed file.
@@ -572,14 +577,17 @@ The options:
   columns: (auto, 1.3fr, 1.3fr),
   [*Option*], [*How*], [*Cost*],
   [A. One `VER` per program], [Libraries run under the root's `VER`; a library's `VER` is a minimum.], [Both hazards stay. You would need two more rules: locals shadow std in sealed files, and sealed files lose the bare-word-to-string fallback (all command words quoted).],
-  [*B. `VER` is an edition for names*], [Every imported file declares `VER`. The bare words of a file resolve against the builtins and std words that existed at its `VER`. The interpreter's version must be at least every file's `VER`.], [A table from each builtin and std name to the release that introduced it (and removed it, if ever), generated at release time from tags. Removed or changed builtins remain a normal compatibility problem.],
-  [C. Every file pins a std hash], [std becomes an ordinary sealed module per version.], [Builtins live in Go and change too; this only solves half and adds a second std mechanism.],
+  [*B. `VER` is an edition for names*], [Every imported file declares `VER`. The bare words of a file resolve against the builtins and std words that existed at its `VER`. The interpreter's version must be at least every file's `VER`.], [A table from each builtin and std name to the release that introduced it (and removed it, if ever), generated at release time from each tag's `lib/std.msh` and `BuiltInList.go`, and built into the binary as std is. Removed or changed builtins remain a normal compatibility problem.],
+  [C. Every file pins a std hash], [std becomes an ordinary sealed module per version.], [It runs against \#397: std is part of the binary, not a file, and cannot be replaced. Every binary would have to carry or fetch each old std, whose text calls builtins that live in Go and change too. This only solves half and adds a second std mechanism.],
 )
 
 Option B is the only one under which stability under extension (T2) holds without changing any existing rule.
 That covers the no-shadowing rule and the string fallback.
 It is Rust's edition idea scoped to the one thing that grows: the set of names.
+The edition fixes which names a file can see; what a name does comes from the running binary, for std words exactly as for builtins.
 The table is data, and generating it can be a step in the release checklist in `CLAUDE.md`.
+Because std is built in, the table's row for the binary's own version can be tested against the names that binary really has, in `go test` beside `TestBuiltInStdLibChecks`.
+Before \#397 that test was not possible: the std a binary ran with was whatever file it found.
 
 #rec[
   Option B.
@@ -626,7 +634,7 @@ The scripting research summarizes it in one table (§11 of `03-scripting-shells.
   - "checking runs code";
   - import order becoming semantics forever (Python's PEP 690).
 
-mshell's std.msh already has no top-level code.
+mshell's standard library already has no top-level code.
 
 #rec[
   An imported file contains only `VER`, `import`, `export`, `def`, `type` and `enum`.
@@ -710,7 +718,9 @@ mshell already allows mutual recursion *within* a file, so a cycle between files
 - `'https://host/path/x.msh'`: HTTPS only, redirects re-validated (Roc), size-capped.
 - `'gh:owner/repo@<40-hex commit>/path/x.msh'`: the full commit, never a branch or tag, because refs move (Uiua's floating default, `boltdb-go`). It is fetched as raw blob bytes, never a generated archive.
 
-*The store* is `$XDG_DATA_HOME/msh/store/sha256/<hex>.msh`.
+*The store* is `$XDG_DATA_HOME/msh/store/sha256/<hex>.msh` (`%LOCALAPPDATA%\msh\store\…` on Windows).
+It is not under a version directory, as std.msh was: a hash means the same file to every version of `msh`.
+Since \#397 the data directory holds no code that `msh` needs to start, so the store would be the only code in it, and a script with no imports needs nothing from it.
 It is data, not cache: if the host disappears, the store is the only copy (left-pad).
 Files are written to a staging name, verified, renamed atomically (Roc, Zig), and made read-only.
 Every load re-hashes, at a cost of about 0.18 ms per 20 KB on the slowest machine (@sec-hash).
@@ -753,16 +763,19 @@ Otherwise someone else changed it; the pinned version is not in the store.
 == Type checking and caching <sec-checking>
 
 - *Eager.* Every def in every loaded file is checked, whether or not it is reachable. This avoids Zig's lazy-analysis problem: broken code that ships because nothing called it.
-- *Strict for imports.* A file that does not check cannot be imported, and the import line is the error site. Today's lenient policy for broken startup defs ("refused if called, warning otherwise") stays for std and init only.
+- *Strict for imports.* A file that does not check cannot be imported, and the import line is the error site. Today's lenient policy for broken startup defs ("refused if called, warning otherwise") stays for init.msh only. The standard library needs no policy: its bodies are checked when the binary is built, not when it runs (\#397).
 - *Separate.* Each file is checked against its own declarations, the type-closed interfaces of its direct imports, and the builtin and std signatures of its `VER`. Nothing else is in scope: no init, no top-level variables, no other files. Checking order is any topological order (T5).
 - *Cacheable.*
-  - A sealed file's verdict and interface are a function of (checker version, file hash), because its dependencies' interfaces are pinned by its bytes.
+  - The standard library is the first case (\#397): its bytes are fixed by the binary, so its bodies are checked once per build and never at run time. A sealed file is the same argument with the hash in place of the binary.
+  - A sealed file's verdict and interface are a function of (checker version, file hash), because its dependencies' interfaces are pinned by its bytes. The checker version is the binary's version, which now fixes std's signatures too, so std needs no entry of its own in the key.
   - A local file's key is (checker version, hash of its bytes, interface hashes of its direct imports).
   - Interface hashes also allow early cutoff: if a local dependency's body changes but its interface does not, its importers need not be re-checked.
 
 Within one process, each module can become one frozen overlay of the base arena (`TypeArena.Overlay`, `NameTable.Overlay`), built in topological order.
 A cache across processes needs the arena serialized or re-interned.
 Measure first; with a handful of small modules, checking from scratch may well be cheaper than reading a cache.
+One data point from \#397: no longer finding, reading and body-checking std.msh (96 defs) saved about 1.5 ms of a 5.6 ms start.
+That is the most a persistent cache could save for a module of that size, before the cost of reading the cache.
 
 #rec[
   v1: eager, strict, separate checking with in-process overlays, and no persistent cache.
@@ -774,6 +787,7 @@ Measure first; with a handful of small modules, checking from scratch may well b
 *Scripts and `init.msh`.*
 Today a script declaring `VER` *requires* the versioned `init.msh`, and the script runs on the stack, variables and env that init left.
 Every script's meaning therefore depends on an unhashed, per-user file.
+Since \#397 it is the only one: std.msh was a second, found through the data directory or `MSHSTDLIB`, and is now part of the binary.
 This repeats `BASH_ENV`, `.zshenv`, fish's `config.fish`, Python's `.pth` and GHC environment files; each was later restricted.
 It also makes "the code tree is a function of the root" false before modules even exist.
 
@@ -1008,7 +1022,9 @@ Required for v1, because the Merkle design is not usable without them:
 )
 
 Later: `msh update`, `msh diff OLD NEW` (an API diff from signatures, as in Elm's `toMagnitude`), `msh audit` (effectful builtins reachable per module), and `msh bundle` (inline a tree into one self-contained script).
-The language server gains go-to-definition (the file of a global name is known), `alias.` completion, and an "add import" code action (Factor's restarts, never applied automatically at run time).
+The language server gains go-to-definition across files (the file of a global name is known), `alias.` completion, and an "add import" code action (Factor's restarts, never applied automatically at run time).
+A sealed file opens straight from the store, where it is already read-only.
+A std name has no file to open, so it keeps the temporary read-only copy that \#397 added.
 Per `CLAUDE.md`, new subcommands also need updates to `__mshCompletion` and `msh completions <shell>`.
 
 = What can be proven <sec-proof>
@@ -1027,6 +1043,11 @@ The candidates, ordered by value per unit of effort, are from `05-theory-integri
   [T6], [*Modular soundness* (Cardelli). If every file checks against its direct imports' type-closed interfaces and the interfaces are honest, the linked program satisfies `gdefs_ok`, and `soundness_generic` applies to the root.], [highest], [800–1500, 1–2 weeks],
   [T7], [*Sound cache keys.* The verdict for F is a function of (checker, `VER`, F's bytes, the interface hashes of F's direct imports).], [high for speed], [small after T6],
 )
+
+*The standard library in these statements.*
+`N_v` and the signatures behind `GStd` names are parameters of the model, and \#397 makes them a function of the binary's version alone.
+Before it, the std file found through the data directory or `MSHSTDLIB` was a hidden input to T2, T3 and T7.
+Now T3's "the environment affects only whether loading succeeds" holds for std as well, and "checker" in T7's key is the binary's version and covers std's signatures.
 
 *Strategy: translate, don't extend the core.*
 The module layer elaborates into the existing core, the F-ing-modules approach:
@@ -1123,7 +1144,8 @@ If it turns out not to be small, the answer is root overrides (@sec-overrides), 
   [Search paths (`MSHPATH`, `sys.path`, `NU_LIB_DIRS`)], [ambient resolution; the `random.py` and `.`-in-`@INC` class of bugs],
   [Capability annotations on imports (Deno permissions)], [`['sh' '-c' …]` gives full authority anyway; security theatre at real complexity cost; `msh audit` is the cheap substitute],
   [Functors, Backpack, mixins, local modules], [solve problems mshell does not have; quotations already parameterize behaviour],
-  [Namespacing the stdlib (`str.len`)], [min's most breaking release; one owner, pinned by `VER`: flat names are fine],
+  [Namespacing the stdlib (`str.len`)], [min's most breaking release; one owner, built into the binary, names pinned by `VER`: flat names are fine],
+  [The standard library as a hashed module], [it is part of the binary (\#397) and versioned with the builtins it calls; Option C in @sec-ver],
   [Signing, TUF, a sumdb-like transparency log], [run-time identity is already the hash; revisit only if a name registry appears],
 )
 
@@ -1154,13 +1176,18 @@ If it turns out not to be small, the answer is root overrides (@sec-overrides), 
 = Incidental findings <sec-incidental>
 
 These came up while reading the implementation.
-They are independent of modules, and none was changed.
+They are independent of modules, and none was changed on this branch.
+\#397 has since closed the second and changed how the first shows up.
 
-+ *Generic capture by startup types* (reproduced). With `type T = int` in init.msh, std.msh's generic `T` becomes `int` in every signature (`NewCoreBase` declares all startup decls before resolving any signature, `TypeCore.go:115-161`). `foldl`, `concat` and several completion defs then fail on every run. A script's own `type a = int` does the same to its own `(a -- a)` signatures. Per-file type scopes fix the cross-file case. A direct fix for both is to reject type names that match the generic pattern (one letter, optional digits).
-+ *Inverted startup dependency.* std.msh can call a def that only init.msh defines (verified; no warning). Modules fix it structurally; until then, check std as if init did not exist.
++ *Generic capture by startup types* (reproduced, and again on 4fb3564). With `type T = int` in init.msh, the standard library's generic `T` becomes `int` in every signature (`NewCoreBase` declares all startup decls before resolving any signature, `TypeCore.go:115-170`).
+  - Before \#397, `foldl`, `concat` and several completion defs then failed their body checks, with a warning on every run.
+  - Since \#397 the standard library's bodies are not checked at run time, so a script that calls none of the affected defs runs with no message, and `concat` works again.
+  - The wrong signatures remain: `(+) "" ["a" "b"] foldl` is refused with "'foldl' expected int at argument 1, got str".
+  A script's own `type a = int` does the same to its own `(a -- a)` signatures. Per-file type scopes fix the cross-file case. A direct fix for both is to reject type names that match the generic pattern (one letter, optional digits).
++ *Inverted startup dependency* (closed by \#397). A std.msh could call a def that only init.msh defines, with no warning. The standard library is now checked in `go test` with no init file, which is what this finding asked for, and it cannot be replaced at run time. I checked with a copy of std.msh that calls an init-only def: `msh --is-std-lib copy.msh --type-check-only copy.msh` reports "unknown identifier".
 + *Nested `def` or `type` in a def body* is not rejected by the parser. The checker then reports "the type checker has no rule for 'def'; please report this".
-+ *Checker-only names.* `NewCoreBase` silently skips a startup def whose name is in the checker's core table but not in `BuiltInList` (`TypeCore.go:133-138`). There is no current collision.
-+ *Stale design docs.* `ai/type-system-plan.md:171` and `ai/type-system-progress.md` still describe the lazy base removed in \#356.
++ *Checker-only names.* `NewCoreBase` silently skips a startup def whose name is in the checker's core table but not in `BuiltInList` (`TypeCore.go:140-143`). There is no current collision.
++ *Stale design docs.* `ai/type-system-plan.md:171` and `ai/type-system-progress.md` still describe the lazy base removed in \#356. `design/startup_and_versioning.md` still describes `MSHSTDLIB` and the std.msh lookup in the data directory, both removed in \#397.
 + *VS Code grammar.*
   - `x!` is scoped `variable.other.retreive` and `@x` is scoped `variable.other.set`; they look swapped.
   - The keyword regex `\b(…)\b` would highlight `str` inside `str.trim`, and variable patterns are ASCII-only with no `.`.
@@ -1174,15 +1201,17 @@ File and line references are from `00-mshell-internals.md`.
 - *Lexer:* no change for `alias.name`. `import` and `export` are recognized only as the first word of a header line, not as global keywords (decision 7).
 - *Parser:* header grammar (`VER`, `import`, `export`); reject imports and exports after the body starts; reject top-level items in non-root files; reject `.` in declared names; also reject nested `def`/`type`.
 - *Resolver:* new pass producing global names for words, type names and members, in every syntactic position (calls, prefix quotes, signatures, `as`, `tryAs`, `match` patterns, enum payloads).
-- *Loader:* store, hashing, CR/BOM checks, cycle detection, sealed/local rules, all in `Main.go` beside `loadStartupDefinitions`.
-- *Evaluator:* the def table is keyed by global name rather than spelling (`lookupDefinition`, `defIndex`). The `completionDefs` builtin must call a def by identity, not by its bare name (`Evaluator.go:6486`).
+- *Loader:* store, hashing, CR/BOM checks, cycle detection, sealed/local rules, all in `Main.go` beside `loadStartupDefinitions`. The standard library needs no loader work: `parseStdLib` reads it from the binary (`lib.Std`).
+- *Evaluator:* the def table is keyed by global name rather than spelling (`lookupDefinition`, `defIndex`). The `completionDefs` builtin must call a def by identity, not by its bare name (`Evaluator.go:6546`).
 - *Type checker:*
   - a per-file declaration scope, which also fixes the generic-capture bug;
-  - a base per `VER` name set;
+  - a base per `VER` name set, which leaves out the std defs (the ones whose file is `stdLibTokenFile`) and builtins newer than that `VER`;
   - one overlay per module in topological order;
   - interface extraction and hashing.
-- *Name sets:* the name→version table, generated at release, plus a release-checklist step in `CLAUDE.md`.
-- *LSP and REPL:* `alias.` lexes as a prefix quote while it is being typed, so completion needs a branch for it. Also go-to-definition, hover keyed by global name, and an alias-aware `IsDefinitionDefined`.
+  `NewCoreBase` already skips the body check for defs it knows are fixed (std). Sealed files with a cached verdict are the same branch.
+- *Name sets:* the name→version table, generated at release and built into the binary beside `lib/std.go`, a `go test` that its newest row matches the binary's own names, plus a release-checklist step in `CLAUDE.md`.
+- *Messages:* a position names its file through a `TokenFile`. The standard library's is `<built-in std.msh>`; a sealed file needs a printable name too, such as the locator's file name with the first hex digits of the hash.
+- *LSP and REPL:* `alias.` lexes as a prefix quote while it is being typed, so completion needs a branch for it. Also go-to-definition into imported files, hover keyed by global name, and an alias-aware `IsDefinitionDefined`.
 - *Editors:* `code/`, `sublime/`, `Notepad++/`.
 - *Docs:* user docs and `doc/mshell.md`, limited to user-facing behaviour.
 
