@@ -129,6 +129,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The standard library is built into the `msh` binary. There is no `std.msh` to install, and release archives hold only the binary.
+  A `std.msh` left in the data directory by an earlier install is not read, and the `MSHSTDLIB` environment variable is no longer used.
+  In messages, a standard library definition's position is given as `<built-in std.msh>:line:column`.
+- `msh` can be installed with `go install github.com/mitchpaulus/mshell/mshell@latest`.
+- LSP: go to declaration on a standard library name opens a temporary read-only copy of the standard library.
 - When `msh edit init` or `msh bin edit` cannot open the file, the error names the file and says what was tried and why each attempt failed:
   `EDITOR` not set, not found, not executable, or exited with an error, and the default opener (`xdg-open`, `open`, or PowerShell) missing, timing out, or failing, with its output.
   An editor that starts and then fails is reported, instead of also running the default opener.

@@ -8,7 +8,6 @@ TMP="$(mktemp)"
 # An empty init file, so the user's own does not change the results.
 TMP_INIT="$(mktemp)"
 trap 'rm -f "$TMP" "$TMP_INIT"' EXIT
-export MSHSTDLIB="$(realpath ../lib/std.msh)"
 export MSHINIT="$TMP_INIT"
 MSH="${MSH:-$(realpath ../mshell/msh)}"
 

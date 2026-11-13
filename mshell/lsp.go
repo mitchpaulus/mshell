@@ -20,10 +20,20 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/mitchpaulus/mshell/lib"
 	"go.lsp.dev/protocol"
 )
 
 const jsonrpcVersion = "2.0"
+
+// treatAsStdLibCommand is the workspace/executeCommand command that says a
+// document is the file the built-in standard library is built from
+// (lib/std.msh): the document is then checked alone, as the standard
+// library is, so its definitions do not collide with the built-in ones.
+// Its one argument is the document's URI. The code action
+// treatAsStdLibTitle sends it.
+const treatAsStdLibCommand = "mshell.treatAsStdLib"
+const treatAsStdLibTitle = "Treat this file as the standard library"
 
 const (
 	jsonrpcCodeParseError     = -32700
@@ -64,6 +74,14 @@ type lspServer struct {
 	// (startupFilesBefore), in a base of its own (prefixBases[n] for the
 	// first n files, built on first use).
 	startupFiles []lspStartupFile
+	// stdLibCopy is the file the built-in standard library's text was
+	// written to for "go to definition", or "" before the first such
+	// request (stdLibCopyPath). stdLibDocs are the documents the editor
+	// said to treat as the standard library (treatAsStdLibCommand), until
+	// the server stops. stdLibMu guards both.
+	stdLibMu   sync.Mutex
+	stdLibCopy string
+	stdLibDocs map[protocol.DocumentURI]bool
 	prefixMu     sync.Mutex
 	prefixBases  map[int]*CoreBase
 	// sessions holds, for each base, sessions that checked the top-level
@@ -123,6 +141,9 @@ type lspCheck struct {
 	diags []protocol.Diagnostic
 	// fixes are the errors with a fix, as code actions offer them.
 	fixes []lspTypeFix
+	// stdLibDups are the errors for a name the built-in standard library
+	// already defines (treatAsStdLibActions).
+	stdLibDups []protocol.Diagnostic
 }
 
 // lspTypeFix is a type error with a fix: its diagnostic and its edit.
@@ -279,15 +300,16 @@ func RunLSP(in io.Reader, out io.Writer) error {
 		envNames:  make(map[string]struct{}),
 	}
 
-	if files, startupErrs, err := loadStartupFilesForLSP(); err != nil {
-		logLSP(fmt.Sprintf("type-check diagnostics: stdlib unavailable (%v); proceeding without stdlib sigs", err))
-	} else {
-		server.startupFiles, server.startupErrs = files, startupErrs
-		server.stdlibDefs, server.startupDecls = joinStartupFiles(files)
+	files, startupErrs, err := loadStartupFilesForLSP()
+	if err != nil {
+		return err
 	}
+	server.startupFiles, server.startupErrs = files, startupErrs
+	server.stdlibDefs, server.startupDecls = joinStartupFiles(files)
 
 	server.builtinSigs, server.stdlibHover = buildHoverIndex(server.base(), server.stdlibDefs)
 
+	defer server.removeStdLibCopy()
 	return server.run()
 }
 
@@ -335,18 +357,22 @@ func buildHoverIndex(base *CoreBase, stdlibDefs []MShellDefinition) (map[string]
 // they were parsed from, for the positions of their tokens; the tokens'
 // lexemes share its string, so keeping it costs only its lines.
 type lspStartupFile struct {
-	path  string
-	defs  []MShellDefinition
-	decls []MShellParseItem
-	top   *MShellFile
-	doc   *lspDocument
+	// path is the file, or for the built-in standard library, which has
+	// none, the name error messages give it.
+	path string
+	// stdLib says this is the built-in standard library.
+	stdLib bool
+	defs   []MShellDefinition
+	decls  []MShellParseItem
+	top    *MShellFile
+	doc    *lspDocument
 }
 
 // loadStartupForLSP reads the startup files for their definitions and
 // declarations, as a script run from the command line sees them: the
-// standard library (honoring MSHSTDLIB), and the user's init file (honoring
-// MSHINIT) if it is there and parses. Bodies are not evaluated; the checker
-// needs only the signatures and declarations.
+// built-in standard library, and the user's init file (honoring MSHINIT)
+// if it is there and parses. Bodies are not evaluated; the checker needs
+// only the signatures and declarations.
 func loadStartupForLSP() ([]MShellDefinition, []MShellParseItem, error) {
 	files, _, err := loadStartupFilesForLSP()
 	defs, decls := joinStartupFiles(files)
@@ -371,23 +397,19 @@ func joinStartupFiles(files []lspStartupFile) ([]MShellDefinition, []MShellParse
 // command line fails on it. The init file is listed either way, so a
 // document that is the init file is still known as one.
 func loadStartupFilesForLSP() ([]lspStartupFile, []string, error) {
-	stdlibSpec, initSpec, err := getStartupFileSpecs(startupLoadOptions{
+	parsed, err := parseStdLib()
+	if err != nil {
+		return nil, nil, err
+	}
+	files := []lspStartupFile{{path: stdLibTokenFile.Path, stdLib: true, defs: parsed.Definitions, decls: declarationItems(parsed.Items), top: startupTopLevel(parsed), doc: newLSPDocument(lib.Std)}}
+	initSpec, err := getInitFileSpec(startupLoadOptions{
 		version:           mshellVersion,
 		allowEnvOverrides: true,
 	})
 	if err != nil {
-		return nil, nil, err
+		logLSP(fmt.Sprintf("cannot tell where the init file is (%v); proceeding without it", err))
+		return files, nil, nil
 	}
-	source, err := os.ReadFile(stdlibSpec.path)
-	if err != nil {
-		return nil, nil, err
-	}
-	text := string(source)
-	parsed, err := parseMShellInput(text, &TokenFile{stdlibSpec.path})
-	if err != nil {
-		return nil, nil, err
-	}
-	files := []lspStartupFile{{path: stdlibSpec.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items), top: startupTopLevel(parsed), doc: newLSPDocument(text)}}
 	var startupErrs []string
 	if source, err := os.ReadFile(initSpec.path); err == nil {
 		init := lspStartupFile{path: initSpec.path}
@@ -402,6 +424,58 @@ func loadStartupFilesForLSP() ([]lspStartupFile, []string, error) {
 		files = append(files, init)
 	}
 	return files, startupErrs, nil
+}
+
+// startupPaths are the startup files' paths, in load order, for telling
+// whether a document is one of them (startupFilesBefore). The built-in
+// standard library is a file only once its text was written out for "go to
+// definition": that copy is then the standard library, so it is checked
+// alone when it is opened, and not against the definitions it holds.
+func (s *lspServer) startupPaths() []string {
+	paths := make([]string, len(s.startupFiles))
+	for i, f := range s.startupFiles {
+		paths[i] = f.path
+		if f.stdLib {
+			s.stdLibMu.Lock()
+			paths[i] = s.stdLibCopy
+			s.stdLibMu.Unlock()
+		}
+	}
+	return paths
+}
+
+// stdLibCopyPath is a file holding the built-in standard library's text,
+// written on the first call, for "go to definition" on one of its names to
+// open. It is a copy to read: msh never reads it back, so a change to it
+// changes nothing.
+func (s *lspServer) stdLibCopyPath() (string, error) {
+	s.stdLibMu.Lock()
+	defer s.stdLibMu.Unlock()
+	if s.stdLibCopy != "" {
+		return s.stdLibCopy, nil
+	}
+	dir, err := os.MkdirTemp("", "msh-std-"+mshellVersion+"-")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "std.msh")
+	if err := os.WriteFile(path, []byte(lib.Std), 0o444); err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+	s.stdLibCopy = path
+	return path, nil
+}
+
+// removeStdLibCopy removes the file stdLibCopyPath wrote, when the server
+// stops.
+func (s *lspServer) removeStdLibCopy() {
+	s.stdLibMu.Lock()
+	defer s.stdLibMu.Unlock()
+	if s.stdLibCopy != "" {
+		os.RemoveAll(filepath.Dir(s.stdLibCopy))
+		s.stdLibCopy = ""
+	}
 }
 
 func (s *lspServer) run() error {
@@ -501,6 +575,9 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 				TextDocumentSync:  protocol.TextDocumentSyncKindIncremental,
 				HoverProvider:     true,
 				CodeActionProvider: true,
+				ExecuteCommandProvider: &protocol.ExecuteCommandOptions{
+					Commands: []string{treatAsStdLibCommand},
+				},
 				CompletionProvider: &protocol.CompletionOptions{
 					TriggerCharacters: []string{"@", "$"},
 				},
@@ -607,6 +684,21 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 			return false, nil
 		}
 		return false, s.sendResult(msg.ID, s.codeActions(params))
+	case "workspace/executeCommand":
+		if msg.ID == nil {
+			logLSP("executeCommand request missing id")
+			return false, nil
+		}
+		var params protocol.ExecuteCommandParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeInvalidParams, fmt.Sprintf("invalid executeCommand params: %v", err))
+			return false, nil
+		}
+		if err := s.executeCommand(params); err != nil {
+			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeInvalidParams, err.Error())
+			return false, nil
+		}
+		return false, s.sendResult(msg.ID, nil)
 	case "textDocument/prepareRename":
 		if msg.ID == nil {
 			logLSP("prepareRename request missing id")
@@ -684,6 +776,7 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 		return actions
 	}
 	actions = append(actions, s.typeFixActions(doc, params)...)
+	actions = append(actions, s.treatAsStdLibActions(doc, params)...)
 	if codeActionKindRequested(params.Context.Only, protocol.RefactorRewrite) {
 		if a, ok := quoteLiteralsAction(doc, file, params); ok {
 			actions = append(actions, a)
@@ -693,6 +786,79 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 		}
 	}
 	return actions
+}
+
+// treatAsStdLibActions offers, on a definition in a file named std.msh
+// whose name the built-in standard library already defines, to treat the
+// file as the standard library (treatAsStdLibCommand). Only a file named
+// std.msh gets the offer: in any other file such a definition is a
+// mistake, and taking the offer there would leave the file without the
+// standard library.
+func (s *lspServer) treatAsStdLibActions(doc *lspDocument, params protocol.CodeActionParams) []protocol.CodeAction {
+	uri := params.TextDocument.URI
+	if !codeActionKindRequested(params.Context.Only, protocol.QuickFix) || filepath.Base(documentPath(uri)) != "std.msh" {
+		return nil
+	}
+	for _, diag := range s.checked(uri, doc).stdLibDups {
+		if rangesOverlap(diag.Range, params.Range) {
+			return []protocol.CodeAction{{
+				Title:       treatAsStdLibTitle,
+				Kind:        protocol.QuickFix,
+				Diagnostics: []protocol.Diagnostic{diag},
+				Command: &protocol.Command{
+					Title:     treatAsStdLibTitle,
+					Command:   treatAsStdLibCommand,
+					Arguments: []any{string(uri)},
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// executeCommand runs a workspace/executeCommand request.
+func (s *lspServer) executeCommand(params protocol.ExecuteCommandParams) error {
+	if params.Command != treatAsStdLibCommand {
+		return fmt.Errorf("unknown command %q", params.Command)
+	}
+	if len(params.Arguments) != 1 {
+		return fmt.Errorf("%s takes one argument, the document's URI", treatAsStdLibCommand)
+	}
+	uri, ok := params.Arguments[0].(string)
+	if !ok || uri == "" {
+		return fmt.Errorf("%s takes one argument, the document's URI", treatAsStdLibCommand)
+	}
+	s.treatAsStdLib(protocol.DocumentURI(uri))
+	return nil
+}
+
+// treatAsStdLib records that the document uri is the standard library
+// until the server stops, and checks the document again if it is open.
+func (s *lspServer) treatAsStdLib(uri protocol.DocumentURI) {
+	s.stdLibMu.Lock()
+	if s.stdLibDocs == nil {
+		s.stdLibDocs = map[protocol.DocumentURI]bool{}
+	}
+	s.stdLibDocs[uri] = true
+	s.stdLibMu.Unlock()
+	if doc, ok := s.documents[uri]; ok {
+		// A new document of the same text, so it is checked again.
+		s.updateDocument(uri, doc.Text)
+	}
+}
+
+// startupFilesBeforeDocument is how many of the startup files the
+// document uri is checked after: all of them, unless the document is one
+// of them (startupFilesBefore), and none if the editor said it is the
+// standard library (treatAsStdLibCommand).
+func (s *lspServer) startupFilesBeforeDocument(uri protocol.DocumentURI) int {
+	s.stdLibMu.Lock()
+	isStdLib := s.stdLibDocs[uri]
+	s.stdLibMu.Unlock()
+	if isStdLib {
+		return 0
+	}
+	return startupFilesBefore(documentPath(uri), s.startupPaths()...)
 }
 
 // typeFixActions offers the fixes the core checker attaches to its errors:
@@ -1329,12 +1495,8 @@ func (s *lspServer) base() *CoreBase {
 // before it, as the command line runs it, so its own definitions are not
 // also loaded as the startup file's.
 func (s *lspServer) baseFor(uri protocol.DocumentURI) (*CoreBase, []lspStartupFile, []string) {
-	paths := make([]string, len(s.startupFiles))
-	for i, f := range s.startupFiles {
-		paths[i] = f.path
-	}
-	n := startupFilesBefore(documentPath(uri), paths...)
-	if n == len(paths) {
+	n := s.startupFilesBeforeDocument(uri)
+	if n == len(s.startupFiles) {
 		return s.base(), s.startupFiles, s.startupErrs
 	}
 	s.prefixMu.Lock()
@@ -1476,6 +1638,10 @@ func (s *lspServer) checked(uri protocol.DocumentURI, doc *lspDocument) *lspChec
 				check.diags = append(check.diags, diag)
 				if e.Severity == SeverityError && e.Fix.Kind != FixNone {
 					check.fixes = append(check.fixes, lspTypeFix{title: e.Fix.Title, diag: diag, edit: typeFixEdit(doc, e.Fix)})
+				}
+				// The error says where the name is defined already.
+				if e.Kind == TErrDeclaration && strings.Contains(e.Hint, stdLibTokenFile.Path) {
+					check.stdLibDups = append(check.stdLibDups, diag)
 				}
 			}
 		})
@@ -2186,14 +2352,21 @@ func (s *lspServer) declaration(params protocol.TextDocumentPositionParams) []pr
 		}
 	}
 
-	paths := make([]string, len(s.startupFiles))
-	for i, f := range s.startupFiles {
-		paths[i] = f.path
-	}
-	n := startupFilesBefore(documentPath(params.TextDocument.URI), paths...)
+	n := s.startupFilesBeforeDocument(params.TextDocument.URI)
 	for _, f := range s.startupFiles[:n] {
 		if tok, ok := findDeclaration(name, f.defs, f.decls); ok {
-			return []protocol.Location{{URI: fileURI(f.path), Range: f.doc.tokenRange(tok)}}
+			path := f.path
+			if f.stdLib {
+				// The standard library is in the binary: write its text
+				// out for the editor to open.
+				copyPath, err := s.stdLibCopyPath()
+				if err != nil {
+					logLSP(fmt.Sprintf("cannot write the standard library to a file to show %s: %v", name, err))
+					return nil
+				}
+				path = copyPath
+			}
+			return []protocol.Location{{URI: fileURI(path), Range: f.doc.tokenRange(tok)}}
 		}
 	}
 	return nil
