@@ -66,23 +66,11 @@ runs:
         git clone "https://github.com/${ACTION_REPO}" "$SRC_DIR"
         git -C "$SRC_DIR" checkout "$VERSION"
 
-    - name: Locate go.mod
-      id: gomod
-      if: steps.mode.outputs.mode == 'source'
-      shell: bash
-      run: |
-        # go.mod is at the root of the repository. Versions up to v0.14.0 have it in mshell/.
-        if [ -f "$RUNNER_TEMP/mshell-src/go.mod" ]; then
-          echo "path=go.mod" >> $GITHUB_OUTPUT
-        else
-          echo "path=mshell/go.mod" >> $GITHUB_OUTPUT
-        fi
-
     - name: Set up Go
       if: steps.mode.outputs.mode == 'source'
       uses: actions/setup-go@v7
       with:
-        go-version-file: ${{ runner.temp }}/mshell-src/${{ steps.gomod.outputs.path }}
+        go-version-file: ${{ runner.temp }}/mshell-src/go.mod
         cache: false
 
     - name: Build mshell from source
@@ -100,12 +88,6 @@ runs:
 
         cd "$SRC_DIR/mshell"
         go build -o "$HOME/.mshell/bin/$BIN"
-
-        # The standard library is built into the binary. Versions up to v0.14.0 read it from a file,
-        # which their releases ship in the tarball; for a source build of one, take it from the repo.
-        if [ ! -f "$SRC_DIR/lib/std.go" ]; then
-          cp "$SRC_DIR/lib/std.msh" "$HOME/.mshell/bin/std.msh"
-        fi
 
     - name: Install mshell
       shell: bash
@@ -165,8 +147,8 @@ runs:
 
         mkdir -p "$CONFIG_DIR/$MSH_VERSION"
 
-        # Versions up to v0.14.0 read the standard library from a file: both install modes
-        # put their std.msh in the bin directory; move it into the versioned startup location.
+        # Releases up to v0.14.0 read the standard library from a file, std.msh in the
+        # tarball: move it into the versioned startup location.
         if [ -f "$HOME/.mshell/bin/std.msh" ]; then
           mkdir -p "$DATA_DIR/$MSH_VERSION"
           mv "$HOME/.mshell/bin/std.msh" "$DATA_DIR/$MSH_VERSION/std.msh"
