@@ -8,6 +8,9 @@ tests/quote_stderr_redirect.txt
 tests/test_quote_stderr.txt
 tests/msh-scripts/
 
+gui/third_party/
+gui/target/
+
 ai/type-core-calculus.pdf
 Screenshot*.png
 
@@ -17,6 +20,7 @@ ai/abbr.pdf
 ai/cli_bindings.pdf
 ai/runes.pdf
 ai/fm-bindings.pdf
+ai/gui-terminal.pdf
 
 .redom/
 
