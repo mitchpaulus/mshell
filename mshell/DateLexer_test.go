@@ -284,6 +284,27 @@ func TestDateTokenPrev(t *testing.T) {
 	}
 }
 
+func TestHourWithMeridiem(t *testing.T) {
+	// An hour with AM/PM and no minutes.
+	HelpTestDateTime("2026-08-17 5 PM", 2026, time.August, 17, 17, 0, 0, t)
+	HelpTestDateTime("2026-08-17 5PM", 2026, time.August, 17, 17, 0, 0, t)
+	HelpTestDateTime("2026-08-17 5 p.m.", 2026, time.August, 17, 17, 0, 0, t)
+	HelpTestDateTime("2026-08-17 5 AM", 2026, time.August, 17, 5, 0, 0, t)
+	HelpTestDateTime("2026-08-17 12 AM", 2026, time.August, 17, 0, 0, 0, t)
+	HelpTestDateTime("2026-08-17 12 PM", 2026, time.August, 17, 12, 0, 0, t)
+	HelpTestDateTime("Aug 17, 2026 11 PM", 2026, time.August, 17, 23, 0, 0, t)
+	// A UTC offset after it is ignored.
+	HelpTestDateTime("2026-08-17 5 PM -05:00", 2026, time.August, 17, 17, 0, 0, t)
+	HelpTestDateTime("2026-08-17 5 PM +0530", 2026, time.August, 17, 17, 0, 0, t)
+
+	// A number with no sign after the AM/PM is still an error, as it is after a minute.
+	for _, bad := range []string{"2026-08-17 5 PM 30", "2026-08-17 5:30 PM 30"} {
+		if _, err := ParseDateTime(bad, new(DateOrder)); err == nil {
+			t.Errorf("Expected '%s' to fail to parse", bad)
+		}
+	}
+}
+
 func TestDateOrderLearning(t *testing.T) {
 	// Ambiguous with nothing learned: fails.
 	order := new(DateOrder)

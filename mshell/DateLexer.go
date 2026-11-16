@@ -615,8 +615,16 @@ func startsOffset(token DateToken, previousPart DateToken) bool {
 	return token.Prev == '+' || (token.Prev == '-' && previousPart.Prev != '-')
 }
 
+// skipOffsetAfterMeridiem ignores a UTC offset written after AM/PM, like the -05:00 in
+// "3:00 PM -05:00", along with anything after it.
+func (p *DateParser) skipOffsetAfterMeridiem() {
+	if t := p.CurrentToken(); t.IsInt() && (t.Prev == '+' || t.Prev == '-') {
+		p.Current = len(p.Tokens)
+	}
+}
+
 // ParseTime reads hour, minute, second, and fraction of a second, with AM/PM allowed after
-// the minute or later. A UTC offset ends the time. The offset and anything after it are
+// the hour or later. A UTC offset ends the time. The offset and anything after it are
 // ignored, since a date/time has no time zone.
 func (p *DateParser) ParseTime() (hour int32, minute int32, second int32, nanosecond int32, err error) {
 	t := p.CurrentToken()
@@ -634,6 +642,12 @@ func (p *DateParser) ParseTime() (hour int32, minute int32, second int32, nanose
 		return hour, 0, 0, 0, nil
 	}
 	minuteToken := p.CurrentToken()
+	if minuteToken.Type == DATEAM || minuteToken.Type == DATEPM {
+		// Only an hour, like 5 PM.
+		hour = p.applyMeridiem(hour)
+		p.skipOffsetAfterMeridiem()
+		return hour, 0, 0, 0, nil
+	}
 	if minuteToken.IsInt() && minuteToken.Prev == '+' {
 		// Only '+' is an offset here. In 15-00 the '-' is between the hour and the minute.
 		p.Current = len(p.Tokens)
@@ -652,9 +666,7 @@ func (p *DateParser) ParseTime() (hour int32, minute int32, second int32, nanose
 	secondToken := p.CurrentToken()
 	if secondToken.Type == DATEAM || secondToken.Type == DATEPM {
 		hour = p.applyMeridiem(hour)
-		if t = p.CurrentToken(); t.IsInt() && (t.Prev == '+' || t.Prev == '-') {
-			p.Current = len(p.Tokens)
-		}
+		p.skipOffsetAfterMeridiem()
 		return hour, minute, 0, 0, nil
 	}
 	if startsOffset(secondToken, minuteToken) {

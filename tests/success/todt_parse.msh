@@ -40,3 +40,7 @@
 
 # A time written with '-' between its parts, as in a file name, has no offset.
 '2026-08-17_15-00-32' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+
+# An hour with AM/PM and no minutes.
+'2026-08-17 5 PM' toDt match ok d: @d isoDateTimeFmt, err e: @e, end wl
+'8/17/2026 12 AM' toDt match ok d: @d isoDateTimeFmt, err e: @e, end wl
