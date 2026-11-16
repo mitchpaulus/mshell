@@ -306,6 +306,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assumed US month/day/year. Dates with a leading four digit year are unaffected.
 - `toDt` now returns an `err` for out of range components such as month 13, Feb 30, or hour 25,
   instead of silently rolling them over into the next month or day.
+- `toDt` keeps fractional seconds, so `2026-08-17T15:00:32.1463Z` is 15:00:32.1463. The fraction used to be dropped.
 - `return` inside an `if` or `match` now leaves the whole definition when the definition was called from a quotation run by a function like `map` or `each`.
   It used to leave only the `if` or `match`, and the rest of the definition kept running.
 - A definition called as the last item of a redirected quotation run by `iff`, such as ``true (myDef) `out.txt` > iff``, now writes to the file.
