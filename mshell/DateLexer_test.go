@@ -265,10 +265,8 @@ func TestDateTokenPrev(t *testing.T) {
 		if token.Type == DATEEOF {
 			break
 		}
-		if token.Type == DATESEP {
-			if token.Lexeme == " " {
-				t.Errorf("Whitespace should not be a token")
-			}
+		if token.Type == DATESEP || token.Type == DATEDOW {
+			t.Errorf("'%s' should have been skipped, not made a token", token.Lexeme)
 			continue
 		}
 		if i >= len(expected) {
@@ -281,6 +279,55 @@ func TestDateTokenPrev(t *testing.T) {
 	}
 	if i != len(expected) {
 		t.Errorf("Got %d tokens, expected %d", i, len(expected))
+	}
+}
+
+func TestTokensPastMaxAreIgnored(t *testing.T) {
+	// The lexer stops after maxDateTokens tokens. That is only right if no later token can
+	// change the result, so try every sequence of tokens one and two longer than that.
+	// One token of each kind the parser tells apart is enough. For a number that is whether
+	// it is 1 or 2 digits, and whether a '+' or '-' came before it.
+	kinds := []DateToken{
+		{Lexeme: "08", Value: 8, Type: DATEINT2},
+		{Lexeme: "08", Value: 8, Type: DATEINT2, Prev: '+'},
+		{Lexeme: "08", Value: 8, Type: DATEINT2, Prev: '-'},
+		{Lexeme: "146", Value: 146, Type: DATEINTN},
+		{Lexeme: "146", Value: 146, Type: DATEINTN, Prev: '+'},
+		{Lexeme: "146", Value: 146, Type: DATEINTN, Prev: '-'},
+		{Lexeme: "PM", Type: DATEPM},
+		{Lexeme: "Aug", Type: DATEAUG},
+	}
+	date := []DateToken{
+		{Lexeme: "2026", Value: 2026, Type: DATEINT4},
+		{Lexeme: "08", Value: 8, Type: DATEINT2, Prev: '-'},
+		{Lexeme: "17", Value: 17, Type: DATEINT2, Prev: '-'},
+	}
+
+	for length := maxDateTokens + 1; length <= maxDateTokens+2; length++ {
+		tokens := make([]DateToken, length)
+		copy(tokens, date)
+		choice := make([]int, length-len(date))
+		for {
+			for i, kind := range choice {
+				tokens[len(date)+i] = kinds[kind]
+			}
+			all, allErr := ParseDateTimeTokens(tokens, nil)
+			kept, keptErr := ParseDateTimeTokens(tokens[:maxDateTokens], nil)
+			if !all.Equal(kept) || allErr != keptErr {
+				t.Fatalf("%v: all the tokens give %v %v, the first %d give %v %v", tokens, all, allErr, maxDateTokens, kept, keptErr)
+			}
+
+			// Step to the next sequence, like counting up a number with one digit per token.
+			i := 0
+			for i < len(choice) && choice[i] == len(kinds)-1 {
+				choice[i] = 0
+				i++
+			}
+			if i == len(choice) {
+				break
+			}
+			choice[i]++
+		}
 	}
 }
 
