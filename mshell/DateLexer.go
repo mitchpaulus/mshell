@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 )
 
 type DateTokenType uint8
@@ -28,16 +29,28 @@ const (
 	DATEINT4
 	DATEINT2
 	DATEINT1
+	DATEINTN // A run of digits of any other length.
 	DATEEOF
 )
 
 // DateToken is a slice of the input plus its classification.
 // Value holds the numeric value for the DATEINT* types so it is never re-parsed.
+// For a number of more than nine digits it is the value of the first nine.
 // Lexeme is a substring of the original input, so making a token does not allocate.
+// Prev is the last punctuation character between the previous number, month or AM/PM
+// and this token, or 0 if there was none. Whitespace and letters are not punctuation, so
+// Prev is '-' for the 05 in "32 -05", and 0 for the 15 in "17T15". Every Unicode minus
+// sign is '-' and every Unicode plus sign is '+'.
 type DateToken struct {
 	Lexeme string
 	Value  int32
 	Type   DateTokenType
+	Prev   byte
+}
+
+// IsInt reports whether the token is a run of digits of any length.
+func (token DateToken) IsInt() bool {
+	return token.Type >= DATEINT4 && token.Type <= DATEINTN
 }
 
 func (token DateToken) IsMonth() bool {
@@ -52,15 +65,37 @@ func (token DateToken) String() string {
 	return fmt.Sprintf("'%s' %v", token.Lexeme, token.Type)
 }
 
-// DateLexer scans the input bytes directly. Dates are ASCII; any non-ASCII byte is a separator.
+// DateLexer scans the input bytes directly. Dates are ASCII; a non-ASCII character is
+// a minus or plus sign, or it is skipped.
 type DateLexer struct {
 	start   int
 	current int
 	input   string
+	// prev is the last punctuation character since the last token.
+	prev byte
 }
 
 func NewDateLexer(input string) *DateLexer {
-	return &DateLexer{0, 0, input}
+	return &DateLexer{input: input}
+}
+
+// unicodeSign gives '-' or '+' for the non-ASCII characters used as a minus or plus sign,
+// and 0 for every other character.
+func unicodeSign(r rune) byte {
+	switch r {
+	case '\u2212', // minus sign, the one ISO 8601 prefers
+		'\u2010', // hyphen
+		'\u2011', // non-breaking hyphen
+		'\u2012', // figure dash
+		'\u2013', // en dash
+		'\uFE63', // small hyphen-minus
+		'\uFF0D': // fullwidth hyphen-minus
+		return '-'
+	case '\uFE62', // small plus sign
+		'\uFF0B': // fullwidth plus sign
+		return '+'
+	}
+	return 0
 }
 
 func isDigit(c byte) bool  { return c >= '0' && c <= '9' }
@@ -78,8 +113,12 @@ func (l *DateLexer) curLexeme() string {
 	return l.input[l.start:l.current]
 }
 
+// makeToken gives a token for the text scanned so far, with the last punctuation
+// character that came before it.
 func (l *DateLexer) makeToken(tokenType DateTokenType) DateToken {
-	return DateToken{Lexeme: l.curLexeme(), Type: tokenType}
+	token := DateToken{Lexeme: l.curLexeme(), Type: tokenType, Prev: l.prev}
+	l.prev = 0
+	return token
 }
 
 func (l *DateLexer) advance() byte {
@@ -208,8 +247,12 @@ func (l *DateLexer) MonthDowType() DateTokenType {
 	return DATESEP
 }
 
+// scanToken gives the next number, month or AM/PM, or a DATEEOF token at the end of the
+// input. Whitespace, punctuation, day of week names and every other word are skipped here
+// and never become tokens, since the parser has no use for them.
 func (l *DateLexer) scanToken() DateToken {
 	// https://en.wikipedia.org/wiki/List_of_time_zone_abbreviations
+next:
 	l.start = l.current
 
 	if l.atEnd() {
@@ -220,14 +263,19 @@ func (l *DateLexer) scanToken() DateToken {
 
 	if isDigit(c) {
 		value := int32(c - '0')
-		for isDigit(l.peek()) {
-			// Only 1, 2 and 4 digit runs are used. Stop accumulating so a long digit run
-			// (fractional seconds) cannot overflow before it is classed as a separator.
-			if l.Length() < 9 {
-				value = value*10 + int32(l.peek()-'0')
+		// The input, the start and the position are held in local variables for this loop,
+		// so each digit costs no read or write of the lexer's fields.
+		input, start, i := l.input, l.start, l.current
+		for i < len(input) && isDigit(input[i]) {
+			// Keep the value of the first nine digits. That is every digit of a 1, 2 or 4
+			// digit number, and a fraction of a second down to the nanosecond. A tenth
+			// digit could overflow.
+			if i-start < 9 {
+				value = value*10 + int32(input[i]-'0')
 			}
-			l.advance()
+			i++
 		}
+		l.current = i
 		var tokenType DateTokenType
 		switch l.Length() {
 		case 4:
@@ -237,9 +285,11 @@ func (l *DateLexer) scanToken() DateToken {
 		case 1:
 			tokenType = DATEINT1
 		default: // TODO: Handle 8 and 6 digit numbers
-			return l.makeToken(DATESEP)
+			tokenType = DATEINTN
 		}
-		return DateToken{Lexeme: l.curLexeme(), Value: value, Type: tokenType}
+		token := l.makeToken(tokenType)
+		token.Value = value
+		return token
 	} else if c == 'a' || c == 'A' {
 
 		if l.peek() == 'm' || l.peek() == 'M' {
@@ -247,7 +297,8 @@ func (l *DateLexer) scanToken() DateToken {
 
 			// Check for AMST or AMT for Amazon summer time or Armenia time
 			if l.peek() == 's' || l.peek() == 'S' || l.peek() == 'T' {
-				return l.consumeAlpha()
+				l.consumeAlpha()
+				goto next
 			}
 
 			if l.peek() == '.' {
@@ -268,13 +319,21 @@ func (l *DateLexer) scanToken() DateToken {
 		for isLetter(l.peek()) {
 			l.advance()
 		}
-		return l.makeToken(l.MonthDowType())
+		if tokenType := l.MonthDowType(); tokenType != DATESEP {
+			if tokenType != DATEDOW {
+				return l.makeToken(tokenType)
+			}
+			// Punctuation before a day of week name is forgotten, as it is before a token.
+			l.prev = 0
+		}
+		goto next
 	} else if c == 'p' || c == 'P' {
 		if l.peek() == 'm' || l.peek() == 'M' {
 			l.advance()
 			// Checking for PMDT or PMST or Saint Pierre and Miquelon Daylight/Standard Time
 			if l.peek() == 's' || l.peek() == 'S' || l.peek() == 'D' || l.peek() == 'd' {
-				return l.consumeAlpha()
+				l.consumeAlpha()
+				goto next
 			}
 			return l.makeToken(DATEPM)
 		} else if l.peek() == '.' {
@@ -287,25 +346,44 @@ func (l *DateLexer) scanToken() DateToken {
 				return l.makeToken(DATEPM)
 			}
 		}
-		return l.consumeAlpha()
+		l.consumeAlpha()
+		goto next
 	} else {
 		switch c | 0x20 {
 		case 'j', 'f', 'm', 's', 'o', 'n', 'd', 't', 'w':
 			for isLetter(l.peek()) {
 				l.advance()
 			}
-			return l.makeToken(l.MonthDowType())
+			if tokenType := l.MonthDowType(); tokenType != DATESEP {
+				if tokenType != DATEDOW {
+					return l.makeToken(tokenType)
+				}
+				// Punctuation before a day of week name is forgotten, as it is before a token.
+				l.prev = 0
+			}
+			goto next
 		}
 		// TODO: Implement the rest of the lexer
-		return l.makeToken(DATESEP)
+		if c >= utf8.RuneSelf {
+			// Take the whole character. Only a minus or plus sign is remembered.
+			r, size := utf8.DecodeRuneInString(l.input[l.start:])
+			l.current = l.start + size
+			if sign := unicodeSign(r); sign != 0 {
+				l.prev = sign
+			}
+		} else if !isLetter(c) && c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			// Punctuation. Whitespace and letters are skipped without being remembered.
+			l.prev = c
+		}
+		goto next
 	}
 }
 
-func (l *DateLexer) consumeAlpha() DateToken {
+// consumeAlpha skips the rest of a word.
+func (l *DateLexer) consumeAlpha() {
 	for isLetter(l.peek()) {
 		l.advance()
 	}
-	return l.makeToken(DATESEP)
 }
 
 // DateOrder is the numeric date order learned during an evaluation.
@@ -330,27 +408,28 @@ var (
 	errTimeOutOfRange = errors.New("Time component out of range")
 )
 
-// maxDateTokens is the size of the on-stack token buffer. A full date and time with
-// AM/PM is 8 tokens after separators are dropped; longer inputs spill to the heap.
-const maxDateTokens = 12
+// maxDateTokens is the most tokens the parser reads: three for the date, then the hour,
+// minute, second, fraction of a second and AM/PM. Every token after these is ignored, so
+// the lexer stops at this many. A long input with a date at the front costs the same as
+// the date alone, and the tokens never need memory from the heap.
+// TestTokensPastMaxAreIgnored checks that later tokens never change the result.
+const maxDateTokens = 8
 
 func ParseDateTime(dateTimeStr string, order *DateOrder) (time.Time, error) {
-	var buf [maxDateTokens]DateToken
-	tokens := buf[:0]
+	var tokens [maxDateTokens]DateToken
+	count := 0
 
-	l := DateLexer{0, 0, dateTimeStr}
-	for {
+	l := DateLexer{input: dateTimeStr}
+	for count < maxDateTokens {
 		token := l.scanToken()
 		if token.Type == DATEEOF {
 			break
 		}
-		// Separators and day of week names carry no information for the parser.
-		if token.Type != DATESEP && token.Type != DATEDOW {
-			tokens = append(tokens, token)
-		}
+		tokens[count] = token
+		count++
 	}
 
-	return ParseDateTimeTokens(tokens, order)
+	return ParseDateTimeTokens(tokens[:count], order)
 }
 
 type DateParser struct {
@@ -517,38 +596,103 @@ func (p *DateParser) applyMeridiem(hour int32) int32 {
 	return hour
 }
 
-func (p *DateParser) ParseTime() (hour int32, minute int32, second int32, err error) {
+// nanosecondsPerFractionUnit is indexed by the number of digits in a fraction of a second.
+// It is what one unit of the last digit is worth: a 1 digit fraction counts tenths of a
+// second, and a 9 digit fraction counts nanoseconds.
+var nanosecondsPerFractionUnit = [10]int32{0, 100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10, 1}
+
+// fractionNanoseconds reads a number as the fraction of a second: 5 is half a second and
+// 1463 is 146,300,000 nanoseconds. Digits past the ninth are dropped, which the lexer has
+// already done in token.Value.
+func fractionNanoseconds(token DateToken) int32 {
+	return token.Value * nanosecondsPerFractionUnit[min(len(token.Lexeme), 9)]
+}
+
+// startsOffset reports whether token is the first number of a UTC offset, like the 05 in
+// +05:30 or the 0500 in -0500. previousPart is the time component read just before it.
+// A '+' always starts an offset. A '-' starts one unless the time itself is written with
+// '-' between its parts, as in the file name style 15-00-32.
+func startsOffset(token DateToken, previousPart DateToken) bool {
+	if !token.IsInt() {
+		return false
+	}
+	return token.Prev == '+' || (token.Prev == '-' && previousPart.Prev != '-')
+}
+
+// skipOffsetAfterMeridiem ignores a UTC offset written after AM/PM, like the -05:00 in
+// "3:00 PM -05:00", along with anything after it.
+func (p *DateParser) skipOffsetAfterMeridiem() {
+	if t := p.CurrentToken(); t.IsInt() && (t.Prev == '+' || t.Prev == '-') {
+		p.Current = len(p.Tokens)
+	}
+}
+
+// ParseTime reads hour, minute, second, and fraction of a second, with AM/PM allowed after
+// the hour or later. A UTC offset ends the time. The offset and anything after it are
+// ignored, since a date/time has no time zone.
+func (p *DateParser) ParseTime() (hour int32, minute int32, second int32, nanosecond int32, err error) {
 	t := p.CurrentToken()
+	if t.IsInt() && t.Prev == '+' {
+		// A date followed directly by an offset, like 2026-08-17+05:00.
+		p.Current = len(p.Tokens)
+		return 0, 0, 0, 0, nil
+	}
 	if !(t.Type == DATEINT1 || t.Type == DATEINT2) {
-		return 0, 0, 0, errTimeExpected
+		return 0, 0, 0, 0, errTimeExpected
 	}
 	hour, _ = p.parseTimeComponent()
 
 	if p.AtEnd() {
-		return hour, 0, 0, nil
+		return hour, 0, 0, 0, nil
+	}
+	minuteToken := p.CurrentToken()
+	if minuteToken.Type == DATEAM || minuteToken.Type == DATEPM {
+		// Only an hour, like 5 PM.
+		hour = p.applyMeridiem(hour)
+		p.skipOffsetAfterMeridiem()
+		return hour, 0, 0, 0, nil
+	}
+	if minuteToken.IsInt() && minuteToken.Prev == '+' {
+		// Only '+' is an offset here. In 15-00 the '-' is between the hour and the minute.
+		p.Current = len(p.Tokens)
+		return hour, 0, 0, 0, nil
 	}
 	minute, err = p.parseTimeComponent()
 	if err != nil {
 		// Matches prior behavior: a non numeric token after the hour ends the time.
-		return hour, 0, 0, nil
+		return hour, 0, 0, 0, nil
 	}
 
 	if p.AtEnd() {
-		return hour, minute, 0, nil
+		return hour, minute, 0, 0, nil
 	}
 
-	t = p.CurrentToken()
-	if t.Type == DATEAM || t.Type == DATEPM {
+	secondToken := p.CurrentToken()
+	if secondToken.Type == DATEAM || secondToken.Type == DATEPM {
 		hour = p.applyMeridiem(hour)
-	} else {
-		second, err = p.parseTimeComponent()
-		if err != nil {
-			return 0, 0, 0, err
-		}
-		hour = p.applyMeridiem(hour)
+		p.skipOffsetAfterMeridiem()
+		return hour, minute, 0, 0, nil
+	}
+	if startsOffset(secondToken, minuteToken) {
+		p.Current = len(p.Tokens)
+		return hour, minute, 0, 0, nil
 	}
 
-	return hour, minute, second, nil
+	second, err = p.parseTimeComponent()
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	// A number of any length right after the seconds is the fraction of a second,
+	// whatever separates the two, unless it starts an offset.
+	if t = p.CurrentToken(); t.IsInt() && !startsOffset(t, secondToken) {
+		nanosecond = fractionNanoseconds(t)
+		p.Current++
+	}
+	hour = p.applyMeridiem(hour)
+	// Anything after the seconds, the fraction and AM/PM is ignored.
+	p.Current = len(p.Tokens)
+
+	return hour, minute, second, nanosecond, nil
 }
 
 func ParseDateTimeTokens(tokens []DateToken, order *DateOrder) (time.Time, error) {
@@ -559,9 +703,9 @@ func ParseDateTimeTokens(tokens []DateToken, order *DateOrder) (time.Time, error
 		return time.Time{}, err
 	}
 
-	var hour, minute, second int32
+	var hour, minute, second, nanosecond int32
 	if !parser.AtEnd() {
-		hour, minute, second, err = parser.ParseTime()
+		hour, minute, second, nanosecond, err = parser.ParseTime()
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -577,5 +721,5 @@ func ParseDateTimeTokens(tokens []DateToken, order *DateOrder) (time.Time, error
 		return time.Time{}, errTimeOutOfRange
 	}
 
-	return time.Date(int(date.year), time.Month(date.month), int(date.day), int(hour), int(minute), int(second), 0, time.UTC), nil
+	return time.Date(int(date.year), time.Month(date.month), int(date.day), int(hour), int(minute), int(second), int(nanosecond), time.UTC), nil
 }

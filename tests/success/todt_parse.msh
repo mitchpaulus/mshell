@@ -16,3 +16,31 @@
 # Leap day is valid only in leap years.
 '2/29/2024' toDt match ok d: @d isoDateFmt, err e: @e, end wl
 '2/29/2025' toDt match ok d: @d isoDateFmt, err e: @e, end wl
+
+# A number of any length after the seconds is the fraction of a second, and it is kept.
+'2026-08-17T15:00:32.1Z' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+'2026-08-17T15:00:32.14Z' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+'2026-08-17T15:00:32.146Z' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+'2026-08-17T15:00:32.1463Z' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+'2025-04-30T17:58:18.5467067Z' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+'8/17/2026 3:00:32.05 PM' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+'2026-08-17T15:00:32Z' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+
+# Anything after the fraction is ignored.
+'2026-08-17T15:00:32.1463 99 and more' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+
+# A UTC offset after the time is ignored. It is not applied, and it is not read as the fraction.
+'2026-08-17T15:00:32+05:30' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+'2026-08-17T15:00:32-05:00' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+'2026-08-17T15:00:32.1463-0500' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+'2026-08-17 15:00:32.1463+00' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+'Mon, 17 Aug 2026 15:00:32 +0000' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+'8/17/2026 3:00 PM -05:00' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+'2026-08-17T15:00:32−05:00' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+
+# A time written with '-' between its parts, as in a file name, has no offset.
+'2026-08-17_15-00-32' toDt match ok d: @d '2006-01-02T15:04:05.000000000' dateFmt, err e: @e, end wl
+
+# An hour with AM/PM and no minutes.
+'2026-08-17 5 PM' toDt match ok d: @d isoDateTimeFmt, err e: @e, end wl
+'8/17/2026 12 AM' toDt match ok d: @d isoDateTimeFmt, err e: @e, end wl

@@ -1683,12 +1683,15 @@ Access the parts with `:k?` and `:v?`.
 
 - `toDt`: Convert string to date/time. An `err` says why a string does not parse, such as an ambiguous order or an out of range component. `(str -- Result[datetime str])`
   Separators are ignored, month names are accepted, and a time with optional AM/PM may follow.
+  A number after the seconds is the fraction of a second and is kept, so `2026-08-17T15:00:32.1463Z` is 15:00:32.1463.
+  A UTC offset such as `+05:30`, `-0500` or `+05` is ignored, not applied, so `2026-08-17T15:00:32-05:00` is 15:00:32.
+  Anything after the fraction or the offset is ignored.
   A leading four digit year is always year-month-day, so ISO dates like `2026-01-02` are never ambiguous.
   Other dates are tried as year-month-day, month-day-year, and day-month-year.
   If exactly one reading is a valid date, it is used (`16/06/2025`, `12/16/25`).
   If several readings are valid (`01/02/2026`), the order learned from the most recent unambiguous
-  non-ISO date in this evaluation decides. With no such date yet, the result is `none`.
-  Out of range components (month 13, Feb 30, hour 25) give `none` rather than rolling over.
+  non-ISO date in this evaluation decides. With no such date yet, the result is an `err`.
+  Out of range components (month 13, Feb 30, hour 25) give an `err` rather than rolling over.
 - `now`: Push current local date/time onto the stack `( -- datetime)`
 - `date`: Drop the time portion from a datetime `(datetime -- datetime)`
 - `year`: Get year from date `(datetime -- int)`
