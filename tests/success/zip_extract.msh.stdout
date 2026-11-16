@@ -8,3 +8,7 @@ INITIAL
 zipExtract overwrite
 ALPHA-DATA
 
+zipExtract sanitize
+ALPHA-DATA
+
+true

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `sanitize` option for `zipExtract`, `zipExtractEntry`, `tarExtract` and `tarExtractEntry`: rewrite entry names that are not valid on every operating system,
+  such as `a:b?.txt` to `a_b_.txt` and `nul.txt` to `_nul.txt`. The result is the same on every OS.
+  Two entries that end up with the same name are an error instead of one replacing the other.
 - Tab completion for `typst`: subcommands, options and their values, `.typ` files for the input, and output files.
   `typst init` offers the templates in the local and downloaded package directories,
   and the `typst query` selector offers the labels in the input file.
