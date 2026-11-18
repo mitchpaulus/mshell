@@ -257,7 +257,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - File manager: when a file cannot be opened with the system's default program, the status line says why,
-  for example `Open failed: xdg-open found no program it could use to open this kind of file.`
+  for example `No program opens application/pdf. Set one: xdg-mime default APP.desktop application/pdf`.
   Before, nothing happened and nothing was shown.
 - Tab quotes an argument that would mean something else typed bare:
   `2.0` (the number 2), `@preview/x` (a variable), `<intro>` (a redirect), `true`, or the name of a built-in or definition.

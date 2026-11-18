@@ -75,6 +75,10 @@ func TestOpenFileUnixReportsOpenerFailure(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	mimeScript := "#!/bin/sh\necho 'application/pdf; charset=binary'\n"
+	if err := os.WriteFile(filepath.Join(binDir, "xdg-mime"), []byte(mimeScript), 0755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("EDITOR", "")
 	t.Setenv("BROWSER", "")
@@ -103,11 +107,11 @@ func TestOpenFileUnixReportsOpenerFailure(t *testing.T) {
 		status = fm.statusMsg
 		fm.renderMu.Unlock()
 	}
-	if !strings.HasPrefix(status, "Open failed: ") {
-		t.Fatalf("statusMsg = %q, want it to start with %q", status, "Open failed: ")
+	if status == "" {
+		t.Fatal("statusMsg is empty, want the reason the file could not be opened")
 	}
 	if runtime.GOOS == "linux" {
-		if want := "Open failed: xdg-open found no program it could use to open this kind of file."; status != want {
+		if want := "No program opens application/pdf. Set one: xdg-mime default APP.desktop application/pdf"; status != want {
 			t.Fatalf("statusMsg = %q, want %q", status, want)
 		}
 		browser, err := os.ReadFile(browserFile)

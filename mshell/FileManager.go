@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -2218,14 +2219,39 @@ func (fm *FileManager) openFileUnix(entry os.DirEntry) {
 		if err == nil {
 			return
 		}
+		status := openerFailureStatus(command, err, output)
+		var exitErr *exec.ExitError
+		if command == "xdg-open" && errors.As(err, &exitErr) && exitErr.ExitCode() == 3 {
+			if withCommand := xdgOpenNoProgramStatus(filePath); withCommand != "" {
+				status = withCommand
+			}
+		}
 		fm.renderMu.Lock()
 		defer fm.renderMu.Unlock()
 		if fm.backgroundStopped() {
 			return
 		}
-		fm.statusMsg = openerFailureStatus(command, err, output)
+		fm.statusMsg = status
 		fm.render()
 	}()
+}
+
+// xdgOpenNoProgramStatus is the status message for xdg-open finding no
+// program to open the file at path. It names the file's type and gives the
+// command that sets a program for that type. It is empty when the type
+// cannot be found.
+func xdgOpenNoProgramStatus(path string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "xdg-mime", "query", "filetype", path).Output()
+	if err != nil {
+		return ""
+	}
+	fileType, _, _ := strings.Cut(strings.TrimSpace(string(out)), ";")
+	if fileType == "" {
+		return ""
+	}
+	return fmt.Sprintf("No program opens %s. Set one: xdg-mime default APP.desktop %s", fileType, fileType)
 }
 
 // xdgOpenGraphicalBrowsers is the list of graphical browsers xdg-open falls
