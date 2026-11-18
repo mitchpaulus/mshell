@@ -6,7 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
-	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -2149,12 +2149,11 @@ func (fm *FileManager) openFileWindows(entry os.DirEntry) {
 		fm.statusMsg = err.Error()
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Stdin = nil
-	if err := cmd.Run(); err != nil && ctx.Err() == context.DeadlineExceeded {
+	output, err := runDefaultOpener(command, args)
+	if errors.Is(err, errDefaultOpenerTimedOut) {
 		fm.statusMsg = "Start-Process timed out (OneDrive?)"
+	} else if err != nil {
+		fm.statusMsg = openerFailureStatus(command, err, output)
 	}
 }
 
@@ -2181,7 +2180,82 @@ func (fm *FileManager) openFileUnix(entry os.DirEntry) {
 	}
 	cmd := exec.Command(command, args...)
 	cmd.Stdin = nil
-	cmd.Start()
+	if command == "xdg-open" && os.Getenv("BROWSER") == "" {
+		cmd.Env = append(os.Environ(), "BROWSER="+xdgOpenGraphicalBrowsers)
+	}
+	// Stderr goes to a temporary file rather than a pipe: the program the
+	// opener starts keeps the opener's stderr, and a pipe would stay open
+	// until that program exits.
+	stderrFile, tempErr := os.CreateTemp("", "msh-opener-*.txt")
+	if tempErr == nil {
+		cmd.Stderr = stderrFile
+	}
+	closeStderrFile := func() {
+		if tempErr == nil {
+			stderrFile.Close()
+			os.Remove(stderrFile.Name())
+		}
+	}
+	if err := cmd.Start(); err != nil {
+		closeStderrFile()
+		fm.statusMsg = openerFailureStatus(command, err, "")
+		return
+	}
+
+	// The opener is not waited for here, because some openers do not exit
+	// until the program showing the file is closed. If it fails, the
+	// status message is set when it exits.
+	go func() {
+		err := cmd.Wait()
+		output := ""
+		if tempErr == nil {
+			if _, seekErr := stderrFile.Seek(0, io.SeekStart); seekErr == nil {
+				data, _ := io.ReadAll(io.LimitReader(stderrFile, 8192))
+				output = string(data)
+			}
+		}
+		closeStderrFile()
+		if err == nil {
+			return
+		}
+		fm.renderMu.Lock()
+		defer fm.renderMu.Unlock()
+		if fm.backgroundStopped() {
+			return
+		}
+		fm.statusMsg = openerFailureStatus(command, err, output)
+		fm.render()
+	}()
+}
+
+// xdgOpenGraphicalBrowsers is the list of graphical browsers xdg-open falls
+// back on when it finds no program for a file. Left alone, xdg-open goes on
+// to text browsers such as lynx. The file manager starts the opener without
+// a terminal, so a text browser shows nothing and exits with success, and
+// the failure to open the file is never seen. With BROWSER set to this list,
+// xdg-open fails instead.
+const xdgOpenGraphicalBrowsers = "x-www-browser:firefox:iceweasel:seamonkey:mozilla:epiphany:konqueror:chromium:chromium-browser:google-chrome"
+
+// openerFailureStatus is the one line status message for a default opener
+// that could not be started or that failed. output is what it wrote to
+// stderr.
+func openerFailureStatus(command string, err error, output string) string {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return "Open failed: " + describeStartFailure(command, command, err)
+	}
+	if command == "xdg-open" {
+		if meaning := xdgOpenExitMeaning(exitErr.ExitCode()); meaning != "" {
+			return "Open failed: " + meaning
+		}
+	}
+	msg := fmt.Sprintf("Open failed: %s: %s", command, exitErr)
+	for _, line := range strings.Split(output, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return msg + ": " + line
+		}
+	}
+	return msg
 }
 
 // Clipboard actions

@@ -5,6 +5,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,5 +60,80 @@ func TestStopPreviewLoopDoesNotWaitForBlockedPreview(t *testing.T) {
 	case <-stopped:
 	case <-time.After(2 * time.Second):
 		t.Fatal("stopPreviewLoop waited for a blocked preview")
+	}
+}
+
+// When the default opener finds no program for a file, the file manager
+// must say so. The opener is also told not to fall back on text browsers,
+// which show nothing without a terminal and exit with success.
+func TestOpenFileUnixReportsOpenerFailure(t *testing.T) {
+	binDir := t.TempDir()
+	browserFile := filepath.Join(t.TempDir(), "browser")
+	script := "#!/bin/sh\nprintf '%s' \"$BROWSER\" > '" + browserFile + "'\necho 'no method available' >&2\nexit 3\n"
+	for _, name := range []string{"xdg-open", "open"} {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(script), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("EDITOR", "")
+	t.Setenv("BROWSER", "")
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "report.pdf"), []byte("%PDF-1.4\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.Create(filepath.Join(t.TempDir(), "screen"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { out.Close() })
+	fm := &FileManager{rows: 10, cols: 80, currentDir: dir, ttyOut: out}
+	fm.loadDirectory()
+
+	fm.renderMu.Lock()
+	fm.enterSelected()
+	fm.renderMu.Unlock()
+
+	deadline := time.Now().Add(10 * time.Second)
+	status := ""
+	for status == "" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		fm.renderMu.Lock()
+		status = fm.statusMsg
+		fm.renderMu.Unlock()
+	}
+	if !strings.HasPrefix(status, "Open failed: ") {
+		t.Fatalf("statusMsg = %q, want it to start with %q", status, "Open failed: ")
+	}
+	if runtime.GOOS == "linux" {
+		if want := "Open failed: xdg-open found no program it could use to open this kind of file."; status != want {
+			t.Fatalf("statusMsg = %q, want %q", status, want)
+		}
+		browser, err := os.ReadFile(browserFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(browser) != xdgOpenGraphicalBrowsers {
+			t.Fatalf("BROWSER = %q, want %q", browser, xdgOpenGraphicalBrowsers)
+		}
+	}
+}
+
+// An opener that is not installed must be reported too.
+func TestOpenFileUnixReportsMissingOpener(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("EDITOR", "")
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "report.pdf"), []byte("%PDF-1.4\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	fm := &FileManager{rows: 10, cols: 80, currentDir: dir}
+	fm.loadDirectory()
+	fm.enterSelected()
+
+	if !strings.Contains(fm.statusMsg, "was not found on PATH") {
+		t.Fatalf("statusMsg = %q, want it to say the opener was not found on PATH", fm.statusMsg)
 	}
 }
