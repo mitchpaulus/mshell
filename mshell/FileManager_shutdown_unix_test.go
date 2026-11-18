@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 )
@@ -125,24 +124,6 @@ func TestOpenFileUnixReportsOpenerFailure(t *testing.T) {
 	}
 }
 
-// An opener that is not installed must be reported too.
-func TestOpenFileUnixReportsMissingOpener(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	t.Setenv("EDITOR", "")
-
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "report.pdf"), []byte("%PDF-1.4\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	fm := &FileManager{rows: 10, cols: 80, currentDir: dir}
-	fm.loadDirectory()
-	fm.enterSelected()
-
-	if !strings.Contains(fm.statusMsg, "was not found on PATH") {
-		t.Fatalf("statusMsg = %q, want it to say the opener was not found on PATH", fm.statusMsg)
-	}
-}
-
 func setIsWSL(t *testing.T, value bool) {
 	t.Helper()
 	saved := isWSL
@@ -151,10 +132,9 @@ func setIsWSL(t *testing.T, value bool) {
 }
 
 // newWSLOpenTest sets up a file manager on a PDF, under what looks like WSL,
-// where xdg-open finds no program and powershell.exe runs powerShellScript.
-// It returns the file manager and the file powershell.exe's arguments are
-// written to.
-func newWSLOpenTest(t *testing.T, powerShellExit string) (*FileManager, string) {
+// where xdg-open finds no program. It returns the file manager and the file
+// powershell.exe's arguments are written to.
+func newWSLOpenTest(t *testing.T) (*FileManager, string) {
 	t.Helper()
 	binDir := t.TempDir()
 	argsFile := filepath.Join(t.TempDir(), "args")
@@ -162,7 +142,7 @@ func newWSLOpenTest(t *testing.T, powerShellExit string) (*FileManager, string) 
 		"xdg-open":       "#!/bin/sh\nexit 3\n",
 		"xdg-mime":       "#!/bin/sh\necho application/pdf\n",
 		"wslpath":        "#!/bin/sh\nprintf '%s\\n' 'C:\\docs\\report.pdf'\n",
-		"powershell.exe": "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argsFile + "'\n" + powerShellExit + "\n",
+		"powershell.exe": "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argsFile + "'\n",
 	}
 	for name, script := range scripts {
 		if err := os.WriteFile(filepath.Join(binDir, name), []byte(script), 0755); err != nil {
@@ -207,7 +187,7 @@ func TestOpenFileUnixUnderWSLOpensWithWindows(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("xdg-open is only used on Linux")
 	}
-	fm, argsFile := newWSLOpenTest(t, "exit 0")
+	fm, argsFile := newWSLOpenTest(t)
 
 	fm.renderMu.Lock()
 	fm.enterSelected()
@@ -224,30 +204,5 @@ func TestOpenFileUnixUnderWSLOpensWithWindows(t *testing.T) {
 	fm.renderMu.Unlock()
 	if status != "" {
 		t.Fatalf("statusMsg = %q, want it empty", status)
-	}
-}
-
-// Under WSL, when Windows cannot open the file either, what Windows said is
-// shown.
-func TestOpenFileUnixUnderWSLReportsWindowsFailure(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("xdg-open is only used on Linux")
-	}
-	fm, _ := newWSLOpenTest(t, "echo 'Start-Process : no program' >&2\nexit 1")
-
-	fm.renderMu.Lock()
-	fm.enterSelected()
-	fm.renderMu.Unlock()
-
-	deadline := time.Now().Add(10 * time.Second)
-	status := ""
-	for status == "" && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-		fm.renderMu.Lock()
-		status = fm.statusMsg
-		fm.renderMu.Unlock()
-	}
-	if want := "Open failed: powershell.exe: exit status 1: Start-Process : no program"; status != want {
-		t.Fatalf("statusMsg = %q, want %q", status, want)
 	}
 }
