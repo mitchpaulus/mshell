@@ -101,9 +101,9 @@ func (b *coreTableBuilder) builtinAliases() {
 	b.alias("PackEntry", "str | path | {path: str | path, archivePath?: str | path, mode?: int}")
 	b.alias("TarDest", "str | path | {path: str | path, compress?: bool}")
 	b.alias("ExtractOptions", "{overwrite?: bool, skipExisting?: bool, preservePermissions?: bool, "+
-		"stripComponents?: int, pattern?: str | path, maxBytes?: int}")
+		"stripComponents?: int, pattern?: str | path, maxBytes?: int, sanitize?: bool}")
 	b.alias("ExtractEntryOptions", "{overwrite?: bool, skipExisting?: bool, preservePermissions?: bool, "+
-		"mkdirs?: bool, maxBytes?: int}")
+		"mkdirs?: bool, maxBytes?: int, sanitize?: bool}")
 	b.alias("ZipEntryInfo", "{name: str, compressedSize: int, uncompressedSize: int, isDir: bool, perm: int, "+
 		"executable: bool, modified: datetime}")
 	b.alias("TarEntryInfo", "{name: str, compressedSize: int, uncompressedSize: int, isDir: bool, perm: int, "+

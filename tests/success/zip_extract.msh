@@ -51,3 +51,20 @@ now toUnixTime str uniq!
 
 "zipExtract overwrite" wl
 @overwrite-file readFile wl
+
+# sanitize rewrites names that are not valid on every operating system
+tempFile bad-zip!
+[
+    { path: `zip/base/alpha.txt`, archivePath: "bad:dir/al?pha.txt" }
+    { path: `zip/base/repeat.txt`, archivePath: "nul.txt" }
+] as [PackEntry] bad-items!
+@bad-items @bad-zip zipPack
+
+@extract-root `sanitize` / sanitize-dir!
+@bad-zip @sanitize-dir {
+    sanitize: true
+} zipExtract
+
+"zipExtract sanitize" wl
+@sanitize-dir `bad_dir/al_pha.txt` / readFile wl
+@sanitize-dir `_nul.txt` / fileExists str wl
