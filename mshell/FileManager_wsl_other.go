@@ -7,3 +7,8 @@ package main
 func looksCloudOnly(path string) bool {
 	return false
 }
+
+// isWSL reports whether msh is running under WSL. Tests replace it.
+var isWSL = func() bool {
+	return false
+}

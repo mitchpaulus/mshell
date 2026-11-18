@@ -259,6 +259,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - File manager: when a file cannot be opened with the system's default program, the status line says why,
   for example `No program opens application/pdf. Set one: xdg-mime default APP.desktop application/pdf`.
   Before, nothing happened and nothing was shown.
+- File manager under WSL: a file that no Linux program is set to open is opened with the program Windows has for it.
 - Tab quotes an argument that would mean something else typed bare:
   `2.0` (the number 2), `@preview/x` (a variable), `<intro>` (a redirect), `true`, or the name of a built-in or definition.
   A file name is put in backticks, a completion definition's value in single quotes.

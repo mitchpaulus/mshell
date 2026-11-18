@@ -2222,7 +2222,17 @@ func (fm *FileManager) openFileUnix(entry os.DirEntry) {
 		status := openerFailureStatus(command, err, output)
 		var exitErr *exec.ExitError
 		if command == "xdg-open" && errors.As(err, &exitErr) && exitErr.ExitCode() == 3 {
-			if withCommand := xdgOpenNoProgramStatus(filePath); withCommand != "" {
+			// Under WSL, Windows may have a program for the file.
+			tried, windowsStatus := false, ""
+			if isWSL() {
+				tried, windowsStatus = openWithWindowsFromWSL(filePath)
+			}
+			if tried && windowsStatus == "" {
+				return
+			}
+			if tried {
+				status = windowsStatus
+			} else if withCommand := xdgOpenNoProgramStatus(filePath); withCommand != "" {
 				status = withCommand
 			}
 		}
@@ -2234,6 +2244,45 @@ func (fm *FileManager) openFileUnix(entry os.DirEntry) {
 		fm.statusMsg = status
 		fm.render()
 	}()
+}
+
+// wslPowerShellPath is where powershell.exe usually is, as seen from WSL,
+// for when it is not on PATH.
+const wslPowerShellPath = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+
+// openWithWindowsFromWSL opens the file at path, a path in WSL, with the
+// program Windows has for it. tried is false when Windows could not be
+// asked, because wslpath or powershell.exe is missing. Otherwise status is
+// empty when Windows opened the file, and the message to show when not.
+func openWithWindowsFromWSL(path string) (tried bool, status string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "wslpath", "-w", path).Output()
+	windowsPath := strings.TrimRight(string(out), "\r\n")
+	if err != nil || windowsPath == "" {
+		return false, ""
+	}
+
+	command, args, err := defaultAppCommand(windowsPath, "windows")
+	if err != nil {
+		return false, ""
+	}
+	if _, lookErr := exec.LookPath(command); lookErr != nil {
+		if _, statErr := os.Stat(wslPowerShellPath); statErr != nil {
+			return false, ""
+		}
+		command = wslPowerShellPath
+	}
+
+	output, err := runDefaultOpener(command, args)
+	switch {
+	case err == nil:
+		return true, ""
+	case errors.Is(err, errDefaultOpenerTimedOut):
+		return true, fmt.Sprintf("Open failed: Windows did not open the file within %s.", defaultOpenerTimeout)
+	default:
+		return true, openerFailureStatus("powershell.exe", err, output)
+	}
 }
 
 // xdgOpenNoProgramStatus is the status message for xdg-open finding no

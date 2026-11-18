@@ -82,6 +82,7 @@ func TestOpenFileUnixReportsOpenerFailure(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("EDITOR", "")
 	t.Setenv("BROWSER", "")
+	setIsWSL(t, false)
 
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "report.pdf"), []byte("%PDF-1.4\n"), 0644); err != nil {
@@ -139,5 +140,114 @@ func TestOpenFileUnixReportsMissingOpener(t *testing.T) {
 
 	if !strings.Contains(fm.statusMsg, "was not found on PATH") {
 		t.Fatalf("statusMsg = %q, want it to say the opener was not found on PATH", fm.statusMsg)
+	}
+}
+
+func setIsWSL(t *testing.T, value bool) {
+	t.Helper()
+	saved := isWSL
+	isWSL = func() bool { return value }
+	t.Cleanup(func() { isWSL = saved })
+}
+
+// newWSLOpenTest sets up a file manager on a PDF, under what looks like WSL,
+// where xdg-open finds no program and powershell.exe runs powerShellScript.
+// It returns the file manager and the file powershell.exe's arguments are
+// written to.
+func newWSLOpenTest(t *testing.T, powerShellExit string) (*FileManager, string) {
+	t.Helper()
+	binDir := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "args")
+	scripts := map[string]string{
+		"xdg-open":       "#!/bin/sh\nexit 3\n",
+		"xdg-mime":       "#!/bin/sh\necho application/pdf\n",
+		"wslpath":        "#!/bin/sh\nprintf '%s\\n' 'C:\\docs\\report.pdf'\n",
+		"powershell.exe": "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argsFile + "'\n" + powerShellExit + "\n",
+	}
+	for name, script := range scripts {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(script), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("EDITOR", "")
+	setIsWSL(t, true)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "report.pdf"), []byte("%PDF-1.4\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.Create(filepath.Join(t.TempDir(), "screen"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { out.Close() })
+	fm := &FileManager{rows: 10, cols: 80, currentDir: dir, ttyOut: out}
+	fm.loadDirectory()
+	return fm, argsFile
+}
+
+// waitForFile waits for the file at path to have content and returns it.
+func waitForFile(t *testing.T, path string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+			return string(data)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%s was not written", path)
+	return ""
+}
+
+// Under WSL, a file xdg-open has no program for is opened with Windows,
+// using its Windows path, and no failure is shown.
+func TestOpenFileUnixUnderWSLOpensWithWindows(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("xdg-open is only used on Linux")
+	}
+	fm, argsFile := newWSLOpenTest(t, "exit 0")
+
+	fm.renderMu.Lock()
+	fm.enterSelected()
+	fm.renderMu.Unlock()
+
+	args := waitForFile(t, argsFile)
+	if want := "-NoProfile\n-Command\nStart-Process -FilePath 'C:\\docs\\report.pdf'\n"; args != want {
+		t.Fatalf("powershell.exe arguments = %q, want %q", args, want)
+	}
+	// The status would be set shortly after powershell.exe exits.
+	time.Sleep(200 * time.Millisecond)
+	fm.renderMu.Lock()
+	status := fm.statusMsg
+	fm.renderMu.Unlock()
+	if status != "" {
+		t.Fatalf("statusMsg = %q, want it empty", status)
+	}
+}
+
+// Under WSL, when Windows cannot open the file either, what Windows said is
+// shown.
+func TestOpenFileUnixUnderWSLReportsWindowsFailure(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("xdg-open is only used on Linux")
+	}
+	fm, _ := newWSLOpenTest(t, "echo 'Start-Process : no program' >&2\nexit 1")
+
+	fm.renderMu.Lock()
+	fm.enterSelected()
+	fm.renderMu.Unlock()
+
+	deadline := time.Now().Add(10 * time.Second)
+	status := ""
+	for status == "" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		fm.renderMu.Lock()
+		status = fm.statusMsg
+		fm.renderMu.Unlock()
+	}
+	if want := "Open failed: powershell.exe: exit status 1: Start-Process : no program"; status != want {
+		t.Fatalf("statusMsg = %q, want %q", status, want)
 	}
 }
