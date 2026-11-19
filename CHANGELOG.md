@@ -67,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   After a line that stops with an error, the stack goes back to what it was before the line, less the new lists, dictionaries and grids the line took.
 - The file manager previews PNG, JPEG, and GIF images in terminals that support sixel graphics, such as Windows Terminal, WezTerm, foot, and xterm.
   Other terminals show the image format and size in pixels.
+  JPEG photos that are stored turned or mirrored, as cameras and phones often do, are shown the right way up.
   If images look stretched, set `MSH_CELL_PIXELS` to the real size of a text cell in pixels, such as `9x20`.
   Windows Terminal always reports 10x20 cells whatever the font, so images there can be slightly squeezed without it.
 - The file manager preview shows PDF details: version, page count, page size, encryption, and document info such as title and author.

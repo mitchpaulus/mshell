@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
 	"math"
 	"os"
@@ -69,7 +70,7 @@ func TestFitImageKeepsAspectRatio(t *testing.T) {
 		{800, 50, 100, 50},
 		{1000, 1000, 400, 200}, // never enlarged
 	} {
-		got := fitImage(src, tc.maxW, tc.maxH, 1_000_000, 1).Bounds()
+		got := fitImage(src, 1, tc.maxW, tc.maxH, 1_000_000, 1).Bounds()
 		if got.Dx() != tc.wantW || got.Dy() != tc.wantH {
 			t.Errorf("fit in %dx%d = %dx%d, want %dx%d", tc.maxW, tc.maxH, got.Dx(), got.Dy(), tc.wantW, tc.wantH)
 		}
@@ -80,7 +81,7 @@ func TestFitImageAveragesPixels(t *testing.T) {
 	src := image.NewRGBA(image.Rect(0, 0, 2, 1))
 	src.SetRGBA(0, 0, color.RGBA{200, 0, 0, 255})
 	src.SetRGBA(1, 0, color.RGBA{0, 100, 0, 255})
-	got := fitImage(src, 1, 1, 1, 1).RGBAAt(0, 0)
+	got := fitImage(src, 1, 1, 1, 1, 1).RGBAAt(0, 0)
 	if want := (color.RGBA{100, 50, 0, 255}); got != want {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -188,7 +189,7 @@ func TestFitImageBlendsWhenWidening(t *testing.T) {
 	src := image.NewRGBA(image.Rect(0, 0, 2, 1))
 	src.SetRGBA(0, 0, color.RGBA{0, 0, 0, 255})
 	src.SetRGBA(1, 0, color.RGBA{200, 200, 200, 255})
-	got := fitImage(src, 4, 1, 100, 0.5)
+	got := fitImage(src, 1, 4, 1, 100, 0.5)
 	want := []uint8{0, 0, 200, 200}
 	for x, v := range want {
 		if c := got.RGBAAt(x, 0); c.R != v {
@@ -196,7 +197,7 @@ func TestFitImageBlendsWhenWidening(t *testing.T) {
 		}
 	}
 	// Two pixels widened to three: the middle one is half of each.
-	got = fitImage(src, 3, 1, 100, 2.0/3)
+	got = fitImage(src, 1, 3, 1, 100, 2.0/3)
 	if c := got.RGBAAt(1, 0); c.R != 100 {
 		t.Errorf("middle pixel = %v, want red 100", c)
 	}
@@ -504,18 +505,18 @@ func TestFitImageMakesUpForNarrowPixels(t *testing.T) {
 	src := image.NewRGBA(image.Rect(0, 0, 400, 200))
 	// Pixels that appear 0.8 as wide as tall: the image is drawn 1.25 times
 	// wider, so it appears 2:1 on screen.
-	got := fitImage(src, 1000, 1000, 1_000_000, 0.8).Bounds()
+	got := fitImage(src, 1, 1000, 1000, 1_000_000, 0.8).Bounds()
 	if got.Dx() != 500 || got.Dy() != 200 {
 		t.Fatalf("got %dx%d, want 500x200", got.Dx(), got.Dy())
 	}
 	// The box still limits the size.
-	got = fitImage(src, 250, 1000, 1_000_000, 0.8).Bounds()
+	got = fitImage(src, 1, 250, 1000, 1_000_000, 0.8).Bounds()
 	if got.Dx() != 250 || got.Dy() != 100 {
 		t.Fatalf("got %dx%d, want 250x100", got.Dx(), got.Dy())
 	}
 	// Bad values are treated as square pixels.
 	for _, aspect := range []float64{0, -1, math.NaN(), math.Inf(1)} {
-		got = fitImage(src, 1000, 1000, 1_000_000, aspect).Bounds()
+		got = fitImage(src, 1, 1000, 1000, 1_000_000, aspect).Bounds()
 		if got.Dx() != 400 || got.Dy() != 200 {
 			t.Fatalf("aspect %v: got %dx%d, want 400x200", aspect, got.Dx(), got.Dy())
 		}
@@ -538,7 +539,7 @@ func TestParseSixelRepliesIgnoresBadCellSizes(t *testing.T) {
 
 func TestFitImageLimitsTotalPixels(t *testing.T) {
 	src := image.NewRGBA(image.Rect(0, 0, 400, 200))
-	got := fitImage(src, 400, 200, 20_000, 1).Bounds()
+	got := fitImage(src, 1, 400, 200, 20_000, 1).Bounds()
 	if got.Dx()*got.Dy() > 20_000 || got.Dx() != 2*got.Dy() {
 		t.Fatalf("got %dx%d, want at most 20000 pixels at 2:1", got.Dx(), got.Dy())
 	}
@@ -746,5 +747,226 @@ func TestWaitMilliseconds(t *testing.T) {
 		if got := waitMilliseconds(tc.wait); got != tc.want {
 			t.Errorf("waitMilliseconds(%s) = %d, want %d", tc.wait, got, tc.want)
 		}
+	}
+}
+
+func TestOrientImage(t *testing.T) {
+	// The stored image, 3 wide and 2 tall, one number per pixel:
+	//
+	//	0 1 2
+	//	3 4 5
+	//
+	// and how each orientation says it is meant to be seen.
+	for orientation, want := range map[int][][]uint8{
+		1: {{0, 1, 2}, {3, 4, 5}},
+		2: {{2, 1, 0}, {5, 4, 3}},   // mirrored left to right
+		3: {{5, 4, 3}, {2, 1, 0}},   // turned half way round
+		4: {{3, 4, 5}, {0, 1, 2}},   // mirrored top to bottom
+		5: {{0, 3}, {1, 4}, {2, 5}}, // mirrored across the diagonal from the top left
+		6: {{3, 0}, {4, 1}, {5, 2}}, // turned a quarter clockwise
+		7: {{5, 2}, {4, 1}, {3, 0}}, // mirrored across the diagonal from the top right
+		8: {{2, 5}, {1, 4}, {0, 3}}, // turned a quarter counter-clockwise
+		0: {{0, 1, 2}, {3, 4, 5}},   // not an orientation: left alone
+		9: {{0, 1, 2}, {3, 4, 5}},
+	} {
+		src := image.NewRGBA(image.Rect(0, 0, 3, 2))
+		for i := 0; i < 6; i++ {
+			src.SetRGBA(i%3, i/3, color.RGBA{uint8(i), uint8(10 * i), uint8(20 * i), 255})
+		}
+		got := orientImage(src, orientation)
+		if got.Bounds() != image.Rect(0, 0, len(want[0]), len(want)) {
+			t.Errorf("orientation %d: bounds %v, want %dx%d", orientation, got.Bounds(), len(want[0]), len(want))
+			continue
+		}
+		for y, row := range want {
+			for x, i := range row {
+				if c := got.RGBAAt(x, y); c != (color.RGBA{i, 10 * i, 20 * i, 255}) {
+					t.Errorf("orientation %d: pixel %d,%d is %v, want pixel %d of the stored image", orientation, x, y, c, i)
+				}
+			}
+		}
+	}
+}
+
+// testExif returns an Exif APP1 segment holding only an orientation, written
+// with the given byte order, value type (3 for 16 bit, 4 for 32 bit), and
+// number of bytes between the TIFF header and the image directory.
+func testExif(order binary.ByteOrder, valueType uint16, padding int, orientation uint32) []byte {
+	var tiff bytes.Buffer
+	if order == binary.ByteOrder(binary.LittleEndian) {
+		tiff.WriteString("II")
+	} else {
+		tiff.WriteString("MM")
+	}
+	binary.Write(&tiff, order, uint16(42))
+	binary.Write(&tiff, order, uint32(8+padding))
+	tiff.Write(make([]byte, padding))
+	binary.Write(&tiff, order, uint16(2)) // two entries
+	// An entry that is not the orientation: image width.
+	binary.Write(&tiff, order, []uint16{0x0100, 3})
+	binary.Write(&tiff, order, uint32(1))
+	binary.Write(&tiff, order, []uint16{7, 0})
+	binary.Write(&tiff, order, []uint16{0x0112, valueType})
+	binary.Write(&tiff, order, uint32(1))
+	if valueType == 3 {
+		binary.Write(&tiff, order, []uint16{uint16(orientation), 0})
+	} else {
+		binary.Write(&tiff, order, orientation)
+	}
+	binary.Write(&tiff, order, uint32(0)) // no next directory
+	return testJPEGSegment(0xE1, append([]byte("Exif\x00\x00"), tiff.Bytes()...))
+}
+
+func testJPEGSegment(marker byte, data []byte) []byte {
+	segment := []byte{0xFF, marker, byte((len(data) + 2) >> 8), byte(len(data) + 2)}
+	return append(segment, data...)
+}
+
+// testJPEG returns a JPEG image of w x h pixels with the given segments put
+// in right after the start of the file. The left half is red and the right
+// half blue.
+func testJPEG(t *testing.T, w int, h int, segments ...[]byte) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if x < w/2 {
+				img.SetRGBA(x, y, color.RGBA{255, 0, 0, 255})
+			} else {
+				img.SetRGBA(x, y, color.RGBA{0, 0, 255, 255})
+			}
+		}
+	}
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, img, nil); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte{0xFF, 0xD8}
+	for _, segment := range segments {
+		data = append(data, segment...)
+	}
+	return append(data, encoded.Bytes()[2:]...)
+}
+
+func TestJPEGOrientation(t *testing.T) {
+	for orientation := uint32(1); orientation <= 8; orientation++ {
+		for _, order := range []binary.ByteOrder{binary.LittleEndian, binary.BigEndian} {
+			for _, valueType := range []uint16{3, 4} {
+				data := testJPEG(t, 16, 8, testExif(order, valueType, 0, orientation))
+				if got := jpegOrientation(bytes.NewReader(data)); got != int(orientation) {
+					t.Errorf("orientation %d, %v, type %d: got %d", orientation, order, valueType, got)
+				}
+			}
+		}
+	}
+
+	jfif := testJPEGSegment(0xE0, []byte("JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"))
+	xmp := testJPEGSegment(0xE1, []byte("http://ns.adobe.com/xap/1.0/\x00<x/>"))
+	big := testJPEGSegment(0xE2, make([]byte, 65533))
+	exif := testExif(binary.BigEndian, 3, 0, 6)
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want int
+	}{
+		{"no exif", testJPEG(t, 16, 8), 1},
+		{"after other segments", testJPEG(t, 16, 8, jfif, xmp, big, big, exif), 6},
+		{"fill bytes before the marker", testJPEG(t, 16, 8, []byte{0xFF, 0xFF}, exif), 6},
+		{"directory not right after the header", testJPEG(t, 16, 8, testExif(binary.LittleEndian, 3, 10, 8)), 8},
+		{"first exif wins", testJPEG(t, 16, 8, exif, testExif(binary.BigEndian, 3, 0, 3)), 6},
+		{"orientation 0", testJPEG(t, 16, 8, testExif(binary.BigEndian, 3, 0, 0)), 1},
+		{"orientation 9", testJPEG(t, 16, 8, testExif(binary.BigEndian, 3, 0, 9)), 1},
+		{"wrong value type", testJPEG(t, 16, 8, testExif(binary.BigEndian, 2, 0, 6)), 1},
+		{"not a jpeg", []byte("\x89PNG\r\n\x1a\n"), 1},
+		{"empty", nil, 1},
+		{"exif after the image data", append(testJPEG(t, 16, 8), exif...), 1},
+	} {
+		if got := jpegOrientation(bytes.NewReader(tc.data)); got != tc.want {
+			t.Errorf("%s: got %d, want %d", tc.name, got, tc.want)
+		}
+	}
+
+	// Cut short anywhere, the file has no orientation or the right one, and
+	// nothing panics.
+	whole := testJPEG(t, 16, 8, jfif, exif)
+	for n := 0; n < len(whole); n++ {
+		if got := jpegOrientation(bytes.NewReader(whole[:n])); got != 1 && got != 6 {
+			t.Fatalf("cut to %d bytes: got %d", n, got)
+		}
+	}
+	// The same for Exif data with any one byte changed.
+	for i := range exif {
+		for _, b := range []byte{0x00, 0x7F, 0xFF} {
+			changed := bytes.Clone(exif)
+			changed[i] = b
+			if got := jpegOrientation(bytes.NewReader(testJPEG(t, 16, 8, changed))); got < 1 || got > 8 {
+				t.Fatalf("byte %d set to %#x: got %d", i, b, got)
+			}
+		}
+	}
+}
+
+func TestFitImageOrientation(t *testing.T) {
+	src, err := jpeg.Decode(bytes.NewReader(testJPEG(t, 64, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	isRed := func(c color.RGBA) bool { return c.R > 200 && c.B < 50 }
+	isBlue := func(c color.RGBA) bool { return c.B > 200 && c.R < 50 }
+
+	// Stored with red on the left. Seen, red is:
+	for orientation, redAt := range map[int]string{
+		1: "left", 2: "right", 3: "right", 4: "left",
+		5: "top", 6: "top", 7: "bottom", 8: "bottom",
+	} {
+		got := fitImage(src, orientation, 1000, 1000, 1_000_000, 1)
+		wantW, wantH := 64, 32
+		if orientation >= 5 {
+			wantW, wantH = 32, 64
+		}
+		if got.Bounds() != image.Rect(0, 0, wantW, wantH) {
+			t.Errorf("orientation %d: bounds %v, want %dx%d", orientation, got.Bounds(), wantW, wantH)
+			continue
+		}
+		red := map[string]image.Point{
+			"left": {wantW / 4, wantH / 2}, "right": {wantW * 3 / 4, wantH / 2},
+			"top": {wantW / 2, wantH / 4}, "bottom": {wantW / 2, wantH * 3 / 4},
+		}[redAt]
+		blue := image.Pt(wantW-1-red.X, wantH-1-red.Y)
+		if !isRed(got.RGBAAt(red.X, red.Y)) || !isBlue(got.RGBAAt(blue.X, blue.Y)) {
+			t.Errorf("orientation %d: red is not at the %s", orientation, redAt)
+		}
+	}
+
+	// The limits and the pixel shape apply to the image as seen: 32x64.
+	if got := fitImage(src, 6, 16, 1000, 1_000_000, 1).Bounds(); got != image.Rect(0, 0, 16, 32) {
+		t.Errorf("fit to 16 wide: %v, want 16x32", got)
+	}
+	if got := fitImage(src, 6, 1000, 16, 1_000_000, 1).Bounds(); got != image.Rect(0, 0, 8, 16) {
+		t.Errorf("fit to 16 tall: %v, want 8x16", got)
+	}
+	if got := fitImage(src, 8, 1000, 1000, 1_000_000, 0.5).Bounds(); got != image.Rect(0, 0, 64, 64) {
+		t.Errorf("pixels half as wide as tall: %v, want 64x64", got)
+	}
+}
+
+func TestPreviewImageJPEGOrientation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "photo.jpg")
+	if err := os.WriteFile(path, testJPEG(t, 64, 32, testExif(binary.BigEndian, 3, 0, 6)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lines, sixel := previewImage(path, 50, 50, 1)
+	if len(lines) != 1 || lines[0] != " JPEG image, 32x64" {
+		t.Fatalf("lines = %q", lines)
+	}
+	w, h, _ := decodeTestSixel(t, sixel)
+	if w != 25 || h != 50 {
+		t.Fatalf("image is %dx%d, want 25x50", w, h)
+	}
+
+	// Without sixel, the size is still the size as seen.
+	lines, _ = previewImage(path, 0, 0, 1)
+	if len(lines) != 1 || lines[0] != " JPEG image, 32x64" {
+		t.Fatalf("lines = %q", lines)
 	}
 }
