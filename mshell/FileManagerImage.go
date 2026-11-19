@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
@@ -338,7 +340,19 @@ func previewImage(path string, maxW int, maxH int, pixelAspect float64) (lines [
 	if err != nil || config.Width <= 0 || config.Height <= 0 {
 		return []string{" (cannot read image)"}, nil
 	}
-	info := fmt.Sprintf(" %s image, %dx%d", strings.ToUpper(format), config.Width, config.Height)
+	// A JPEG can say that it is stored turned or mirrored. The size shown is
+	// the size of the image as it is meant to be seen.
+	orientation := 1
+	if format == "jpeg" {
+		if _, err := f.Seek(0, io.SeekStart); err == nil {
+			orientation = jpegOrientation(io.LimitReader(f, maxImageFileBytes))
+		}
+	}
+	shownW, shownH := config.Width, config.Height
+	if orientationSwapsSides(orientation) {
+		shownW, shownH = shownH, shownW
+	}
+	info := fmt.Sprintf(" %s image, %dx%d", strings.ToUpper(format), shownW, shownH)
 	if maxW <= 0 || maxH <= 0 {
 		return []string{info}, nil
 	}
@@ -353,7 +367,7 @@ func previewImage(path string, maxW int, maxH int, pixelAspect float64) (lines [
 	if err != nil {
 		return []string{info, " (cannot read image)"}, nil
 	}
-	fitted := fitImage(img, min(maxW, maxImageSide), min(maxH, maxImageSide), maxImageOutputPixels, pixelAspect)
+	fitted := fitImage(img, orientation, min(maxW, maxImageSide), min(maxH, maxImageSide), maxImageOutputPixels, pixelAspect)
 	sixel = encodeSixel(quantizeImage(fitted), maxSixelBytes)
 	if sixel == nil {
 		return []string{info, " (too detailed to preview)"}, nil
@@ -361,15 +375,184 @@ func previewImage(path string, maxW int, maxH int, pixelAspect float64) (lines [
 	return []string{info}, sixel
 }
 
+// jpegOrientation returns the Exif orientation of the JPEG file in r, from 1
+// to 8, or 1, meaning stored as seen, when the file does not give one.
+func jpegOrientation(r io.Reader) int {
+	br := bufio.NewReader(r)
+	var buf [2]byte
+	if _, err := io.ReadFull(br, buf[:]); err != nil || buf[0] != 0xFF || buf[1] != 0xD8 {
+		return 1
+	}
+	for {
+		// Each segment starts with 0xFF and a marker byte. Like the decoder,
+		// skip anything else before the 0xFF, and extra 0xFF bytes after it.
+		b, err := br.ReadByte()
+		if err != nil {
+			return 1
+		}
+		if b != 0xFF {
+			continue
+		}
+		marker := byte(0xFF)
+		for marker == 0xFF {
+			if marker, err = br.ReadByte(); err != nil {
+				return 1
+			}
+		}
+		switch {
+		case marker == 0xDA || marker == 0xD9:
+			// Start of the image data or end of the file: Exif data comes
+			// before both.
+			return 1
+		case marker == 0x00 || marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7):
+			// Markers that have no data.
+			continue
+		}
+		if _, err := io.ReadFull(br, buf[:]); err != nil {
+			return 1
+		}
+		// The length counts its own two bytes.
+		length := int(binary.BigEndian.Uint16(buf[:])) - 2
+		if length < 0 {
+			return 1
+		}
+		if marker != 0xE1 {
+			if _, err := br.Discard(length); err != nil {
+				return 1
+			}
+			continue
+		}
+		// APP1 holds Exif data, or other data such as XMP under another name.
+		segment := make([]byte, length)
+		if _, err := io.ReadFull(br, segment); err != nil {
+			return 1
+		}
+		if tiff, ok := bytes.CutPrefix(segment, []byte("Exif\x00\x00")); ok {
+			return tiffOrientation(tiff)
+		}
+	}
+}
+
+// tiffOrientation returns the orientation, from 1 to 8, in the first image
+// directory of Exif data, which is laid out as a TIFF file. It returns 1 when
+// there is none.
+func tiffOrientation(tiff []byte) int {
+	if len(tiff) < 8 {
+		return 1
+	}
+	var order binary.ByteOrder
+	switch string(tiff[:2]) {
+	case "II":
+		order = binary.LittleEndian
+	case "MM":
+		order = binary.BigEndian
+	default:
+		return 1
+	}
+	if order.Uint16(tiff[2:]) != 42 {
+		return 1
+	}
+	offset := uint64(order.Uint32(tiff[4:]))
+	if offset+2 > uint64(len(tiff)) {
+		return 1
+	}
+	count := int(order.Uint16(tiff[offset:]))
+	entries := tiff[offset+2:]
+	// An entry is 12 bytes: tag, type, number of values, and the value itself
+	// when it fits in 4 bytes.
+	for ; count > 0 && len(entries) >= 12; count, entries = count-1, entries[12:] {
+		if order.Uint16(entries) != 0x0112 {
+			continue
+		}
+		if order.Uint32(entries[4:]) != 1 {
+			return 1
+		}
+		var value uint32
+		switch order.Uint16(entries[2:]) {
+		case 3: // 16 bit, what the standard asks for
+			value = uint32(order.Uint16(entries[8:]))
+		case 4: // 32 bit, which some writers use
+			value = order.Uint32(entries[8:])
+		}
+		if value >= 1 && value <= 8 {
+			return int(value)
+		}
+		return 1
+	}
+	return 1
+}
+
+// orientationSwapsSides reports whether an image with this Exif orientation
+// is stored on its side, so that its width is seen as its height.
+func orientationSwapsSides(orientation int) bool {
+	return orientation >= 5 && orientation <= 8
+}
+
+// orientImage returns src as it is meant to be seen, given the Exif
+// orientation it is stored with. The orientation says where the first stored
+// row and the first stored column are in the image as seen:
+//
+//	1: top, left      5: left, top
+//	2: top, right     6: right, top
+//	3: bottom, right  7: right, bottom
+//	4: bottom, left   8: left, bottom
+func orientImage(src *image.RGBA, orientation int) *image.RGBA {
+	if orientation < 2 || orientation > 8 {
+		return src
+	}
+	w, h := src.Bounds().Dx(), src.Bounds().Dy()
+	dw, dh := w, h
+	if orientationSwapsSides(orientation) {
+		dw, dh = h, w
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			var dx, dy int
+			switch orientation {
+			case 2:
+				dx, dy = w-1-x, y
+			case 3:
+				dx, dy = w-1-x, h-1-y
+			case 4:
+				dx, dy = x, h-1-y
+			case 5:
+				dx, dy = y, x
+			case 6:
+				dx, dy = h-1-y, x
+			case 7:
+				dx, dy = h-1-y, w-1-x
+			case 8:
+				dx, dy = y, w-1-x
+			}
+			copy(dst.Pix[dy*dst.Stride+dx*4:][:4], src.Pix[y*src.Stride+x*4:][:4])
+		}
+	}
+	return dst
+}
+
 // fitImage scales img to fit in maxW x maxH pixels and maxPixels pixels in
 // total, keeping its aspect ratio as it will appear on screen: with
 // pixelAspect below 1, pixels appear narrower than tall, so the image is made
-// that much wider. It does not enlarge beyond that. Each output pixel is the
-// average of the source area it covers, with partly covered source pixels
-// counted by how much of them is covered. The result has premultiplied alpha.
-func fitImage(img image.Image, maxW int, maxH int, maxPixels int, pixelAspect float64) *image.RGBA {
+// that much wider. It does not enlarge beyond that. orientation is the Exif
+// orientation img is stored with, 1 for stored as seen; the result is the
+// image as seen. The result has premultiplied alpha.
+func fitImage(img image.Image, orientation int, maxW int, maxH int, maxPixels int, pixelAspect float64) *image.RGBA {
 	b := img.Bounds()
-	sw, sh := b.Dx(), b.Dy()
+	// The size is worked out for the image as seen. The stored image is
+	// scaled to that size on its side, then turned, so only the small image
+	// is turned.
+	if orientationSwapsSides(orientation) {
+		w, h := fitSize(b.Dy(), b.Dx(), maxW, maxH, maxPixels, pixelAspect)
+		return orientImage(scaleImage(img, h, w), orientation)
+	}
+	w, h := fitSize(b.Dx(), b.Dy(), maxW, maxH, maxPixels, pixelAspect)
+	return orientImage(scaleImage(img, w, h), orientation)
+}
+
+// fitSize returns the size to draw an image of sw x sh pixels at, following
+// the rules of fitImage.
+func fitSize(sw int, sh int, maxW int, maxH int, maxPixels int, pixelAspect float64) (w int, h int) {
 	if pixelAspect <= 0 || math.IsNaN(pixelAspect) || math.IsInf(pixelAspect, 0) {
 		pixelAspect = 1
 	}
@@ -387,8 +570,17 @@ func fitImage(img image.Image, maxW int, maxH int, maxPixels int, pixelAspect fl
 		fw *= scale
 		fh *= scale
 	}
-	w := min(max(int(fw+0.5), 1), maxW)
-	h := min(max(int(fh+0.5), 1), maxH)
+	w = min(max(int(fw+0.5), 1), maxW)
+	h = min(max(int(fh+0.5), 1), maxH)
+	return w, h
+}
+
+// scaleImage scales img to w x h pixels. Each output pixel is the average of
+// the source area it covers, with partly covered source pixels counted by how
+// much of them is covered. The result has premultiplied alpha.
+func scaleImage(img image.Image, w int, h int) *image.RGBA {
+	b := img.Bounds()
+	sw, sh := b.Dx(), b.Dy()
 
 	cols := sourceSpans(sw, w)
 	rows := sourceSpans(sh, h)
