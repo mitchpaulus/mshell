@@ -40,6 +40,7 @@ In <code>mshell</code>, building up a command line is equivalent to building up 
 </p>
 
 <p>
-<code>mshell</code> source code is UTF-8, as in Go.
+<code>mshell</code> source code is UTF-8, as in Go. By definition, it should not have a byte order mark (BOM).
 A byte in a source file that is not part of a valid UTF-8 character is an error, reported at its line and column.
+Line endings can be as desired, but for improved iteroperatility and compatibility, the canonical version of a script should use Unix newlines (`\n`).
 </p>
