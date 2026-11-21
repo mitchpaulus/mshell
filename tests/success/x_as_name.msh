@@ -1,0 +1,37 @@
+# 'x' is a builtin word like any other, not a keyword: it runs a quotation,
+# and it can be used wherever a name is written.
+
+# Running a quotation.
+(1 wl) x
+2 (1 +) x wl
+x. 4 wl end
+
+# A variable.
+5 x! @x wl
+
+# A dict key, a getter and a dict pattern.
+{x: 6, y: 0} d!
+@d :x? wl
+@d match
+    {x: x} : @x 1 + wl,
+    _ : 'no match' wl,
+end
+
+# A list pattern.
+[8 9] match
+    [x y] : @x wl @y wl,
+    _ : 'no match' wl,
+end
+
+# A payload name and a typed pattern.
+10 just match
+    just x : @x wl,
+    none : 'none' wl,
+end
+11 as int | str match
+    is int x : @x wl,
+    _ : 'not an int' wl,
+end
+
+# A grid column.
+[| x, y; 12, 13 |] 'x' gridCol :0: wl

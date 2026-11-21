@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `sanitize` option for `zipExtract`, `zipExtractEntry`, `tarExtract` and `tarExtractEntry`: rewrite entry names that are not valid on every operating system,
+  such as `a:b?.txt` to `a_b_.txt` and `nul.txt` to `_nul.txt`. The result is the same on every OS.
+  Two entries that end up with the same name are an error instead of one replacing the other.
 - Tab completion for `typst`: subcommands, options and their values, `.typ` files for the input, and output files.
   `typst init` offers the templates in the local and downloaded package directories,
   and the `typst query` selector offers the labels in the input file.
@@ -64,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   After a line that stops with an error, the stack goes back to what it was before the line, less the new lists, dictionaries and grids the line took.
 - The file manager previews PNG, JPEG, and GIF images in terminals that support sixel graphics, such as Windows Terminal, WezTerm, foot, and xterm.
   Other terminals show the image format and size in pixels.
+  JPEG photos that are stored turned or mirrored, as cameras and phones often do, are shown the right way up.
   If images look stretched, set `MSH_CELL_PIXELS` to the real size of a text cell in pixels, such as `9x20`.
   Windows Terminal always reports 10x20 cells whatever the font, so images there can be slightly squeezed without it.
 - The file manager preview shows PDF details: version, page count, page size, encryption, and document info such as title and author.
@@ -129,6 +133,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `x` is a builtin like any other instead of a keyword, so it can be used as a name:
+  a dict key (`{x: 1}`), a name in a `match` pattern (`[x y]`, `just x`, `is int x`), and a prefix quote (`x. ... end`).
 - The standard library is built into the `msh` binary. There is no `std.msh` to install, and release archives hold only the binary.
   A `std.msh` left in the data directory by an earlier install is not read, and the `MSHSTDLIB` environment variable is no longer used.
   In messages, a standard library definition's position is given as `<built-in std.msh>:line:column`.
@@ -306,6 +312,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assumed US month/day/year. Dates with a leading four digit year are unaffected.
 - `toDt` now returns an `err` for out of range components such as month 13, Feb 30, or hour 25,
   instead of silently rolling them over into the next month or day.
+- `toDt` keeps fractional seconds, so `2026-08-17T15:00:32.1463Z` is 15:00:32.1463. The fraction used to be dropped.
 - `return` inside an `if` or `match` now leaves the whole definition when the definition was called from a quotation run by a function like `map` or `each`.
   It used to leave only the `if` or `match`, and the rest of the definition kept running.
 - A definition called as the last item of a redirected quotation run by `iff`, such as ``true (myDef) `out.txt` > iff``, now writes to the file.

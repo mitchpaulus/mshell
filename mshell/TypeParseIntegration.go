@@ -232,12 +232,8 @@ func (parser *MShellParser) parseIsPattern() (*MShellIsPattern, error) {
 		return nil, inParseContext("'is' pattern", joinTypeErrs(errs))
 	}
 	if parser.curr.Type != LITERAL {
-		hint := ""
-		if parser.curr.Type == INTERPRET {
-			hint = " 'x' runs a quotation, so it cannot be a name."
-		}
-		return nil, fmt.Errorf("%d:%d: Expected a name (or '_') after 'is %s', got %s. The typed pattern is written 'is T name'.%s",
-			parser.curr.Line, parser.curr.Column, target.DebugString(), tokDesc(parser.curr), hint)
+		return nil, fmt.Errorf("%d:%d: Expected a name (or '_') after 'is %s', got %s. The typed pattern is written 'is T name'.",
+			parser.curr.Line, parser.curr.Column, target.DebugString(), tokDesc(parser.curr))
 	}
 	binding := parser.curr
 	parser.NextToken() // consume the name

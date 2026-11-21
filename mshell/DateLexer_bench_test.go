@@ -10,6 +10,9 @@ var benchDateInputs = []struct{ name, in string }{
 	{"dmy", "16/06/2025"},
 	{"ambiguous", "06/05/2025"},
 	{"garbage", "hello world"},
+	{"isoOffset", "2026-08-17T15:00:32.1463+05:30"},
+	{"hourPM", "2026-08-17 5 PM"},
+	{"logLine", "2026-08-17T15:00:32.1463Z INFO request 4412 served 200 in 35 ms from 10.0.0.12 port 8080 user 77 bytes 10432 retries 0 shard 3"},
 }
 
 func BenchmarkParseDateTime(b *testing.B) {

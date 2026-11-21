@@ -39,7 +39,6 @@ const (
 	PLUS
 	EQUALS
 	FATARROW
-	INTERPRET
 	IF
 	IFF // This is just temporary as I work to remove the old if.
 	LOOP
@@ -168,8 +167,6 @@ func (t TokenType) String() string {
 		return "EQUALS"
 	case FATARROW:
 		return "FATARROW"
-	case INTERPRET:
-		return "INTERPRET"
 	case IF:
 		return "IF"
 	case IFF:
@@ -702,7 +699,7 @@ func (l *Lexer) parseLiteralOrKeyword() Token {
 
 	// If the literal is immediately followed by '!', it's a variable store —
 	// regardless of whether the literal happens to match a keyword. This lets
-	// users name a variable anything, including 'x', 'if', 'def', etc.
+	// users name a variable anything, including 'if', 'def', etc.
 	if l.peek() == '!' {
 		l.advance()
 		return l.makeToken(VARSTORE)
@@ -833,10 +830,6 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		}
 	case 'V':
 		return l.checkKeyword(1, "ER", VER)
-	case 'x':
-		if l.curLen() == 1 {
-			return INTERPRET
-		}
 	}
 
 	if l.peek() == '!' {

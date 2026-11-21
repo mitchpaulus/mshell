@@ -391,6 +391,14 @@ func extractTarArchive(tarPath, destDir string, options zipExtractOptions) error
 	baseWithSep := ensureTrailingSeparator(absDest)
 	budget := newByteBudget(options.maxBytes)
 
+	// A tarball is read once, front to back, so two entries sanitized to the
+	// same name are only found when the second one is reached. Entries before
+	// it have already been written.
+	var names *sanitizedNames
+	if options.sanitize {
+		names = newSanitizedNames()
+	}
+
 	for {
 		header, err := reader.Next()
 		if err == io.EOF {
@@ -423,14 +431,19 @@ func extractTarArchive(tarPath, destDir string, options zipExtractOptions) error
 			continue
 		}
 
+		outName, err := extractionName(stripped, names)
+		if err != nil {
+			return err
+		}
+
 		// Lexical containment as a cheap first layer; os.Root is the
 		// authoritative, kernel-enforced check performed by the write below.
-		target := filepath.Clean(filepath.Join(absDest, filepath.FromSlash(stripped)))
+		target := filepath.Clean(filepath.Join(absDest, filepath.FromSlash(outName)))
 		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
 			return err
 		}
 
-		if err := writeTarEntryToRoot(root, absDest, reader, header, stripped, options.zipWriteOptions, budget); err != nil {
+		if err := writeTarEntryToRoot(root, absDest, reader, header, outName, options.zipWriteOptions, budget); err != nil {
 			return err
 		}
 	}
@@ -470,6 +483,10 @@ func extractTarEntry(tarPath, entryPath, destPath string, options zipExtractEntr
 	}()
 	baseWithSep := ""
 	budget := newByteBudget(options.maxBytes)
+	var names *sanitizedNames
+	if options.sanitize {
+		names = newSanitizedNames()
+	}
 
 	for {
 		header, err := reader.Next()
@@ -529,12 +546,17 @@ func extractTarEntry(tarPath, entryPath, destPath string, options zipExtractEntr
 			continue
 		}
 
-		target := filepath.Clean(filepath.Join(absDest, filepath.FromSlash(relative)))
+		outName, err := extractionName(relative, names)
+		if err != nil {
+			return err
+		}
+
+		target := filepath.Clean(filepath.Join(absDest, filepath.FromSlash(outName)))
 		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
 			return err
 		}
 
-		if err := writeTarEntryToRoot(root, absDest, reader, header, relative, options.zipWriteOptions, budget); err != nil {
+		if err := writeTarEntryToRoot(root, absDest, reader, header, outName, options.zipWriteOptions, budget); err != nil {
 			return err
 		}
 	}
@@ -590,6 +612,11 @@ func writeTarEntryToRoot(root *os.Root, base string, reader *tar.Reader, header 
 		}
 		return nil
 	case tar.TypeSymlink:
+		if options.sanitize {
+			// The entries a link points at are renamed, so rename the target
+			// the same way or the link would point at a name that is not there.
+			header.Linkname = sanitizeSlashPath(filepath.ToSlash(header.Linkname))
+		}
 		return writeTarSymlinkToRoot(root, base, header, relSlash, options)
 	case tar.TypeReg, '\x00': // '\x00' is the legacy TypeRegA (deprecated) regular-file flag
 		return writeTarRegularFileToRoot(root, base, reader, header, relSlash, options, budget)

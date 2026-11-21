@@ -334,3 +334,46 @@ func TestTarExtractMaxBytesCapsBomb(t *testing.T) {
 		t.Fatalf("small archive under cap should succeed: %v", err)
 	}
 }
+
+func TestTarExtractSanitize(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "s.tar")
+	writeTarArchive(t, archive, false, func(tw *tar.Writer) {
+		addTarFile(t, tw, "dir:1/a?b.txt", "one")
+		addTarSymlink(t, tw, "dir:1/link", "a?b.txt")
+	})
+
+	dest := filepath.Join(dir, "dest")
+	opts := zipExtractOptions{zipWriteOptions: zipWriteOptions{preservePermissions: true, sanitize: true}}
+	if err := extractTarArchive(archive, dest, opts); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dest, "dir_1", "a_b.txt")); err != nil || string(got) != "one" {
+		t.Errorf("a_b.txt: got %q, %v", got, err)
+	}
+	// The link target is renamed the same way, so the link still resolves.
+	if got, err := os.ReadFile(filepath.Join(dest, "dir_1", "link")); err != nil || string(got) != "one" {
+		t.Errorf("link: got %q, %v", got, err)
+	}
+}
+
+// A tarball is read once, so a collision stops the extraction at the second
+// entry; it must not replace the first, even with overwrite set.
+func TestTarExtractSanitizeCollision(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "c.tar")
+	writeTarArchive(t, archive, false, func(tw *tar.Writer) {
+		addTarFile(t, tw, "a:b.txt", "first")
+		addTarFile(t, tw, "a?b.txt", "second")
+	})
+
+	dest := filepath.Join(dir, "dest")
+	opts := zipExtractOptions{zipWriteOptions: zipWriteOptions{overwrite: true, preservePermissions: true, sanitize: true}}
+	err := extractTarArchive(archive, dest, opts)
+	if err == nil || !strings.Contains(err.Error(), "would both be extracted") {
+		t.Fatalf("expected a collision error, got %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dest, "a_b.txt")); err != nil || string(got) != "first" {
+		t.Errorf("a_b.txt: got %q, %v; want the first entry", got, err)
+	}
+}

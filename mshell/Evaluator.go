@@ -1651,6 +1651,9 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 			Type:   LITERAL,
 		}
 
+		if funcToken.Lexeme == "x" {
+			return state.processInterpret(&funcToken, frame)
+		}
 		if def, ok := state.lookupDefinition(frame.Definitions, funcToken.Lexeme); ok {
 			return state.callDefinition(def, t, frame)
 		}
@@ -2271,6 +2274,9 @@ func (state *EvalState) processTokenToken(item MShellParseItem, t *Token, frame 
 			state.handleReturn(base)
 			return nil
 		}
+		if t.Lexeme == "x" {
+			return state.processInterpret(t, frame)
+		}
 		if def, ok := state.lookupDefinition(frame.Definitions, t.Lexeme); ok {
 			return state.callDefinition(def, item, frame)
 		}
@@ -2294,22 +2300,27 @@ func (state *EvalState) processTokenToken(item MShellParseItem, t *Token, frame 
 	case IFF:
 		return state.processIff(t, frame)
 
-	case INTERPRET:
-		obj, err := frame.Stack.Pop()
-		if err != nil {
-			return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot interpret an empty stack.\n", t.Line, t.Column))
-		}
-		quotation, ok := obj.(*MShellQuotation)
-		if !ok {
-			return state.mismatchPtr(fmt.Sprintf("%d:%d: Argument for interpret expected to be a quotation, received a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
-		}
-		return state.pushQuotationFrame(quotation)
 	}
 
 	// Keep the frame's call stack type, which decides whether a bare
 	// literal is allowed (only inside a list).
 	callStackItem := CallStackItem{MShellParseItem: nil, Name: "token", CallStackType: frame.CallStackItem.CallStackType}
 	return nilIfNothingToDo(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions, callStackItem))
+}
+
+// processInterpret handles the builtin `x`: it pops a quotation and pushes
+// a frame that runs it on the frame's stack. It is not in
+// evaluateBuiltinToken because it needs the frame.
+func (state *EvalState) processInterpret(t *Token, frame *EvaluationFrame) *EvalResult {
+	obj, err := frame.Stack.Pop()
+	if err != nil {
+		return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot interpret an empty stack.\n", t.Line, t.Column))
+	}
+	quotation, ok := obj.(*MShellQuotation)
+	if !ok {
+		return state.mismatchPtr(fmt.Sprintf("%d:%d: Argument for interpret expected to be a quotation, received a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+	}
+	return state.pushQuotationFrame(quotation)
 }
 
 // processLoop handles the loop construct
@@ -5333,6 +5344,7 @@ type zipWriteOptions struct {
 	skipExisting        bool
 	preservePermissions bool
 	maxBytes            int64 // 0 = unlimited; total uncompressed bytes for the extraction
+	sanitize            bool  // rewrite entry names so they are valid on every OS
 }
 
 // byteBudget bounds the total number of uncompressed bytes written during a
@@ -5700,6 +5712,12 @@ func parseZipExtractOptions(dict *MShellDict) (zipExtractOptions, error) {
 		return options, err
 	}
 
+	if val, ok, err := boolOption(dict, "sanitize"); err != nil {
+		return options, err
+	} else if ok {
+		options.sanitize = val
+	}
+
 	return options, nil
 }
 
@@ -5757,6 +5775,12 @@ func parseZipExtractEntryOptions(dict *MShellDict) (zipExtractEntryOptions, erro
 
 	if err := parseMaxBytesOption(dict, &options.zipWriteOptions); err != nil {
 		return options, err
+	}
+
+	if val, ok, err := boolOption(dict, "sanitize"); err != nil {
+		return options, err
+	} else if ok {
+		options.sanitize = val
 	}
 
 	return options, nil
@@ -5851,6 +5875,15 @@ func extractZipArchive(zipPath, destDir string, options zipExtractOptions) error
 	baseWithSep := ensureTrailingSeparator(absDest)
 	budget := newByteBudget(options.maxBytes)
 
+	// The zip directory lists every entry up front, so the output names are all
+	// worked out, and two entries sanitized to the same name are reported,
+	// before anything is written.
+	var names *sanitizedNames
+	if options.sanitize {
+		names = newSanitizedNames()
+	}
+	planned := make([]zipPlannedEntry, 0, len(reader.File))
+
 	for _, file := range reader.File {
 		if file.FileInfo().Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("Refusing to extract symlink %s", file.Name)
@@ -5879,18 +5912,33 @@ func extractZipArchive(zipPath, destDir string, options zipExtractOptions) error
 			continue
 		}
 
-		// Lexical containment as a cheap first layer; os.Root is authoritative.
-		target := filepath.Clean(filepath.Join(absDest, filepath.FromSlash(stripped)))
-		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
+		outName, err := extractionName(stripped, names)
+		if err != nil {
 			return err
 		}
 
-		if err := writeZipEntryToRoot(root, absDest, file, stripped, options.zipWriteOptions, budget); err != nil {
+		// Lexical containment as a cheap first layer; os.Root is authoritative.
+		target := filepath.Clean(filepath.Join(absDest, filepath.FromSlash(outName)))
+		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
+			return err
+		}
+		planned = append(planned, zipPlannedEntry{file: file, outName: outName})
+	}
+
+	for _, entry := range planned {
+		if err := writeZipEntryToRoot(root, absDest, entry.file, entry.outName, options.zipWriteOptions, budget); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// zipPlannedEntry is a zip entry together with the destination-relative
+// forward-slash name it will be written under.
+type zipPlannedEntry struct {
+	file    *zip.File
+	outName string
 }
 
 func extractZipEntry(zipPath, entryPath, destPath string, options zipExtractEntryOptions) error {
@@ -5975,6 +6023,12 @@ func extractZipDirectoryEntries(files []*zip.File, targetName, destPath string, 
 	prefix := targetName + "/"
 	budget := newByteBudget(options.maxBytes)
 
+	var names *sanitizedNames
+	if options.sanitize {
+		names = newSanitizedNames()
+	}
+	planned := make([]zipPlannedEntry, 0, len(files))
+
 	for _, file := range files {
 		if file.FileInfo().Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("Refusing to extract symlink %s", file.Name)
@@ -5993,12 +6047,20 @@ func extractZipDirectoryEntries(files []*zip.File, targetName, destPath string, 
 			continue
 		}
 
-		target := filepath.Clean(filepath.Join(absDest, filepath.FromSlash(relative)))
-		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
+		outName, err := extractionName(relative, names)
+		if err != nil {
 			return err
 		}
 
-		if err := writeZipEntryToRoot(root, absDest, file, relative, options.zipWriteOptions, budget); err != nil {
+		target := filepath.Clean(filepath.Join(absDest, filepath.FromSlash(outName)))
+		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
+			return err
+		}
+		planned = append(planned, zipPlannedEntry{file: file, outName: outName})
+	}
+
+	for _, entry := range planned {
+		if err := writeZipEntryToRoot(root, absDest, entry.file, entry.outName, options.zipWriteOptions, budget); err != nil {
 			return err
 		}
 	}
@@ -6156,6 +6218,161 @@ func stripZipComponents(name string, components int, isDir bool) (string, error)
 		return "", fmt.Errorf("Cannot strip %d components from entry %s", components, name)
 	}
 	return strings.Join(parts[components:], "/"), nil
+}
+
+// The `sanitize` option of the zip/tar extract builtins rewrites entry names
+// so that they are valid on every operating system. The rules are the Windows
+// ones, since they are the strictest, and they are applied on every OS so the
+// same archive always extracts to the same names.
+
+// windowsReservedNames are the device names Windows refuses as a file name,
+// with or without an extension ("NUL", "nul.txt").
+var windowsReservedNames = map[string]struct{}{
+	"CON": {}, "PRN": {}, "AUX": {}, "NUL": {}, "CONIN$": {}, "CONOUT$": {},
+	"COM1": {}, "COM2": {}, "COM3": {}, "COM4": {}, "COM5": {}, "COM6": {}, "COM7": {}, "COM8": {}, "COM9": {},
+	"COM¹": {}, "COM²": {}, "COM³": {},
+	"LPT1": {}, "LPT2": {}, "LPT3": {}, "LPT4": {}, "LPT5": {}, "LPT6": {}, "LPT7": {}, "LPT8": {}, "LPT9": {},
+	"LPT¹": {}, "LPT²": {}, "LPT³": {},
+}
+
+func isWindowsInvalidNameByte(c byte) bool {
+	if c < 0x20 {
+		return true
+	}
+	switch c {
+	case '<', '>', ':', '"', '|', '?', '*', '\\':
+		return true
+	}
+	return false
+}
+
+// sanitizeNameComponent rewrites one path component (no slashes):
+//   - `< > : " | ? * \` and control characters each become `_`
+//   - each byte that is not part of valid UTF-8 becomes `_`
+//   - each trailing dot or space becomes `_`
+//   - a reserved device name gets a `_` prefix
+//
+// "." and ".." are returned unchanged, so an entry that tries to leave the
+// destination is still rejected by the caller rather than renamed into it.
+func sanitizeNameComponent(component string) string {
+	if component == "" || component == "." || component == ".." {
+		return component
+	}
+
+	end := len(component)
+	for end > 0 && (component[end-1] == '.' || component[end-1] == ' ') {
+		end--
+	}
+
+	needsRewrite := end != len(component) || !utf8.ValidString(component)
+	if !needsRewrite {
+		for i := 0; i < len(component); i++ {
+			if isWindowsInvalidNameByte(component[i]) {
+				needsRewrite = true
+				break
+			}
+		}
+	}
+
+	result := component
+	if needsRewrite {
+		buf := []byte(component)
+		for i := 0; i < len(buf); {
+			// A byte that does not start a valid UTF-8 character decodes as
+			// RuneError with size 1. (A real U+FFFD in the name has size 3.)
+			r, size := utf8.DecodeRune(buf[i:])
+			if i >= end || isWindowsInvalidNameByte(buf[i]) || (r == utf8.RuneError && size == 1) {
+				buf[i] = '_'
+			}
+			i += size
+		}
+		result = string(buf)
+	}
+
+	stem := result
+	if dot := strings.IndexByte(stem, '.'); dot >= 0 {
+		stem = stem[:dot]
+	}
+	stem = strings.TrimRight(stem, " ")
+	if _, reserved := windowsReservedNames[strings.ToUpper(stem)]; reserved {
+		result = "_" + result
+	}
+	return result
+}
+
+// sanitizeSlashPath applies sanitizeNameComponent to every component of a
+// forward-slash path. The number of components never changes.
+func sanitizeSlashPath(slashPath string) string {
+	if !strings.Contains(slashPath, "/") {
+		return sanitizeNameComponent(slashPath)
+	}
+	parts := strings.Split(slashPath, "/")
+	for i, part := range parts {
+		parts[i] = sanitizeNameComponent(part)
+	}
+	return strings.Join(parts, "/")
+}
+
+// sanitizedNames records, for one extraction, which archive name each output
+// name came from, so that two different archive names that end up as the same
+// output name are reported instead of one silently replacing the other.
+// Output names are compared ignoring case, because Windows and the default
+// macOS filesystem treat names that differ only by case as the same file.
+type sanitizedNames struct {
+	// lower-cased output path (file or directory) -> archive path it came from
+	sources map[string]string
+}
+
+func newSanitizedNames() *sanitizedNames {
+	return &sanitizedNames{sources: make(map[string]string)}
+}
+
+// add sanitizes the entry's forward-slash path and returns the result. It
+// fails when the path, or any of its parent directories, ends up with the same
+// output name as a different path seen earlier in this extraction.
+func (n *sanitizedNames) add(original string) (string, error) {
+	sanitized := sanitizeSlashPath(original)
+	lowered := strings.ToLower(sanitized)
+
+	// Sanitizing keeps the number of slashes, so the i-th slash of each string
+	// ends the same component.
+	originalEnd, loweredEnd := 0, 0
+	for {
+		originalSlash := strings.IndexByte(original[originalEnd:], '/')
+		loweredSlash := strings.IndexByte(lowered[loweredEnd:], '/')
+		last := originalSlash < 0 || loweredSlash < 0
+		if last {
+			originalEnd, loweredEnd = len(original), len(lowered)
+		} else {
+			originalEnd += originalSlash
+			loweredEnd += loweredSlash
+		}
+
+		key := lowered[:loweredEnd]
+		source := original[:originalEnd]
+		if previous, ok := n.sources[key]; !ok {
+			n.sources[key] = source
+		} else if previous != source {
+			return "", fmt.Errorf("Archive entries '%s' and '%s' would both be extracted to '%s' with the 'sanitize' option (names are compared ignoring case)",
+				previous, source, sanitizeSlashPath(source))
+		}
+
+		if last {
+			return sanitized, nil
+		}
+		originalEnd++
+		loweredEnd++
+	}
+}
+
+// extractionName returns the name an entry is written under, relative to the
+// destination. Without the sanitize option that is the archive name itself and
+// names may be nil.
+func extractionName(relSlash string, names *sanitizedNames) (string, error) {
+	if names == nil {
+		return relSlash, nil
+	}
+	return names.add(relSlash)
 }
 
 func ensureWithinBase(candidate, base, baseWithSep string) error {
