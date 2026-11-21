@@ -263,6 +263,7 @@ var BuiltInList = map[string]struct{}{
 	"wl": {},
 	"wle": {},
 	"writeFile": {},
+	"x": {},
 	"wsplit": {},
 	"year": {},
 	"tarDirExc": {},

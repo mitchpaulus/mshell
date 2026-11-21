@@ -1561,8 +1561,7 @@ func (parser *MShellParser) ParseGetter() (MShellParseItem, error) {
 		parsedStr := t.Lexeme[1 : len(t.Lexeme)-1]
 		parser.NextToken()
 		return &MShellGetter{Token: t, String: parsedStr}, nil
-	case LITERAL, INTERPRET:
-		// INTERPRET is 'x' which can be used as a getter name
+	case LITERAL:
 		parser.NextToken()
 		return &MShellGetter{Token: t, String: t.Lexeme}, nil
 	default:
@@ -1875,8 +1874,7 @@ ColDefLoop:
 		var colNameToken Token
 
 		switch parser.curr.Type {
-		case LITERAL, INTERPRET:
-			// INTERPRET is 'x' which can be used as a column name
+		case LITERAL:
 			colName = parser.curr.Lexeme
 			colNameToken = parser.curr
 			parser.NextToken()

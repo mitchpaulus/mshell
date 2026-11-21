@@ -133,6 +133,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `x` is a builtin like any other instead of a keyword, so it can be used as a name:
+  a dict key (`{x: 1}`), a name in a `match` pattern (`[x y]`, `just x`, `is int x`), and a prefix quote (`x. ... end`).
 - The standard library is built into the `msh` binary. There is no `std.msh` to install, and release archives hold only the binary.
   A `std.msh` left in the data directory by an earlier install is not read, and the `MSHSTDLIB` environment variable is no longer used.
   In messages, a standard library definition's position is given as `<built-in std.msh>:line:column`.
