@@ -847,23 +847,22 @@ The locator must keep enough to re-resolve, which is why `gh:` locators carry th
 
 #table(
   columns: (auto, 1fr, 1fr, 1fr),
-  [], [*Root*], [*Local file*], [*Sealed file*],
+  [], [*Root*], [*Module: Local file*], [*Module: Sealed file*],
   [Identity], [its path], [canonical path], [`sha256` of bytes],
   [Top-level code], [yes], [no], [no],
-  [`VER`], [optional (as today)], [required], [required],
+  [`VER`], [optional (as today)], [No], [No],
   [Imports allowed], [sealed, local], [sealed, local], [sealed only],
-  [CR or BOM bytes], [allowed], [allowed], [rejected],
+  // [CR or BOM bytes], [allowed], [allowed], [rejected], Not relevant anymore
   [Sees init.msh], [interactive only (@sec-init)], [never], [never],
 )
 
 == File layout
 
-```
+```msh
 #!/usr/bin/env msh                      # optional shebang and comments
 VER "v0.15.0"                           # header: VER, then imports, then exports
 import <alias> '<sha256:…>' '<locator>' # sealed import (locator optional)
 import <alias> '<relative path>'        # local import (root and local files only)
-export <name> <alias>.<name> …          # one or more export lines
                                         # body: def, type, enum (+ top-level code in the root)
 ```
 
