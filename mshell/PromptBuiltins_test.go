@@ -83,6 +83,15 @@ func keys(m map[string]int) []string {
 // TestPromptTablesCoverBuiltinEnums checks that each enum whose members
 // map to escape sequence parameters has exactly one entry per member. An
 // enum added to builtinDeclSource must be listed here.
+// promptAttrIndex is promptAttrs as a table.
+func promptAttrIndex() map[string]int {
+	m := map[string]int{}
+	for i, a := range promptAttrs {
+		m[a] = i
+	}
+	return m
+}
+
 func TestPromptTablesCoverBuiltinEnums(t *testing.T) {
 	type table struct {
 		name string
@@ -91,7 +100,7 @@ func TestPromptTablesCoverBuiltinEnums(t *testing.T) {
 	tables := map[string][]table{
 		"Base16Color":    {{"base16Index", base16Index}},
 		"BaseBrightness": {{"baseBrightOffset", baseBrightOffset}},
-		"TextAttribute":  {{"textAttrOn", textAttrOn}, {"textAttrOff", textAttrOff}},
+		"TextAttribute":  {{"textAttrOn", textAttrOn}, {"textAttrOff", textAttrOff}, {"promptAttrs", promptAttrIndex()}},
 		"CursorShape":    {{"cursorShapeParam", cursorShapeParam}},
 		// Its members are the cases of renderPrompt's switch, which
 		// TestRenderPromptHandlesEveryItem checks.

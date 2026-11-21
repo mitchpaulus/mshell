@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -264,13 +265,45 @@ func (state *EvalState) clearLastExitCode() {
 	state.lastExitCode, state.ranProcess = 0, false
 }
 
-// promptStyle is an escape sequence written before the prompt text at
-// Offset. It takes no cells.
+// promptStyle is a style the prompt sets before its text at Offset: Op
+// says what, for a painter of its own (the GUI), and Seq is its escape
+// sequence, for a terminal. It takes no cells.
 type promptStyle struct {
 	Offset ByteOffset
 	Seq    string
 	Bg     bgEffect
+	Op     promptOp
 }
+
+// promptOp is what a prompt style does.
+type promptOp struct {
+	Kind promptOpKind
+	// The colour (RGB, or the palette index in A[0]), or the attribute
+	// (promptAttrs' index, in A[0]).
+	A [3]uint8
+	// The link's target, for promptOpLinkStart.
+	URL string
+}
+
+type promptOpKind uint8
+
+const (
+	promptOpReset promptOpKind = iota
+	promptOpFgRgb
+	promptOpFgPalette
+	promptOpFgDefault
+	promptOpBgRgb
+	promptOpBgPalette
+	promptOpBgDefault
+	promptOpAttrOn
+	promptOpAttrOff
+	promptOpLinkStart
+	promptOpLinkEnd
+)
+
+// promptAttrs are the TextAttribute members, in the order their index
+// names them in a promptOp.
+var promptAttrs = [...]string{"attrBold", "attrFaint", "attrItalic", "attrUnderline", "attrBlinking", "attrReverse", "attrHidden", "attrStrikethrough"}
 
 // bgEffect is what a style does to the background color, which the
 // painter turns off around each line break.
@@ -346,8 +379,8 @@ func renderPrompt(obj MShellObject) (promptRender, error) {
 	}
 	var r promptRender
 	var text strings.Builder
-	style := func(seq string, bg bgEffect) {
-		r.Styles = append(r.Styles, promptStyle{Offset: ByteOffset(text.Len()), Seq: seq, Bg: bg})
+	style := func(seq string, bg bgEffect, op promptOp) {
+		r.Styles = append(r.Styles, promptStyle{Offset: ByteOffset(text.Len()), Seq: seq, Bg: bg, Op: op})
 	}
 	for i, item := range list.Items {
 		e, ok := item.(*MShellEnum)
@@ -375,20 +408,22 @@ func renderPrompt(obj MShellObject) (promptRender, error) {
 				}
 				rgb[j] = n
 			}
+			a := [3]uint8{uint8(rgb[0]), uint8(rgb[1]), uint8(rgb[2])}
 			if e.Member == "setFgColorRgb" {
-				style(sgr(38, 2, rgb[0], rgb[1], rgb[2]), bgKeep)
+				style(sgr(38, 2, rgb[0], rgb[1], rgb[2]), bgKeep, promptOp{Kind: promptOpFgRgb, A: a})
 			} else {
-				style(sgr(48, 2, rgb[0], rgb[1], rgb[2]), bgSet)
+				style(sgr(48, 2, rgb[0], rgb[1], rgb[2]), bgSet, promptOp{Kind: promptOpBgRgb, A: a})
 			}
 		case "setFgColor256", "setBgColor256":
 			n, err := payloadByte(e, 0)
 			if err != nil {
 				return promptRender{}, bad("%s", err)
 			}
+			a := [3]uint8{uint8(n)}
 			if e.Member == "setFgColor256" {
-				style(sgr(38, 5, n), bgKeep)
+				style(sgr(38, 5, n), bgKeep, promptOp{Kind: promptOpFgPalette, A: a})
 			} else {
-				style(sgr(48, 5, n), bgSet)
+				style(sgr(48, 5, n), bgSet, promptOp{Kind: promptOpBgPalette, A: a})
 			}
 		case "setFgColorBase16", "setBgColorBase16":
 			color, ok1 := payloadMember(e, 0, "Base16Color")
@@ -401,32 +436,35 @@ func renderPrompt(obj MShellObject) (promptRender, error) {
 			if !ok1 || !ok2 {
 				return promptRender{}, bad("no escape sequence for %s %s", color, bright)
 			}
+			// The palette index: bright colours are 8 to 15.
+			a := [3]uint8{uint8(n + offset/60*8)}
 			n += offset
 			if e.Member == "setFgColorBase16" {
-				style(sgr(30+n), bgKeep)
+				style(sgr(30+n), bgKeep, promptOp{Kind: promptOpFgPalette, A: a})
 			} else {
-				style(sgr(40+n), bgSet)
+				style(sgr(40+n), bgSet, promptOp{Kind: promptOpBgPalette, A: a})
 			}
 		case "setFgDefault":
-			style(sgr(39), bgKeep)
+			style(sgr(39), bgKeep, promptOp{Kind: promptOpFgDefault})
 		case "setBgDefault":
-			style(sgr(49), bgClear)
+			style(sgr(49), bgClear, promptOp{Kind: promptOpBgDefault})
 		case "setTextAttr", "clearTextAttr":
 			attr, ok := payloadMember(e, 0, "TextAttribute")
 			if !ok {
 				return promptRender{}, bad("takes a TextAttribute")
 			}
-			table := textAttrOff
+			table, kind := textAttrOff, promptOpAttrOff
 			if e.Member == "setTextAttr" {
-				table = textAttrOn
+				table, kind = textAttrOn, promptOpAttrOn
 			}
 			n, ok := table[attr]
-			if !ok {
+			index := slices.Index(promptAttrs[:], attr)
+			if !ok || index < 0 {
 				return promptRender{}, bad("no escape sequence for %s", attr)
 			}
-			style(sgr(n), bgKeep)
+			style(sgr(n), bgKeep, promptOp{Kind: kind, A: [3]uint8{uint8(index)}})
 		case "resetStyle":
-			style(sgr(0), bgClear)
+			style(sgr(0), bgClear, promptOp{Kind: promptOpReset})
 		case "setWindowTitle":
 			s, err := payloadString(e, 0)
 			if err != nil {
@@ -445,9 +483,9 @@ func renderPrompt(obj MShellObject) (promptRender, error) {
 			if err := checkHyperlinkURL(url); err != nil {
 				return promptRender{}, bad("%s", err)
 			}
-			style("\033]8;;"+url+"\033\\", bgKeep)
+			style("\033]8;;"+url+"\033\\", bgKeep, promptOp{Kind: promptOpLinkStart, URL: url})
 			text.WriteString(terminalSafeText(label, false))
-			style("\033]8;;\033\\", bgKeep)
+			style("\033]8;;\033\\", bgKeep, promptOp{Kind: promptOpLinkEnd})
 		default:
 			return promptRender{}, bad("unknown prompt item")
 		}
@@ -510,7 +548,7 @@ func defaultPrompt(cwd string, ok bool, depth int) promptRender {
 	if ok {
 		text = fmt.Sprintf("%s (%d)> \n:: ", terminalSafeText(cwd, false), depth)
 	}
-	return promptRender{Text: SourceText(text), Styles: []promptStyle{{Offset: 0, Seq: sgr(35)}}}
+	return promptRender{Text: SourceText(text), Styles: []promptStyle{{Offset: 0, Seq: sgr(35), Op: promptOp{Kind: promptOpFgPalette, A: [3]uint8{5}}}}}
 }
 
 // promptInfo is what the prompt quote is told about the session.

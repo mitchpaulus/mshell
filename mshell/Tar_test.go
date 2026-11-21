@@ -111,6 +111,46 @@ func TestTarRoundTripAndGzipAutodetect(t *testing.T) {
 	}
 }
 
+// A pax global header, as `git archive` writes first, is skipped by every
+// reader rather than taken for an entry.
+func TestTarSkipsPaxGlobalHeader(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "git-archive.tar.gz")
+	writeTarArchive(t, archive, true, func(tw *tar.Writer) {
+		hdr := &tar.Header{Name: "pax_global_header", Typeflag: tar.TypeXGlobalHeader,
+			PAXRecords: map[string]string{"comment": "0123456789abcdef"}}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("write global header: %v", err)
+		}
+		addTarFile(t, tw, "proj/a.txt", "hello")
+	})
+
+	entries, err := collectTarMetadata(archive)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name != "proj/a.txt" {
+		t.Errorf("list = %+v, want only proj/a.txt", entries)
+	}
+	dest := filepath.Join(dir, "out")
+	if err := extractAll(archive, dest); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(dest, "proj", "a.txt")); err != nil || string(data) != "hello" {
+		t.Errorf("extracted a.txt = %q, %v", data, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dest, "pax_global_header")); !os.IsNotExist(err) {
+		t.Errorf("pax_global_header was written to disk: %v", err)
+	}
+	opts := zipExtractEntryOptions{zipWriteOptions: zipWriteOptions{overwrite: true}, mkdirs: true}
+	if err := extractTarEntry(archive, "proj/a.txt", filepath.Join(dir, "one.txt"), opts); err != nil {
+		t.Errorf("extract entry: %v", err)
+	}
+	if data, ok, err := readTarEntry(archive, "proj/a.txt"); err != nil || !ok || string(data) != "hello" {
+		t.Errorf("read = %q ok=%v err=%v", data, ok, err)
+	}
+}
+
 func TestTarExtractRejectsPathTraversal(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "trav.tar")

@@ -85,6 +85,9 @@ func (fm *FileManager) evalState() *EvalState {
 // screen is drawn once for what arrived together. It reports whether the
 // file manager should end.
 func (fm *FileManager) handleNextInput() bool {
+	if fm.gui != nil {
+		return fm.guiNextInput()
+	}
 	for {
 		token, err := readTerminalToken(fm.input)
 		if err != nil || fm.handleToken(token) {
@@ -844,6 +847,9 @@ func (fm *FileManager) popupLines() []string {
 // pending sequence, and the key reaches no binding. A paste or the end of
 // the input is no answer.
 func (fm *FileManager) readQuestionKey() (KeyCode, bool) {
+	if fm.gui != nil {
+		return fm.guiQuestionKey()
+	}
 	fm.keys.clear()
 	fm.popup = false
 	for {
@@ -870,6 +876,11 @@ func (fm *FileManager) readQuestionKey() (KeyCode, bool) {
 func (fm *FileManager) ask(lines []string) (KeyCode, bool) {
 	fm.asking = true
 	defer func() { fm.asking = false }()
+	if fm.gui != nil {
+		fm.askLines = lines
+		fm.render()
+		return fm.readQuestionKey()
+	}
 	fm.render()
 	var buf bytes.Buffer
 	fm.drawOverlayBox(&buf, lines)
@@ -941,6 +952,11 @@ func (fm *FileManager) setKittyKeys(enabled bool) {
 // takeTerminal puts the terminal in the file manager's raw mode, on the
 // alternate screen, with bracketed paste and the kitty protocol.
 func (fm *FileManager) takeTerminal() error {
+	if fm.gui != nil {
+		// The dialog shows again.
+		fm.guiHidden, fm.hasTerminal = false, true
+		return nil
+	}
 	oldState, err := term.MakeRaw(fm.stdInFd)
 	if err != nil {
 		return err
@@ -960,6 +976,12 @@ func (fm *FileManager) takeTerminal() error {
 // manager took it.
 func (fm *FileManager) releaseTerminal() {
 	if !fm.hasTerminal {
+		return
+	}
+	if fm.gui != nil {
+		// The dialog hides while a program has the pane.
+		fm.guiHidden, fm.hasTerminal = true, false
+		fm.renderGUI()
 		return
 	}
 	fm.setKittyKeys(false)

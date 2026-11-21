@@ -1,0 +1,9 @@
+[package]
+name = "ghostty-vt-bindgen"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Writes ghostty-vt-sys/src/bindings.rs from libghostty-vt's headers; needs libclang, only when run"
+
+[dependencies]
+bindgen = "0.73"

@@ -206,6 +206,8 @@ func (t TokenType) String() string {
 		return "ENVRETREIVE"
 	case ENVSTORE:
 		return "ENVSTORE"
+	case ENVCHECK:
+		return "ENVCHECK"
 	case INTEGER:
 		return "INTEGER"
 	case FLOAT:

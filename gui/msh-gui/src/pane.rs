@@ -1,0 +1,1484 @@
+//! A pane: one engine (`msh server`) and its session, its cards, and its
+//! prompt box (ai/gui-terminal.typ: one engine and one PTY per pane).
+
+use crate::keys::key_label;
+use crate::flow::{DecoKind, Flow, Style};
+use crate::render::{rgba, Glyphs, Icon, Quad, ShapedGlyph, BOLD, ITALIC, PROMPT};
+use crate::vt;
+use msh_client::{Engine, EngineHost, Event, FmMouse, FmView, Prompt, PromptAttr, PromptColor, PromptStyle};
+use msh_editor::edit::{EditOp, Line};
+use msh_editor::keys::KeyCode;
+use msh_editor::lexer::{Lexer, TokenKind};
+use msh_editor::resolver::{Config, Editor, Mode};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+// The theme.
+pub const BG: [u8; 3] = [0x10, 0x10, 0x13];
+const CARD_BG: [u8; 3] = [0x17, 0x17, 0x1b];
+const HEADER_BG: [u8; 3] = [0x1e, 0x1e, 0x24];
+const PROMPT_BG: [u8; 3] = [0x22, 0x1e, 0x2a];
+const PROMPT_BG_UNFOCUSED: [u8; 3] = [0x1a, 0x19, 0x1e];
+const MENU_BG: [u8; 3] = [0x26, 0x26, 0x2e];
+const SELECTED_BG: [u8; 3] = [0x4a, 0x30, 0x5a];
+pub const FG: [u8; 3] = [0xd8, 0xd8, 0xd8];
+pub const DIM: [u8; 3] = [0x78, 0x78, 0x84];
+pub const ACCENT: [u8; 3] = [0xc6, 0x78, 0xdd];
+const COMMAND: [u8; 3] = [0x8a, 0xb4, 0xf8];
+const OK: [u8; 3] = [0x7e, 0xc6, 0x99];
+const FAILED: [u8; 3] = [0xe0, 0x6c, 0x75];
+
+/// The colours programs are told: the cards' background, the text's colour.
+const COLORS: vt::Colors = vt::Colors { fg: FG, bg: CARD_BG, cursor: FG };
+
+/// Columns between a card's edge and its output; rows between cards.
+const MARGIN: usize = 1;
+const CARD_GAP: usize = 1;
+/// The prompt box's inner left edge.
+/// Around the prompt box's text, and the completion menu's, in lines of
+/// the prompt font.
+const PROMPT_PAD: f32 = 0.75;
+/// The most rows the completion menu shows.
+const MENU_ROWS: usize = 8;
+
+/// A colour with an alpha.
+pub fn color_alpha([r, g, b]: [u8; 3], a: u8) -> u32 {
+    rgba(r, g, b, a)
+}
+
+pub fn color([r, g, b]: [u8; 3]) -> u32 {
+    rgba(r, g, b, 0xff)
+}
+
+/// A command and its output.
+struct Block {
+    id: u64,
+    /// The line as it ran, or the keys of the binding whose quote it is;
+    /// empty for output outside any block (startup messages).
+    command: String,
+    term: vt::Term,
+    /// Exit code and duration, once finished.
+    finished: Option<(i32, u64)>,
+}
+
+impl Block {
+    /// Rows on screen: the header, the output, and the gap after it.
+    fn rows(&self) -> usize {
+        1 + self.term.content_rows() + CARD_GAP
+    }
+}
+
+/// Completion candidates while a cycle is on.
+#[derive(Default)]
+struct Menu {
+    candidates: Vec<String>,
+    selected: Option<usize>,
+    /// The widest candidate in the prompt font, measured once.
+    widest: Option<f32>,
+}
+
+/// What the editor's effects asked for while it ran a program.
+#[derive(Default)]
+struct Effects {
+    accept: bool,
+    exit: bool,
+    clear: bool,
+    message: Option<String>,
+    /// A completion op's result: whether the cycle is on, and the menu.
+    completed: Option<(bool, Menu)>,
+    /// An editRun (false) or editRunOps (true) quote to run as a block.
+    run: Option<(u32, bool)>,
+}
+
+fn effect(log: &RefCell<Effects>, engine: &mut Engine, op: &EditOp, line: &mut Line) -> bool {
+    let mut e = log.borrow_mut();
+    match op {
+        EditOp::Accept => {
+            e.accept = true;
+            true
+        }
+        EditOp::Exit => {
+            e.exit = true;
+            true
+        }
+        EditOp::Message(m) => {
+            e.message = Some(m.clone());
+            false
+        }
+        EditOp::ClearScreen => {
+            e.clear = true;
+            false
+        }
+        EditOp::Run(q) => {
+            e.run = Some((*q, false));
+            false
+        }
+        EditOp::RunOps(q) => {
+            e.run = Some((*q, true));
+            false
+        }
+        // Completion and history run in the engine, on the line.
+        EditOp::Complete
+        | EditOp::CompleteBack
+        | EditOp::CompleteNext
+        | EditOp::CompletePrev
+        | EditOp::CompleteLeft
+        | EditOp::CompleteRight
+        | EditOp::CompleteAccept
+        | EditOp::HistoryPrev
+        | EditOp::HistoryNext
+        | EditOp::HistorySearchBack
+        | EditOp::HistorySearchForward
+        | EditOp::Forward
+        | EditOp::AcceptSuggestion
+        | EditOp::LastArg => {
+            if let Ok(r) = engine.edit(op, &line.text, line.cursor) {
+                line.text = r.line;
+                line.cursor = r.cursor;
+                e.completed = Some((r.cycling, Menu { candidates: r.candidates, selected: r.selected, widest: None }));
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+pub struct Pane {
+    pub id: u32,
+    pub engine: Engine,
+    /// The editor config; keys wait for the first.
+    pub cfg: Option<Config>,
+    editor: Editor,
+    queued: Vec<(KeyCode, i64)>,
+    blocks: Vec<Block>,
+    pub running: Option<usize>,
+    next_block: u64,
+    /// The pane's size in cells.
+    pub cols: usize,
+    pub rows: usize,
+    cell: (u32, u32),
+    /// The prompt as the engine rendered it, in an emulator of its own.
+    /// The prompt's lines, each its text and its runs of style.
+    prompt: Vec<(String, Vec<(usize, Style)>)>,
+    /// The prompt box laid out, and the line's runs of style: buffers
+    /// kept from frame to frame.
+    flow: Flow,
+    line_runs: Vec<(usize, Style)>,
+    /// The pane's size in pixels.
+    px: (u32, u32),
+    pub title: Option<String>,
+    menu: Menu,
+    /// Rows scrolled up from the newest output.
+    pub scroll: usize,
+    /// Where the screen was last cleared: the rows of the cards before it,
+    /// which are above the view until scrolled back to.
+    clear_rows: usize,
+    pub message: Option<String>,
+    /// The ops editRunOps quotes returned, by block, run when it finishes.
+    pending_ops: HashMap<u64, Vec<EditOp>>,
+    /// The file manager's view while it shows as a dialog, and the size
+    /// last given it.
+    pub fm: Option<FmView>,
+    fm_size: (u16, u16),
+    /// The dialog's last press, for a double press, and the wheel's
+    /// fraction of a row not yet scrolled.
+    fm_press: Option<FmPress>,
+    fm_wheel: f32,
+    /// When a program last rang the bell, for the flash; and whether the
+    /// window has yet to hear of it.
+    bell_at: Option<Instant>,
+    pub bell_unheard: bool,
+    /// How the line would run: Some(true) as a command line, Some(false) as
+    /// mshell, None for an empty line; and the history suggestion after it.
+    /// The engine answers both, for each change to the line.
+    line_kind: Option<bool>,
+    suggestion: String,
+    lexer: Lexer,
+    tokens: Vec<msh_editor::lexer::Token>,
+    key_bytes: Vec<u8>,
+}
+
+impl Pane {
+    pub fn new(id: u32, engine: Engine) -> Pane {
+        Pane {
+            id,
+            engine,
+            cfg: None,
+            editor: Editor::default(),
+            queued: Vec::new(),
+            blocks: Vec::new(),
+            running: None,
+            next_block: 1,
+            cols: 80,
+            rows: 24,
+            cell: (8, 16),
+            prompt: Vec::new(),
+            flow: Flow::default(),
+            line_runs: Vec::new(),
+            px: (640, 384),
+            title: None,
+            menu: Menu::default(),
+            scroll: 0,
+            clear_rows: 0,
+            message: None,
+            pending_ops: HashMap::new(),
+            fm: None,
+            fm_size: (0, 0),
+            fm_press: None,
+            fm_wheel: 0.0,
+            bell_at: None,
+            bell_unheard: false,
+            line_kind: None,
+            suggestion: String::new(),
+            lexer: Lexer::editor(),
+            tokens: Vec::new(),
+            key_bytes: Vec::new(),
+        }
+    }
+
+    /// A block's emulator, at the PTY's size, knowing the cell's size for
+    /// programs that ask.
+    fn new_term(&self) -> vt::Term {
+        let mut t = vt::Term::new(self.output_cols(), self.rows as u16, &COLORS);
+        t.resize(self.output_cols(), self.rows as u16, self.cell.0, self.cell.1);
+        t
+    }
+
+    /// Columns a card's output has: the PTY's width.
+    fn output_cols(&self) -> u16 {
+        self.cols.saturating_sub(2 * MARGIN).max(10) as u16
+    }
+
+    /// The pane's size, in cells and in pixels. Programs get the cards'
+    /// width and the pane's height (a program on the alternate screen has
+    /// the whole pane).
+    pub fn resize(&mut self, cols: usize, rows: usize, cell: (u32, u32), px: (u32, u32)) {
+        self.px = px;
+        if (cols, rows, cell) == (self.cols, self.rows, self.cell) {
+            return;
+        }
+        (self.cols, self.rows, self.cell) = (cols, rows, cell);
+        let oc = self.output_cols();
+        let (cw, ch) = cell;
+        let _ = self.engine.resize(oc, rows as u16, (oc as u32 * cw) as u16, (rows as u32 * ch) as u16);
+        if let Some(i) = self.running {
+            self.blocks[i].term.resize(oc, rows as u16, cw, ch);
+        }
+        if self.fm.is_some() {
+            self.size_fm();
+        }
+    }
+
+    /// Whether the bell's flash shows now.
+    pub fn flashing(&self) -> bool {
+        self.bell_at.is_some_and(|t| t.elapsed() < BELL_FLASH)
+    }
+
+    /// When the pane must be drawn again though nothing comes: its bell's
+    /// flash ends, or its program's hold on the screen runs out.
+    pub fn wake_at(&self) -> Option<Instant> {
+        let flash = self.bell_at.map(|t| t + BELL_FLASH).filter(|&end| end > Instant::now());
+        let hold = self.running.and_then(|i| self.blocks[i].term.hold_ends());
+        [flash, hold].into_iter().flatten().min()
+    }
+
+    /// The file manager dialog's place in the pane, in pixels.
+    fn fm_rect(&self) -> (f32, f32, f32, f32) {
+        let (w, h) = ((self.cols as u32 * self.cell.0) as f32, (self.rows as u32 * self.cell.1) as f32);
+        let inset = FM_INSET.min(w / 10.0).min(h / 10.0);
+        (inset, inset, w - 2.0 * inset, h - 2.0 * inset)
+    }
+
+    /// The dialog's row height: roomier than a cell.
+    pub fn fm_row(&self) -> f32 {
+        (self.cell.1 as f32 * 1.4).round()
+    }
+
+    /// Where the dialog's parts are, for drawing it and for the mouse.
+    fn fm_layout(&self) -> FmLayout {
+        let (x0, y0, w, h) = self.fm_rect();
+        let row = self.fm_row();
+        FmLayout { x0, y0, w, h, row, body: y0 + row, rows: ((h / row) as usize).saturating_sub(2), left: (w * 0.42).round() }
+    }
+
+    /// What is under a point of the pane, in pixels, in the dialog.
+    fn fm_hit(&self, x: f32, y: f32) -> Option<FmHit> {
+        let v = self.fm.as_ref()?;
+        let l = self.fm_layout();
+        if v.help || x < l.x0 || x >= l.x0 + l.w || y < l.body {
+            return None;
+        }
+        let i = ((y - l.body) / l.row) as usize;
+        if i >= l.rows {
+            return None;
+        }
+        if x < l.x0 + l.left {
+            return (i < v.entries.len()).then_some(FmHit::Entry(i));
+        }
+        let child = v.preview.get(i).filter(|_| v.preview_dir).map(|line| preview_name(line).0)?;
+        Some(FmHit::Child(child))
+    }
+
+    /// A press in the file manager's dialog, at a point of the pane in
+    /// pixels, `now` in ns. It acts as it comes, not on the release: on an
+    /// entry the cursor goes to it (with Ctrl, it is selected or not too),
+    /// and pressed again soon after, it opens; on a directory's entry in
+    /// the preview, the directory opens with the cursor on it, and pressed
+    /// again soon after, it opens too.
+    pub fn fm_press(&mut self, x: f32, y: f32, now: i64, ctrl: bool) {
+        let Some(v) = &self.fm else { return };
+        let hit = self.fm_hit(x, y);
+        // The second press of a double: on what the first was.
+        if let Some(last) = self.fm_press.take() {
+            if !ctrl && now - last.at < DOUBLE_PRESS_NS && (x - last.x).abs() <= 4.0 && (y - last.y).abs() <= 4.0 {
+                let (n, name) = match last.on {
+                    FmPressOn::Entry(n, name) => (n, name),
+                    // The child is under the cursor now.
+                    FmPressOn::Child(child) => match v.entries.iter().position(|e| e.cursor && e.name == child) {
+                        Some(i) => (v.offset as i32 + i as i32, child),
+                        None => return,
+                    },
+                };
+                let _ = self.engine.fm_mouse(FmMouse::Open, n, &name, "");
+                return;
+            }
+        }
+        let on = match hit {
+            Some(FmHit::Entry(i)) => {
+                let (n, name) = (v.offset as i32 + i as i32, v.entries[i].name.clone());
+                let action = if ctrl { FmMouse::Toggle } else { FmMouse::Point };
+                let _ = self.engine.fm_mouse(action, n, &name, "");
+                FmPressOn::Entry(n, name)
+            }
+            Some(FmHit::Child(child)) => {
+                let Some(i) = v.entries.iter().position(|e| e.cursor) else { return };
+                let _ = self.engine.fm_mouse(FmMouse::Into, v.offset as i32 + i as i32, &v.entries[i].name, &child);
+                FmPressOn::Child(child)
+            }
+            None => return,
+        };
+        if !ctrl {
+            self.fm_press = Some(FmPress { x, y, at: now, on });
+        }
+    }
+
+    /// The wheel in the file manager's dialog: `rows` down, up when
+    /// negative, fractions kept for the next.
+    pub fn fm_wheel(&mut self, rows: f32) {
+        self.fm_wheel += rows;
+        let n = self.fm_wheel.trunc();
+        self.fm_wheel -= n;
+        if n != 0.0 {
+            let _ = self.engine.fm_mouse(FmMouse::Scroll, n as i32, "", "");
+        }
+    }
+
+    /// Tells the file manager the dialog's size, when it changed: rows of
+    /// the dialog, and columns of the monospace cell.
+    fn size_fm(&mut self) {
+        let (_, _, w, h) = self.fm_rect();
+        let size = ((w / self.cell.0 as f32) as u16, (h / self.fm_row()) as u16);
+        if size != self.fm_size {
+            self.fm_size = size;
+            let _ = self.engine.fm_resize(size.0, size.1);
+        }
+    }
+
+    /// Handles an event from the engine; returns whether the pane closes.
+    pub fn engine_event(&mut self, event: Event) -> bool {
+        match event {
+            Event::EditorConfig { .. } => {
+                if let Some(cfg) = self.engine.take_config() {
+                    self.cfg = Some(cfg);
+                }
+                for (code, at) in std::mem::take(&mut self.queued) {
+                    if self.editor_key(code, at) {
+                        return true;
+                    }
+                }
+            }
+            Event::Prompt { title, prompt } => {
+                self.prompt = prompt_lines(&prompt);
+                if title.is_some() {
+                    self.title = title;
+                }
+            }
+            Event::PtyOutput { id, bytes } => {
+                let i = match self.blocks.iter().position(|b| b.id == id) {
+                    Some(i) => i,
+                    None => {
+                        // Output outside any block: startup messages.
+                        let term = self.new_term();
+                        self.blocks.push(Block { id, command: String::new(), term, finished: Some((0, 0)) });
+                        self.blocks.len() - 1
+                    }
+                };
+                let term = &mut self.blocks[i].term;
+                term.write(&bytes);
+                if term.take_bell() {
+                    self.bell_at = Some(Instant::now());
+                    self.bell_unheard = true;
+                }
+                // What it answered the program's queries goes back to it,
+                // after the output that asked.
+                let replies = term.take_replies();
+                if !replies.is_empty() {
+                    let _ = self.engine.input(&replies);
+                }
+            }
+            Event::FileManager(view) => {
+                if view.shown {
+                    if self.fm.is_none() {
+                        self.fm_size = (0, 0);
+                    }
+                    self.fm = Some(view);
+                    self.size_fm();
+                } else {
+                    self.fm = None;
+                }
+            }
+            Event::Ops { id, ops } => {
+                self.pending_ops.insert(id, ops);
+            }
+            Event::BlockFinished { id, exit_code, duration_ns } => {
+                self.fm = None;
+                if let Some(b) = self.blocks.iter_mut().find(|b| b.id == id) {
+                    b.finished = Some((exit_code, duration_ns));
+                }
+                self.running = None;
+                if let Some(cfg) = self.engine.take_config() {
+                    self.cfg = Some(cfg);
+                }
+                if let Some(ops) = self.pending_ops.remove(&id) {
+                    if self.run_ops(&ops) {
+                        return true;
+                    }
+                }
+            }
+            Event::Exit { .. } | Event::Closed { .. } => return true,
+            Event::Hello { .. } | Event::BlockStarted { .. } => {}
+        }
+        false
+    }
+
+    /// A key at the prompt, through the editor; returns whether the pane
+    /// closes.
+    pub fn editor_key(&mut self, code: KeyCode, now: i64) -> bool {
+        if let Some(cfg) = self.engine.take_config() {
+            self.cfg = Some(cfg);
+        }
+        let Some(cfg) = &self.cfg else {
+            self.queued.push((code, now));
+            return false;
+        };
+        let log = RefCell::new(Effects::default());
+        let mut host = EngineHost { engine: &mut self.engine, effect: |e: &mut Engine, op: &EditOp, l: &mut Line| effect(&log, e, op, l), problem: None };
+        self.editor.key(cfg, code, None, now, &mut host);
+        if log.borrow().accept {
+            self.editor.expand_on_enter(cfg, &mut host);
+        }
+        let problem = host.problem.take();
+        drop(host);
+        // The keys of the binding that fired, to name an editRun's card.
+        let label = self.editor.fired.last().and_then(|&id| cfg.keymap.bindings().get(id as usize)).map(|b| {
+            b.keys.iter().map(|&k| key_label(k)).collect::<Vec<_>>().join(" ")
+        });
+        self.after(log.into_inner(), problem, label)
+    }
+
+    /// Runs the ops an editRunOps quote returned on the line.
+    fn run_ops(&mut self, ops: &[EditOp]) -> bool {
+        let Some(cfg) = &self.cfg else { return false };
+        let log = RefCell::new(Effects::default());
+        let mut host = EngineHost { engine: &mut self.engine, effect: |e: &mut Engine, op: &EditOp, l: &mut Line| effect(&log, e, op, l), problem: None };
+        self.editor.run_ops(cfg, ops, KeyCode::NONE, &mut host);
+        let problem = host.problem.take();
+        drop(host);
+        self.after(log.into_inner(), problem, None)
+    }
+
+    /// Asks the engine how the line would run (the indicator, and which
+    /// word is the program), and for its history suggestion.
+    fn update_line_kind(&mut self) {
+        let text = &self.editor.line.text;
+        if text.trim().is_empty() {
+            (self.line_kind, self.suggestion) = (None, String::new());
+            return;
+        }
+        let (command, suggestion) = self.engine.line_info(text).unwrap_or_default();
+        (self.line_kind, self.suggestion) = (Some(command), suggestion);
+    }
+
+    /// Carries out what the effects asked for; returns whether the pane
+    /// closes.
+    fn after(&mut self, e: Effects, problem: Option<String>, label: Option<String>) -> bool {
+        self.message = e.message.or(problem);
+        // The editor leaves complete mode on a key complete mode doesn't
+        // bind; the engine ends its cycle too.
+        if self.editor.left_complete {
+            let (text, cursor) = (self.editor.line.text.clone(), self.editor.line.cursor);
+            let _ = self.engine.edit(&EditOp::CompleteAccept, &text, cursor);
+            self.menu = Menu::default();
+        }
+        if let Some((cycling, menu)) = e.completed {
+            self.editor.mode = if cycling { Mode::Complete } else { Mode::Insert };
+            self.menu = if cycling { menu } else { Menu::default() };
+        }
+        if let Some(cfg) = self.engine.take_config() {
+            self.cfg = Some(cfg);
+        }
+        self.update_line_kind();
+        if e.clear {
+            // As a terminal's clear: the cards so far go above the view.
+            self.clear_rows = self.blocks.iter().map(Block::rows).sum();
+        }
+        self.scroll = 0;
+        if e.exit {
+            return true;
+        }
+        if e.accept {
+            self.run_line();
+        } else if let Some((quote, with_state)) = e.run {
+            self.run_quote(quote, with_state, label.unwrap_or_else(|| "editRun".into()));
+        }
+        false
+    }
+
+    fn new_block(&mut self, command: String) -> u64 {
+        let id = self.next_block;
+        self.next_block += 1;
+        let term = self.new_term();
+        self.blocks.push(Block { id, command, term, finished: None });
+        self.running = Some(self.blocks.len() - 1);
+        self.menu = Menu::default();
+        self.editor.mode = Mode::Insert;
+        id
+    }
+
+    fn run_line(&mut self) {
+        let line = std::mem::take(&mut self.editor.line.text);
+        self.editor.line.cursor = 0;
+        if line.trim().is_empty() {
+            return;
+        }
+        let id = self.new_block(line.clone());
+        let _ = self.engine.run(id, &line);
+    }
+
+    /// An editRun or editRunOps quote, as a block; the line stays.
+    fn run_quote(&mut self, quote: u32, with_state: bool, label: String) {
+        let id = self.new_block(label);
+        let line = &self.editor.line;
+        let (before, after) = line.text.split_at(line.cursor);
+        let _ = self.engine.run_quote(id, quote, with_state, before, after);
+    }
+
+    /// A key while a block runs: to its program, encoded as its terminal's
+    /// modes say.
+    pub fn program_key(&mut self, key: ghostty_vt_sys::GhosttyKey, mods: ghostty_vt_sys::GhosttyMods, text: &str, unshifted: Option<char>) {
+        let Some(i) = self.running else { return };
+        self.blocks[i].term.encode_key(key, mods, text, unshifted, &mut self.key_bytes);
+        if !self.key_bytes.is_empty() {
+            let _ = self.engine.input(&self.key_bytes);
+        }
+        self.scroll = 0;
+    }
+
+    /// Draws the pane into `cv`, whose origin and size are the pane's.
+    pub fn compose(&mut self, cv: &mut Canvas, glyphs: &mut Glyphs, focused: bool) {
+        if self.fm.is_some() {
+            self.compose_fm(cv, glyphs, focused);
+            return;
+        }
+        let (cols, rows) = (self.cols, self.rows);
+
+        // A program on the alternate screen has the whole pane.
+        if let Some(i) = self.running.filter(|&i| self.blocks[i].term.alternate_screen()) {
+            let term = &mut self.blocks[i].term;
+            term.scroll_to_bottom();
+            let cursor = term.visit(0, rows, |r, c, cell| cv.cell(glyphs, MARGIN + c, r, cell, BG));
+            if let Some(k) = cursor.filter(|_| focused) {
+                cv.term_cursor(MARGIN + k.x as usize, k.y as usize, &k);
+            }
+            return;
+        }
+
+        // The prompt box, where a terminal's prompt would be: just after the
+        // output, at the top of a clean screen. Once the output fills the
+        // pane, or while scrolled back, it stays at the bottom, as frozen
+        // panes do. It holds the prompt, then the line; while a command
+        // runs, it says so, and keys go to the program. It is ours, so it is
+        // laid out in pixels, in the prompt font, as a GUI lays out text;
+        // the cards above are terminals, in cells.
+        let (cw, ch) = (cv.cell.0 as f32, cv.cell.1 as f32);
+        let (pane_w, pane_h) = (self.px.0 as f32, self.px.1 as f32);
+        let pm = glyphs.metrics(PROMPT);
+        let line_h = pm.line;
+        let pad = (line_h * PROMPT_PAD).round();
+        let text_w = (pane_w - 2.0 * pad).max(line_h);
+        // The prompt, the line and the history suggestion, as one flow.
+        let mut cursor = (0.0, 0usize, 0.0);
+        let text_rows = if self.running.is_some() {
+            1
+        } else {
+            let line = &self.editor.line;
+            let flow = &mut self.flow;
+            flow.start(text_w);
+            for (i, (text, runs)) in self.prompt.iter().enumerate() {
+                if i > 0 {
+                    flow.newline();
+                }
+                flow.add(glyphs, PROMPT, text, runs);
+            }
+            // The line, coloured as terminal msh colours it.
+            let errored = self.lexer.tokenize_into(&line.text, &mut self.tokens);
+            let names = self.cfg.as_ref().map(|c| &c.names);
+            let styles = if errored { Vec::new() } else { line_styles(&line.text, &self.tokens, self.line_kind == Some(true), names) };
+            let runs = &mut self.line_runs;
+            runs.clear();
+            runs.push((0, Style::plain(color(FG))));
+            for &(start, end, fg, underline) in &styles {
+                runs.push((start, Style { underline, ..Style::plain(color(fg.unwrap_or(FG))) }));
+                runs.push((end, Style::plain(color(FG))));
+            }
+            flow.marking(true);
+            flow.add(glyphs, PROMPT, &line.text, runs);
+            flow.mark_end(line.text.len());
+            flow.marking(false);
+            // The history suggestion, quiet, after the line.
+            flow.add(glyphs, PROMPT, &self.suggestion, &[(0, Style::plain(color(SUGGESTION)))]);
+            // The cursor: on its cluster, as wide; at the end, as wide as a
+            // space, on the next row when the row has no room.
+            let space = glyphs.width(PROMPT, " ");
+            let m = flow.marks.iter().find(|m| m.byte == line.cursor).copied();
+            cursor = match m {
+                Some(m) if m.w > 0.0 => (m.x, m.row, m.w),
+                Some(m) if m.x + space > text_w && m.x > 0.0 => (0.0, m.row + 1, space),
+                Some(m) => (m.x, m.row, space),
+                None => (flow.x, flow.row, space),
+            };
+            flow.row.max(cursor.1) + 1
+        };
+        let message_rows = self.message.is_some() as usize;
+        let box_h = 2.0 * pad + (text_rows + message_rows) as f32 * line_h;
+        // The completion menu, in the prompt font: columns as wide as the
+        // widest candidate.
+        let menu = &mut self.menu;
+        if menu.widest.is_none() && !menu.candidates.is_empty() {
+            menu.widest = Some(menu.candidates.iter().map(|c| glyphs.width(PROMPT, c)).fold(0.0, f32::max));
+        }
+        let col_w = menu.widest.unwrap_or(0.0) + 2.0 * pad;
+        let menu_cols = ((text_w + 2.0 * pad) / col_w.max(1.0)).floor().max(1.0) as usize;
+        let menu_rows = menu.candidates.len().div_ceil(menu_cols).min(MENU_ROWS);
+        let menu_h = if menu_rows > 0 { menu_rows as f32 * line_h + pad } else { 0.0 };
+        // The most rows the cards can have: all the pane but the box and
+        // the menu.
+        let most = ((pane_h - box_h - menu_h) / ch).floor().max(0.0) as usize;
+
+        // The cards. Cleared ones are above the view until scrolled to.
+        let total: usize = self.blocks.iter().map(Block::rows).sum();
+        let bottom_top = self.clear_rows.max(total.saturating_sub(most));
+        self.scroll = self.scroll.min(bottom_top);
+        let top = bottom_top - self.scroll;
+        // The cards' rows shown; the menu and the box follow them, or, once
+        // the cards fill the pane, sit at its bottom.
+        let area = total.saturating_sub(top).min(most);
+        let at_bottom = total.saturating_sub(top) >= most;
+        let menu_y = if at_bottom { (pane_h - box_h - menu_h).max(0.0) } else { area as f32 * ch };
+        let box_y = menu_y + menu_h;
+        // At the bottom, the cards (in whole rows) are moved down to meet
+        // the menu or the box: what is left of a row is above them, at the
+        // pane's top edge.
+        let cards_down = if at_bottom { (menu_y - area as f32 * ch).max(0.0).floor() as u32 } else { 0 };
+        cv.y0 += cards_down;
+        let mut y = 0usize;
+        for (bi, b) in self.blocks.iter_mut().enumerate() {
+            let height = b.rows();
+            if y + height <= top || y >= top + area {
+                y += height;
+                continue;
+            }
+            let shown = |row: usize| row >= top && row < top + area;
+            if shown(y) {
+                let wy = y - top;
+                cv.fill(0, wy, cols, color(HEADER_BG));
+                let (mark, mark_color) = match b.finished {
+                    None => ('…', DIM),
+                    Some((0, _)) => ('●', OK),
+                    Some(_) => ('●', FAILED),
+                };
+                // The command and its status in the UI font; the mark is the
+                // monospace font's.
+                let (cw, ch) = (cv.cell.0 as f32, cv.cell.1 as f32);
+                let (hy, width) = (wy as f32 * ch, cols as f32 * cw);
+                let mut status_w = 0.0;
+                if let Some((code, ns)) = b.finished.filter(|_| !b.command.is_empty()) {
+                    let secs = ns as f64 / 1e9;
+                    let status = if code == 0 { format!("{secs:.1} s") } else { format!("exit {code}   {secs:.1} s") };
+                    status_w = glyphs.ui_width(&status);
+                    let c = color(if code == 0 { DIM } else { FAILED });
+                    cv.ui_text(glyphs, width - cw - status_w, hy, ch, &status, c, status_w + 1.0);
+                }
+                if b.command.is_empty() {
+                    cv.ui_text(glyphs, cw, hy, ch, "startup", color(DIM), width);
+                } else {
+                    cv.put(glyphs, MARGIN, wy, mark, color(mark_color));
+                    let command: String = b.command.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
+                    cv.ui_text(glyphs, 3.0 * cw, hy, ch, &command, color(COMMAND), width - 5.0 * cw - status_w);
+                }
+            }
+            let content_y = y + 1;
+            let content = b.term.content_rows();
+            for row in content_y..content_y + content {
+                if shown(row) {
+                    cv.fill(0, row - top, cols, color(CARD_BG));
+                }
+            }
+            let from = top.max(content_y) - content_y;
+            let to = (top + area).min(content_y + content).saturating_sub(content_y);
+            if from < to {
+                let off = b.term.scroll_to(from);
+                let base = content_y + from;
+                let cursor = b.term.visit(off, off + (to - from), |r, c, cell| {
+                    cv.cell(glyphs, MARGIN + c, base + (r - off) - top, cell, CARD_BG);
+                });
+                b.term.scroll_to_bottom();
+                if Some(bi) == self.running && focused {
+                    if let Some(k) = cursor {
+                        let row = content_y + (from - off) + k.y as usize;
+                        if shown(row) {
+                            cv.term_cursor(MARGIN + k.x as usize, row - top, &k);
+                        }
+                    }
+                }
+            }
+            y += height;
+        }
+
+        cv.y0 -= cards_down;
+
+        // The completion menu, just above the prompt box.
+        if menu_rows > 0 {
+            let menu = &self.menu;
+            let all_rows = menu.candidates.len().div_ceil(menu_cols);
+            let first_row = menu.selected.map_or(0, |s| (s % all_rows).saturating_sub(menu_rows - 1));
+            cv.fill_px(0.0, menu_y, pane_w, menu_h, color(MENU_BG));
+            let my = menu_y + pad / 2.0;
+            for (i, c) in menu.candidates.iter().enumerate() {
+                let (col, row) = (i / all_rows, i % all_rows);
+                if row < first_row || row >= first_row + menu_rows {
+                    continue;
+                }
+                let (x, y) = (col as f32 * col_w, my + (row - first_row) as f32 * line_h);
+                if Some(i) == menu.selected {
+                    cv.fill_px(x + pad / 2.0, y, col_w - pad, line_h, color(SELECTED_BG));
+                }
+                cv.text_in(glyphs, PROMPT, x + pad, y, line_h, c, color(FG), col_w - pad);
+            }
+        }
+
+        // The prompt box.
+        let box_bg = if focused { PROMPT_BG } else { PROMPT_BG_UNFOCUSED };
+        cv.fill_px(0.0, box_y, pane_w, box_h, color(box_bg));
+        let (tx, ty) = (pad, box_y + pad);
+        if let Some(i) = self.running {
+            let label = cv.ui_text(glyphs, tx, ty, line_h, "running", color(DIM), text_w);
+            let command: String = self.blocks[i].command.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
+            cv.ui_text(glyphs, tx + label + cw, ty, line_h, &command, color(COMMAND), text_w - label - cw);
+            return;
+        }
+        let flow = &self.flow;
+        let baseline = ((line_h - (pm.ascent + pm.descent)) / 2.0).round() + pm.ascent;
+        let t = (line_h / 16.0).round().max(1.0);
+        for d in &flow.decos {
+            let y = ty + d.row as f32 * line_h;
+            match d.kind {
+                DecoKind::Background => cv.fill_px(tx + d.x, y, d.w, line_h, d.color),
+                DecoKind::Underline => cv.line_px(tx + d.x, y + baseline + 2.0 * t, d.w, t, d.color),
+                DecoKind::Strike => cv.line_px(tx + d.x, y + baseline - pm.ascent * 0.3, d.w, t, d.color),
+            }
+        }
+        for p in &flow.placed {
+            cv.glyph(glyphs, p.glyph, tx + p.x, ty + p.row as f32 * line_h + baseline, p.color);
+        }
+        if focused {
+            let (x, row, w) = cursor;
+            // A bar, as text fields have, in a proportional font, where a
+            // space is too thin for a block; a block, as a terminal's, in
+            // a monospace one, which lays the box out as cells.
+            let bar = !glyphs.prompt_is_monospace();
+            cv.box_cursor(tx + x, ty + row as f32 * line_h, w, line_h, bar);
+        }
+        if let Some(m) = &self.message {
+            let text: String = m.trim_end().chars().filter(|c| *c != '\n').collect();
+            cv.text_in(glyphs, PROMPT, tx, ty + text_rows as f32 * line_h, line_h, &text, color(DIM), text_w);
+        }
+        // How the line will run: a stripe down the box's left edge, and a
+        // word at the right of the cursor's row, both quiet.
+        if let Some(command) = self.line_kind {
+            let (stripe, label) = if command { (KIND_COMMAND, "command") } else { (ACCENT, "mshell") };
+            cv.fill_px(0.0, box_y, 3.0, box_h, color(stripe));
+            let lw = glyphs.ui_width(label);
+            let y = ty + cursor.1 as f32 * line_h;
+            cv.ui_text(glyphs, pane_w - pad - lw, y, line_h, label, rgba(stripe[0], stripe[1], stripe[2], 0xb0), lw + 1.0);
+        }
+    }
+}
+
+impl Pane {
+    /// The file manager, as a dialog over the pane: the directory, its
+    /// entries with their icons and the preview side by side, the status or
+    /// prompt line, and the key popup or a question in a box over them.
+    /// The app's own text is in the UI font; the preview, which shows files,
+    /// is monospace.
+    fn compose_fm(&mut self, cv: &mut Canvas, glyphs: &mut Glyphs, focused: bool) {
+        let FmLayout { x0, y0, w, h, row, body, rows, left } = self.fm_layout();
+        let (cw, ch) = (self.cell.0 as f32, self.cell.1 as f32);
+        let Some(v) = &self.fm else { return };
+        let pad = 10.0;
+        cv.fill_px(x0, y0, w, h, color(FM_BG));
+        // The header: where, and what is cut, copied and selected.
+        cv.fill_px(x0, y0, w, row, color(FM_HEADER_BG));
+        let clip_w = glyphs.ui_width(&v.clipboard);
+        cv.ui_text(glyphs, x0 + w - pad - clip_w, y0, row, &v.clipboard, color(CLIP), clip_w + 1.0);
+        cv.ui_text(glyphs, x0 + pad, y0, row, &v.header, color(FG), w - 3.0 * pad - clip_w);
+        if v.help {
+            for (i, line) in v.preview.iter().take(rows).enumerate() {
+                cv.ui_text(glyphs, x0 + pad, body + i as f32 * row, row, line.trim_start(), color(FG), w - 2.0 * pad);
+            }
+        } else {
+            let icon = (row * 0.62).round() as u32;
+            for (i, e) in v.entries.iter().take(rows).enumerate() {
+                let y = body + i as f32 * row;
+                if e.cursor {
+                    cv.fill_px(x0 + 4.0, y + 1.0, left - 8.0, row - 2.0, color(if focused { SELECTED_BG } else { MENU_BG }));
+                }
+                let mut x = x0 + pad;
+                if !e.marker.is_empty() {
+                    x += cv.ui_text(glyphs, x, y, row, &e.marker, color(DIM), 2.0 * cw) + 6.0;
+                }
+                let iy = y + ((row - icon as f32) / 2.0).round();
+                if e.dir {
+                    cv.icon(glyphs, Icon::FolderBack, x, iy, icon, color(FOLDER_BACK));
+                    cv.icon(glyphs, Icon::FolderFront, x, iy, icon, color(FOLDER));
+                } else {
+                    cv.icon(glyphs, Icon::File, x, iy, icon, color(FILE_ICON));
+                }
+                x += icon as f32 + 8.0;
+                let size_w = if e.size.is_empty() { 0.0 } else { glyphs.ui_width(&e.size) };
+                if size_w > 0.0 {
+                    cv.ui_text(glyphs, x0 + left - pad - size_w, y, row, &e.size, color(DIM), size_w + 1.0);
+                }
+                let name_color = if e.cut {
+                    FAILED
+                } else if e.copied {
+                    OK
+                } else if e.dir {
+                    COMMAND
+                } else {
+                    FG
+                };
+                let room = x0 + left - pad - size_w - 12.0 - x;
+                let name_w = cv.ui_text(glyphs, x, y, row, &e.name, color(name_color), room);
+                if e.selected {
+                    cv.ui_text(glyphs, x + name_w + 4.0, y, row, "●", color(ACCENT), 2.0 * cw);
+                }
+            }
+            // The preview, past a rule: a directory's listing as the
+            // entries are drawn, a file's contents in the monospace font.
+            cv.fill_px(x0 + left, body + 4.0, 1.0, rows as f32 * row - 8.0, color(RULE));
+            let px = x0 + left + pad + 4.0;
+            if v.preview_dir {
+                let room = x0 + w - pad - px - icon as f32 - 8.0;
+                if v.preview.is_empty() {
+                    cv.ui_text(glyphs, px, body, row, "empty", color(DIM), room);
+                }
+                for (i, line) in v.preview.iter().take(rows).enumerate() {
+                    let (name, dir) = preview_name(line);
+                    let name = name.as_str();
+                    let y = body + i as f32 * row;
+                    let iy = y + ((row - icon as f32) / 2.0).round();
+                    if dir {
+                        cv.icon(glyphs, Icon::FolderBack, px, iy, icon, color(FOLDER_BACK));
+                        cv.icon(glyphs, Icon::FolderFront, px, iy, icon, color(FOLDER));
+                    } else {
+                        cv.icon(glyphs, Icon::File, px, iy, icon, color(FILE_ICON));
+                    }
+                    let fg = if dir { COMMAND } else { PREVIEW };
+                    cv.ui_text(glyphs, px + icon as f32 + 8.0, y, row, name, color(fg), room);
+                }
+            } else {
+            let cols = ((x0 + w - pad - px) / cw).max(0.0) as usize;
+            let lines = ((rows as f32 * row) / ch) as usize;
+            for (i, line) in v.preview.iter().take(lines).enumerate() {
+                let y = body + 4.0 + i as f32 * ch;
+                let mut col = 0;
+                for (text, fg) in sgr_spans(line) {
+                    for c in text.chars() {
+                        if col >= cols {
+                            break;
+                        }
+                        cv.mono_px(glyphs, px + col as f32 * cw, y, c, color(fg.unwrap_or(PREVIEW)));
+                        col += 1;
+                    }
+                }
+            }
+            }
+        }
+        // The bottom: the prompt line, or a message, or the summary.
+        let bottom = y0 + h - row;
+        if let Some((label, text, cursor)) = &v.line {
+            let lw = cv.ui_text(glyphs, x0 + pad, bottom, row, label, color(ACCENT), w / 3.0);
+            let lx = x0 + pad + lw;
+            cv.ui_text(glyphs, lx, bottom, row, text, color(FG), w - 2.0 * pad - lw);
+            if focused {
+                let before = glyphs.ui_width(&text[..(*cursor).min(text.len())]);
+                cv.fill_px(lx + before, bottom + 4.0, 2.0, row - 8.0, color(FG));
+            }
+        } else if v.status_kind != 0 {
+            let c = if v.status_kind == 2 { MESSAGE } else { DIM };
+            cv.ui_text(glyphs, x0 + pad, bottom, row, &v.status, color(c), w - 2.0 * pad);
+        }
+        // The key popup or a question, in a box over the rest.
+        if !v.overlay.is_empty() {
+            cv.on_top = true;
+            // The popup's lines are key and description, laid out in
+            // columns for the terminal: here the descriptions line up by
+            // their own measure.
+            let keys_w = v.overlay.iter().skip(1).map(|l| glyphs.ui_width(l.trim().split("  ").next().unwrap_or(""))).fold(0.0f32, f32::max);
+            let widest = v.overlay.iter().enumerate().map(|(i, l)| match l.trim().split_once("  ").filter(|_| i > 0) {
+                Some((_, what)) => keys_w + pad + glyphs.ui_width(what.trim()),
+                None => glyphs.ui_width(l.trim()),
+            }).fold(0.0f32, f32::max);
+            let bw = (widest + 3.0 * pad).min(w - 2.0 * pad);
+            let bh = (v.overlay.len() as f32 * row + pad).min(h - 2.0 * pad);
+            let (bx, by) = (x0 + ((w - bw) / 2.0).round(), y0 + ((h - bh) / 2.0).round());
+            cv.fill_px(bx, by, bw, bh, color(OVERLAY_BG));
+            for (i, line) in v.overlay.iter().enumerate() {
+                let y = by + pad / 2.0 + i as f32 * row;
+                if y + row > by + bh {
+                    break;
+                }
+                let line = line.trim();
+                match line.split_once("  ").filter(|_| i > 0) {
+                    Some((key, what)) => {
+                        cv.ui_text(glyphs, bx + 1.5 * pad, y, row, key, color(ACCENT), keys_w + 1.0);
+                        cv.ui_text(glyphs, bx + 2.5 * pad + keys_w, y, row, what.trim(), color(FG), bw - keys_w - 4.0 * pad);
+                    }
+                    None => {
+                        cv.ui_text(glyphs, bx + 1.5 * pad, y, row, line, color(if i == 0 { ACCENT } else { FG }), bw - 3.0 * pad);
+                    }
+                }
+            }
+            cv.on_top = false;
+        }
+    }
+}
+
+/// Where the file manager dialog's parts are, in pixels of the pane: its
+/// rectangle, the row height, where the body starts and the rows it has,
+/// and the width of the entries' column.
+struct FmLayout {
+    x0: f32,
+    y0: f32,
+    w: f32,
+    h: f32,
+    row: f32,
+    body: f32,
+    rows: usize,
+    left: f32,
+}
+
+/// What a point of the dialog is on: an entry shown (by its row), or a name
+/// in a directory's preview.
+enum FmHit {
+    Entry(usize),
+    Child(String),
+}
+
+/// A press in the dialog: where, when, and what it was on (an entry of the
+/// listing by its index and name, or a name in the preview).
+struct FmPress {
+    x: f32,
+    y: f32,
+    at: i64,
+    on: FmPressOn,
+}
+
+enum FmPressOn {
+    Entry(i32, String),
+    Child(String),
+}
+
+/// How long the bell's flash shows.
+const BELL_FLASH: Duration = Duration::from_millis(150);
+
+/// A second press this soon after the first, at its place, is a double
+/// press.
+const DOUBLE_PRESS_NS: i64 = 400_000_000;
+
+/// A line of a directory's preview: the name, and whether it is a
+/// directory's (" name", " name/", coloured).
+fn preview_name(line: &str) -> (String, bool) {
+    let text: String = sgr_spans(line).into_iter().map(|(t, _)| t).collect();
+    let name = text.trim_start();
+    match name.strip_suffix('/') {
+        Some(n) => (n.to_string(), true),
+        None => (name.to_string(), false),
+    }
+}
+
+/// The prompt's lines, each its text and its runs of style: its colours
+/// (the palette's are the GUI's, as a program's output's are) and
+/// attributes. Reverse swaps the colours; hidden text is drawn clear.
+fn prompt_lines(p: &Prompt) -> Vec<(String, Vec<(usize, Style)>)> {
+    let resolve = |c: PromptColor| match c {
+        PromptColor::Rgb(rgb) => Some(rgb),
+        PromptColor::Palette(i) if i < 16 => Some(ANSI[i as usize]),
+        PromptColor::Palette(i) => Some(xterm256(i)),
+        PromptColor::Default => None,
+    };
+    let bit = |a: PromptAttr| 1u8 << a as u8;
+    let (mut fg, mut bg, mut attrs): (Option<[u8; 3]>, Option<[u8; 3]>, u8) = (None, None, 0);
+    let style = |fg: Option<[u8; 3]>, bg: Option<[u8; 3]>, attrs: u8| {
+        let on = |a: PromptAttr| attrs & bit(a) != 0;
+        let (mut f, mut b) = (fg.unwrap_or(FG), bg);
+        if on(PromptAttr::Reverse) {
+            (f, b) = (b.unwrap_or(PROMPT_BG), Some(f));
+        }
+        let alpha = if on(PromptAttr::Hidden) {
+            0
+        } else if on(PromptAttr::Faint) {
+            0x80
+        } else {
+            0xff
+        };
+        Style {
+            color: rgba(f[0], f[1], f[2], alpha),
+            bg: b.map(color),
+            face: if on(PromptAttr::Bold) { BOLD } else { 0 } | if on(PromptAttr::Italic) { ITALIC } else { 0 },
+            underline: on(PromptAttr::Underline),
+            strike: on(PromptAttr::Strikethrough),
+        }
+    };
+    let mut lines = vec![(String::new(), vec![(0, style(fg, bg, attrs))])];
+    let mut next = 0;
+    // Each character, then the end: the styles at a byte take effect
+    // before it.
+    for (i, c) in p.text.char_indices().map(|(i, c)| (i, Some(c))).chain(std::iter::once((p.text.len(), None))) {
+        let mut changed = false;
+        while let Some((_, st)) = p.styles.get(next).filter(|(at, _)| *at as usize <= i) {
+            match st {
+                PromptStyle::Reset => (fg, bg, attrs) = (None, None, 0),
+                PromptStyle::Fg(c) => fg = resolve(*c),
+                PromptStyle::Bg(c) => bg = resolve(*c),
+                PromptStyle::On(a) => attrs |= bit(*a),
+                // Bold and faint go off together, as SGR 22 turns both off.
+                PromptStyle::Off(PromptAttr::Bold | PromptAttr::Faint) => attrs &= !(bit(PromptAttr::Bold) | bit(PromptAttr::Faint)),
+                PromptStyle::Off(a) => attrs &= !bit(*a),
+                PromptStyle::LinkStart(_) | PromptStyle::LinkEnd => {}
+            }
+            next += 1;
+            changed = true;
+        }
+        let (text, runs) = lines.last_mut().unwrap();
+        if changed {
+            let st = style(fg, bg, attrs);
+            match runs.last_mut() {
+                Some(last) if last.0 == text.len() => last.1 = st,
+                _ => runs.push((text.len(), st)),
+            }
+        }
+        match c {
+            None => {}
+            Some('\n') => lines.push((String::new(), vec![(0, style(fg, bg, attrs))])),
+            Some(c) => text.push(c),
+        }
+    }
+    lines
+}
+
+/// How terminal msh colours a command line's tokens (CommandPaint.go,
+/// commandStyleSpansInto), as byte ranges with a colour and whether they
+/// are underlined. On a command line the program is underlined in blue,
+/// and builtins and definitions are underlined.
+fn line_styles(
+    text: &str,
+    tokens: &[msh_editor::lexer::Token],
+    command_line: bool,
+    names: Option<&std::collections::HashSet<String>>,
+) -> Vec<(usize, usize, Option<[u8; 3]>, bool)> {
+    use TokenKind::*;
+    let program = if command_line {
+        tokens.iter().position(|t| !matches!(t.kind, Whitespace | LineComment))
+    } else {
+        None
+    };
+    let mut out = Vec::new();
+    for (i, t) in tokens.iter().enumerate() {
+        let style = match t.kind {
+            String | SingleQuoteString | FormatString | FormatStringStart | FormatStringMid | FormatStringEnd | Rune => {
+                Some((Some(ANSI[1]), false))
+            }
+            UnfinishedString | UnfinishedFormatString | UnfinishedSingleQuoteString | UnfinishedRune => {
+                Some((Some(ANSI[9]), false))
+            }
+            UnfinishedPath => Some((Some(ANSI[13]), false)),
+            Path => Some((Some(ANSI[5]), false)),
+            DateTime => Some((Some(ANSI[6]), false)),
+            True | False => Some((Some(ANSI[4]), false)),
+            VarStore | EnvStore => Some((Some(ANSI[2]), false)),
+            VarRetrieve | EnvRetrieve | EnvCheck => Some((Some(ANSI[3]), false)),
+            _ if Some(i) == program => Some((Some(ANSI[4]), true)),
+            Literal if command_line && names.is_some_and(|n| n.contains(t.text(text))) => Some((None, true)),
+            _ => None,
+        };
+        if let Some((fg, underline)) = style {
+            out.push((t.byte_start as usize, t.byte_end as usize, fg, underline));
+        }
+    }
+    out
+}
+
+/// A line's text split at its SGR sequences, each piece with the
+/// foreground colour set before it (None: the default). Other attributes
+/// are dropped.
+fn sgr_spans(line: &str) -> Vec<(String, Option<[u8; 3]>)> {
+    let mut spans = Vec::new();
+    let mut fg = None;
+    let mut rest = line;
+    while let Some(i) = rest.find("\x1b[") {
+        if i > 0 {
+            spans.push((rest[..i].to_string(), fg));
+        }
+        let Some(m) = rest[i + 2..].find('m') else {
+            rest = &rest[i + 2..];
+            continue;
+        };
+        let params: Vec<u32> = rest[i + 2..i + 2 + m].split(';').map(|p| p.parse().unwrap_or(0)).collect();
+        let mut k = 0;
+        while k < params.len() {
+            match params[k] {
+                0 | 39 => fg = None,
+                n @ 30..=37 => fg = Some(ANSI[(n - 30) as usize]),
+                n @ 90..=97 => fg = Some(ANSI[(n - 90 + 8) as usize]),
+                38 if params.get(k + 1) == Some(&5) => {
+                    fg = params.get(k + 2).map(|&n| xterm256(n as u8));
+                    k += 2;
+                }
+                38 if params.get(k + 1) == Some(&2) => {
+                    if let (Some(&r), Some(&g), Some(&b)) = (params.get(k + 2), params.get(k + 3), params.get(k + 4)) {
+                        fg = Some([r as u8, g as u8, b as u8]);
+                    }
+                    k += 4;
+                }
+                _ => {}
+            }
+            k += 1;
+        }
+        rest = &rest[i + 2 + m + 1..];
+    }
+    if !rest.is_empty() {
+        spans.push((rest.to_string(), fg));
+    }
+    spans
+}
+
+/// The 16 basic colours.
+const ANSI: [[u8; 3]; 16] = [
+    [0x40, 0x40, 0x48], [0xe0, 0x6c, 0x75], [0x98, 0xc3, 0x79], [0xe5, 0xc0, 0x7b],
+    [0x61, 0xaf, 0xef], [0xc6, 0x78, 0xdd], [0x56, 0xb6, 0xc2], [0xd8, 0xd8, 0xd8],
+    [0x70, 0x70, 0x7a], [0xf0, 0x80, 0x88], [0xa8, 0xd3, 0x89], [0xf0, 0xd0, 0x8b],
+    [0x81, 0xc0, 0xff], [0xd6, 0x98, 0xed], [0x66, 0xc6, 0xd2], [0xff, 0xff, 0xff],
+];
+
+/// xterm's 256-colour palette.
+fn xterm256(n: u8) -> [u8; 3] {
+    match n {
+        0..=15 => ANSI[n as usize],
+        16..=231 => {
+            let i = n - 16;
+            let level = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+            [level(i / 36), level(i / 6 % 6), level(i % 6)]
+        }
+        _ => {
+            let g = 8 + (n - 232) * 10;
+            [g, g, g]
+        }
+    }
+}
+
+
+const FM_BG: [u8; 3] = [0x16, 0x15, 0x1b];
+const FM_INSET: f32 = 14.0;
+/// The indicator's colour for a command line.
+const KIND_COMMAND: [u8; 3] = [0x7e, 0xc6, 0x99];
+/// The history suggestion after the line.
+const SUGGESTION: [u8; 3] = [0x5c, 0x5c, 0x68];
+const FOLDER: [u8; 3] = [0x6a, 0xa8, 0xe8];
+const FOLDER_BACK: [u8; 3] = [0x3f, 0x6f, 0xa8];
+const FILE_ICON: [u8; 3] = [0x8c, 0x8c, 0x98];
+const FM_HEADER_BG: [u8; 3] = [0x2c, 0x22, 0x36];
+const OVERLAY_BG: [u8; 3] = [0x30, 0x2a, 0x3a];
+const CLIP: [u8; 3] = [0x6c, 0xc8, 0xd0];
+const RULE: [u8; 3] = [0x3a, 0x3a, 0x44];
+const PREVIEW: [u8; 3] = [0xb0, 0xb0, 0xb8];
+const MESSAGE: [u8; 3] = [0xe5, 0xc0, 0x7b];
+
+/// Quads for part of the window: solid ones (backgrounds) first, then
+/// glyphs and cursors over them. Positions are cells from the origin, a
+/// pixel position, clipped to the size in cells.
+pub struct Canvas<'a> {
+    pub solid: &'a mut Vec<Quad>,
+    pub glyph: &'a mut Vec<Quad>,
+    /// Quads over everything else (a dialog's popup), in drawing order.
+    pub top: &'a mut Vec<Quad>,
+    /// While set, quads go to `top`.
+    pub on_top: bool,
+    /// The phase of blinking: whether blinking text and cursors show now.
+    pub blink_on: bool,
+    /// Whether the window has the keyboard: without it, cursors are hollow
+    /// and still.
+    pub window_focused: bool,
+    /// Set when something that blinks was drawn, so the frame is drawn
+    /// again at the next phase.
+    pub blinks: bool,
+    pub x0: u32,
+    pub y0: u32,
+    pub cols: usize,
+    pub rows: usize,
+    /// The cell's size in pixels.
+    pub cell: (u32, u32),
+}
+
+impl Canvas<'_> {
+    fn push_solid(&mut self, q: Quad) {
+        if self.on_top { self.top.push(q) } else { self.solid.push(q) }
+    }
+
+    fn push_glyph(&mut self, q: Quad) {
+        if self.on_top { self.top.push(q) } else { self.glyph.push(q) }
+    }
+
+    /// A cell's top left corner, in pixels.
+    fn cell_px(&self, col: usize, row: usize) -> (u32, u32) {
+        (self.x0 + col as u32 * self.cell.0, self.y0 + row as u32 * self.cell.1)
+    }
+
+    pub fn put(&mut self, glyphs: &mut Glyphs, col: usize, row: usize, c: char, fg: u32) {
+        if c != ' ' && col < self.cols && row < self.rows {
+            let r = glyphs.mono(c);
+            let (x, y) = self.cell_px(col, row);
+            self.push_glyph(Quad { x, y, w: r.w, h: r.h, u: r.u, v: r.v, color: fg });
+        }
+    }
+
+    pub fn fill(&mut self, col: usize, row: usize, width: usize, bg: u32) {
+        if row < self.rows && col < self.cols {
+            let (x, y) = self.cell_px(col, row);
+            let w = width.min(self.cols - col) as u32 * self.cell.0;
+            self.push_solid(Quad::solid(x, y, w, self.cell.1, bg));
+        }
+    }
+
+    /// A rectangle in pixels from the origin.
+    /// Its edges are rounded, not its size, so rectangles side by side
+    /// meet without a seam.
+    pub fn fill_px(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) {
+        let (x0, y0) = (x.max(0.0).round(), y.max(0.0).round());
+        let (x1, y1) = ((x + w).round(), (y + h).round());
+        if x1 > x0 && y1 > y0 {
+            self.push_solid(Quad::solid(self.x0 + x0 as u32, self.y0 + y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32, color));
+        }
+    }
+
+    /// A monospace character at a pixel position from the origin.
+    pub fn mono_px(&mut self, glyphs: &mut Glyphs, x: f32, y: f32, c: char, fg: u32) {
+        if c != ' ' {
+            let r = glyphs.mono(c);
+            self.push_glyph(Quad { x: self.x0 + x as u32, y: self.y0 + y as u32, w: r.w, h: r.h, u: r.u, v: r.v, color: fg });
+        }
+    }
+
+    /// Text in the UI font in a row of height `h` at (x, y) from the
+    /// origin, centred on it, cut to `max` pixels; returns its width.
+    pub fn ui_text(&mut self, glyphs: &mut Glyphs, x: f32, y: f32, h: f32, text: &str, color: u32, max: f32) -> f32 {
+        self.text_in(glyphs, crate::render::UI, x, y, h, text, color, max)
+    }
+
+    /// Text in a family (render::UI, MONO, PROMPT) in a row of height `h`
+    /// at (x, y) from the origin, centred on it, cut to `max` pixels;
+    /// returns its width.
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_in(&mut self, glyphs: &mut Glyphs, slot: u8, x: f32, y: f32, h: f32, text: &str, color: u32, max: f32) -> f32 {
+        let m = glyphs.metrics(slot);
+        let baseline = y + ((h - (m.ascent + m.descent)) / 2.0).round() + m.ascent;
+        let mut quads = Vec::new();
+        let w = glyphs.text(slot, &mut quads, self.x0 as f32 + x, self.y0 as f32 + baseline, text, color, max);
+        for q in quads {
+            self.push_glyph(q);
+        }
+        w
+    }
+
+    /// A shaped glyph, its cluster at x and its baseline at y, from the
+    /// origin.
+    pub fn glyph(&mut self, glyphs: &mut Glyphs, g: ShapedGlyph, x: f32, y: f32, color: u32) {
+        if let Some(q) = glyphs.glyph_quad(g, self.x0 as f32 + x, self.y0 as f32 + y, color) {
+            self.push_glyph(q);
+        }
+    }
+
+    /// A line over the glyphs (an underline, a line through), in pixels
+    /// from the origin.
+    pub fn line_px(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) {
+        if w > 0.0 && h > 0.0 {
+            self.push_glyph(Quad::solid(self.x0 + x.round() as u32, self.y0 + y.round() as u32, w.round().max(1.0) as u32, h as u32, color));
+        }
+    }
+
+    /// The prompt's cursor in pixels from the origin: a bar, faint while
+    /// the window hasn't the keyboard; or a block that shows the text
+    /// through it, hollow while the window hasn't the keyboard.
+    pub fn box_cursor(&mut self, x: f32, y: f32, w: f32, h: f32, bar: bool) {
+        let (x, y, w, h) = (self.x0 + x.round() as u32, self.y0 + y.round() as u32, w.round().max(2.0) as u32, h.round() as u32);
+        if bar {
+            // As thick as a terminal's bar cursor in this cell size.
+            let line = (self.cell.0 / 8).max(2);
+            let alpha = if self.window_focused { 0xff } else { 0x60 };
+            self.push_glyph(Quad::solid(x, y, line, h, rgba(FG[0], FG[1], FG[2], alpha)));
+        } else if self.window_focused {
+            self.push_glyph(Quad::solid(x, y, w, h, rgba(FG[0], FG[1], FG[2], 0x90)));
+        } else {
+            for (qx, qy, qw, qh) in [(x, y, w, 1), (x, y + h - 1, w, 1), (x, y, 1, h), (x + w - 1, y, 1, h)] {
+                self.push_glyph(Quad::solid(qx, qy, qw, qh, color(FG)));
+            }
+        }
+    }
+
+    /// An icon `size` pixels square at (x, y) from the origin.
+    pub fn icon(&mut self, glyphs: &mut Glyphs, icon: Icon, x: f32, y: f32, size: u32, color: u32) {
+        let r = glyphs.icon(icon, size);
+        self.push_glyph(Quad { x: self.x0 + x as u32, y: self.y0 + y as u32, w: r.w, h: r.h, u: r.u, v: r.v, color });
+    }
+
+    /// A line under a cell, as an underline.
+    /// A program's cursor: in the shape and colour it set, blinking if it
+    /// asked to. While the window hasn't the keyboard it is a still,
+    /// hollow block, as terminals draw it.
+    fn term_cursor(&mut self, col: usize, row: usize, k: &vt::Cursor) {
+        if k.blinking && self.window_focused {
+            self.blinks = true;
+            if !self.blink_on {
+                return;
+            }
+        }
+        self.draw_cursor(col, row, k.shape, k.color.unwrap_or(FG));
+    }
+
+    /// A cursor: a block shows the character through it; the bar,
+    /// underline and hollow block are solid.
+    fn draw_cursor(&mut self, col: usize, row: usize, shape: vt::CursorShape, rgb: [u8; 3]) {
+        if col >= self.cols || row >= self.rows {
+            return;
+        }
+        let shape = if self.window_focused { shape } else { vt::CursorShape::HollowBlock };
+        let (x, y) = self.cell_px(col, row);
+        let (w, h) = self.cell;
+        let line = (w / 8).max(2);
+        let c = color(rgb);
+        match shape {
+            vt::CursorShape::Block => self.push_glyph(Quad::solid(x, y, w, h, rgba(rgb[0], rgb[1], rgb[2], 0x90))),
+            vt::CursorShape::Bar => self.push_glyph(Quad::solid(x, y, line, h, c)),
+            vt::CursorShape::Underline => self.push_glyph(Quad::solid(x, y + h - line, w, line, c)),
+            vt::CursorShape::HollowBlock => {
+                for (qx, qy, qw, qh) in [(x, y, w, 1), (x, y + h - 1, w, 1), (x, y, 1, h), (x + w - 1, y, 1, h)] {
+                    self.push_glyph(Quad::solid(qx, qy, qw, qh, c));
+                }
+            }
+        }
+    }
+
+    /// A program's underline under a cell, in its style, and a line
+    /// through it for strikethrough.
+    fn decorations(&mut self, col: usize, row: usize, cell: &vt::Cell, fg: u32) {
+        if col >= self.cols || row >= self.rows {
+            return;
+        }
+        let (x, y) = self.cell_px(col, row);
+        let (w, h) = self.cell;
+        let t = (h / 16).max(1);
+        if cell.strikethrough {
+            self.push_glyph(Quad::solid(x, y + h / 2, w, t, fg));
+        }
+        if cell.overline {
+            self.push_glyph(Quad::solid(x, y, w, t, fg));
+        }
+        let c = cell.underline_color.map_or(fg, color);
+        let base = y + h - 2 * t;
+        match cell.underline {
+            vt::Underline::None => {}
+            vt::Underline::Single => self.push_glyph(Quad::solid(x, base, w, t, c)),
+            vt::Underline::Double => {
+                self.push_glyph(Quad::solid(x, base, w, t, c));
+                self.push_glyph(Quad::solid(x, base - 2 * t, w, t, c));
+            }
+            vt::Underline::Dotted => {
+                for dx in (0..w).step_by(2 * t as usize) {
+                    self.push_glyph(Quad::solid(x + dx, base, t.min(w - dx), t, c));
+                }
+            }
+            vt::Underline::Dashed => {
+                let dash = (w / 2).saturating_sub(t).max(1);
+                self.push_glyph(Quad::solid(x, base, dash, t, c));
+                self.push_glyph(Quad::solid(x + w / 2, base, dash.min(w - w / 2), t, c));
+            }
+            vt::Underline::Curly => {
+                // A wave a cell long, its crests 2t above the base: a
+                // column of t at each pixel.
+                let amp = (2 * t) as f32;
+                for dx in 0..w {
+                    let phase = dx as f32 / w as f32 * std::f32::consts::TAU;
+                    let dy = (amp * (1.0 - phase.cos()) / 2.0).round() as u32;
+                    self.push_glyph(Quad::solid(x + dx, base + t - dy, 1, t, c));
+                }
+            }
+        }
+    }
+
+    /// A cell of an emulator, over `bg` where it has no background of its
+    /// own.
+    /// Its text is in the cell's style (bold, italic), half seen when
+    /// faint, and not at all when concealed or in the hidden phase of
+    /// blinking; its lines (underline, strikethrough, overline) go with it.
+    fn cell(&mut self, glyphs: &mut Glyphs, col: usize, row: usize, cell: &vt::Cell, bg: [u8; 3]) {
+        let (fg, cell_bg) = if cell.inverse_default && cell.fg.is_none() && cell.bg.is_none() {
+            (bg, Some(color(FG)))
+        } else {
+            (cell.fg.unwrap_or(FG), cell.bg.map(color))
+        };
+        if let Some(b) = cell_bg {
+            self.fill(col, row, 1, b);
+        }
+        if cell.invisible {
+            return;
+        }
+        if cell.blink {
+            self.blinks = true;
+            if !self.blink_on {
+                return;
+            }
+        }
+        let fg = rgba(fg[0], fg[1], fg[2], if cell.faint { 0x80 } else { 0xff });
+        let style = if cell.bold { BOLD } else { 0 } | if cell.italic { ITALIC } else { 0 };
+        if cell.ch != ' ' && col < self.cols && row < self.rows {
+            let r = glyphs.mono_styled(cell.ch, style);
+            let (x, y) = self.cell_px(col, row);
+            self.push_glyph(Quad { x, y, w: r.w, h: r.h, u: r.u, v: r.v, color: fg });
+        }
+        if cell.underline != vt::Underline::None || cell.strikethrough || cell.overline {
+            self.decorations(col, row, cell, fg);
+        }
+    }
+}
