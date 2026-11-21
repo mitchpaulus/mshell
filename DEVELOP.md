@@ -20,7 +20,6 @@ simple
     | MINUS ('-')
     | PLUS ('+')
     | EQUALS ('=')
-    | INTERPRET
     | IF ('if')
     | LOOP ('loop')
     | READ ('read')

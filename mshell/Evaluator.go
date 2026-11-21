@@ -1651,6 +1651,9 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 			Type:   LITERAL,
 		}
 
+		if funcToken.Lexeme == "x" {
+			return state.processInterpret(&funcToken, frame)
+		}
 		if def, ok := state.lookupDefinition(frame.Definitions, funcToken.Lexeme); ok {
 			return state.callDefinition(def, t, frame)
 		}
@@ -2271,6 +2274,9 @@ func (state *EvalState) processTokenToken(item MShellParseItem, t *Token, frame 
 			state.handleReturn(base)
 			return nil
 		}
+		if t.Lexeme == "x" {
+			return state.processInterpret(t, frame)
+		}
 		if def, ok := state.lookupDefinition(frame.Definitions, t.Lexeme); ok {
 			return state.callDefinition(def, item, frame)
 		}
@@ -2294,22 +2300,27 @@ func (state *EvalState) processTokenToken(item MShellParseItem, t *Token, frame 
 	case IFF:
 		return state.processIff(t, frame)
 
-	case INTERPRET:
-		obj, err := frame.Stack.Pop()
-		if err != nil {
-			return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot interpret an empty stack.\n", t.Line, t.Column))
-		}
-		quotation, ok := obj.(*MShellQuotation)
-		if !ok {
-			return state.mismatchPtr(fmt.Sprintf("%d:%d: Argument for interpret expected to be a quotation, received a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
-		}
-		return state.pushQuotationFrame(quotation)
 	}
 
 	// Keep the frame's call stack type, which decides whether a bare
 	// literal is allowed (only inside a list).
 	callStackItem := CallStackItem{MShellParseItem: nil, Name: "token", CallStackType: frame.CallStackItem.CallStackType}
 	return nilIfNothingToDo(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions, callStackItem))
+}
+
+// processInterpret handles the builtin `x`: it pops a quotation and pushes
+// a frame that runs it on the frame's stack. It is not in
+// evaluateBuiltinToken because it needs the frame.
+func (state *EvalState) processInterpret(t *Token, frame *EvaluationFrame) *EvalResult {
+	obj, err := frame.Stack.Pop()
+	if err != nil {
+		return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot interpret an empty stack.\n", t.Line, t.Column))
+	}
+	quotation, ok := obj.(*MShellQuotation)
+	if !ok {
+		return state.mismatchPtr(fmt.Sprintf("%d:%d: Argument for interpret expected to be a quotation, received a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+	}
+	return state.pushQuotationFrame(quotation)
 }
 
 // processLoop handles the loop construct

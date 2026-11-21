@@ -1014,8 +1014,6 @@ func (c *coreChecker) token(tok Token) {
 		}
 	case LITERAL:
 		c.word(tok)
-	case INTERPRET:
-		c.interpret(tok)
 	case IFF:
 		c.iff(tok)
 	case LOOP:
@@ -1062,7 +1060,7 @@ func (c *coreChecker) token(tok Token) {
 	}
 }
 
-// word checks a LITERAL token: return, a stack shuffle, a def, a builtin,
+// word checks a LITERAL token: return, x, a stack shuffle, a def, a builtin,
 // or a bare word in a list literal.
 func (c *coreChecker) word(tok Token) {
 	if c.shuffle(tok) {
@@ -1073,6 +1071,10 @@ func (c *coreChecker) word(tok Token) {
 	}
 	if tok.Lexeme == "return" {
 		c.doReturn(tok)
+		return
+	}
+	if tok.Lexeme == "x" {
+		c.interpret(tok)
 		return
 	}
 	id, named := c.names.Lookup(tok.Lexeme)
