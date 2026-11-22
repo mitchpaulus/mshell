@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1467,11 +1468,16 @@ func TestCodeActionQuotesAllLiteralsInInnermostList(t *testing.T) {
 		},
 	})
 
-	if len(actions) != 1 {
-		t.Fatalf("expected one code action, got %d", len(actions))
+	// Every bare word in the list is read as a string, so both quote
+	// actions make the same edits.
+	if len(actions) != 2 {
+		t.Fatalf("expected two code actions, got %d", len(actions))
 	}
-	if actions[0].Title != "Quote all literals in list" {
-		t.Fatalf("unexpected code action title: %q", actions[0].Title)
+	if actions[0].Title != "Quote all literals in list" || actions[1].Title != "Quote literals in list that are strings" {
+		t.Fatalf("unexpected code action titles: %q, %q", actions[0].Title, actions[1].Title)
+	}
+	if !reflect.DeepEqual(actions[0].Edit, actions[1].Edit) {
+		t.Fatalf("the two actions differ: %+v, %+v", actions[0].Edit, actions[1].Edit)
 	}
 	if actions[0].Kind != protocol.RefactorRewrite {
 		t.Fatalf("unexpected code action kind: %q", actions[0].Kind)
@@ -1509,8 +1515,8 @@ func TestCodeActionQuotesNestedLiteralsFromOuterList(t *testing.T) {
 		},
 	})
 
-	if len(actions) != 1 || actions[0].Edit == nil {
-		t.Fatalf("expected one code action with edits, got %+v", actions)
+	if len(actions) != 2 || actions[0].Edit == nil {
+		t.Fatalf("expected two code actions with edits, got %+v", actions)
 	}
 	edits := actions[0].Edit.Changes[uri]
 	want := []string{"'outer'", "'inner'", "'value'", "'tail'"}
@@ -1520,6 +1526,140 @@ func TestCodeActionQuotesNestedLiteralsFromOuterList(t *testing.T) {
 	for i := range want {
 		if edits[i].NewText != want[i] {
 			t.Fatalf("edit %d = %q, want %q", i, edits[i].NewText, want[i])
+		}
+	}
+}
+
+// quoteListEdits runs the code actions of server at line and character of
+// the document uri, and gives the new text of each edit of the two quote
+// actions: all the literals, and only those read as strings. One that is
+// not offered gives nil.
+func quoteListEdits(t *testing.T, server *lspServer, uri protocol.DocumentURI, line, character uint32) (all, strs []string) {
+	t.Helper()
+	pos := protocol.Position{Line: line, Character: character}
+	actions := server.codeActions(protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Range:        protocol.Range{Start: pos, End: pos},
+		Context:      protocol.CodeActionContext{Only: []protocol.CodeActionKind{protocol.RefactorRewrite}},
+	})
+	newTexts := func(title string) []string {
+		for _, action := range actions {
+			if action.Title != title {
+				continue
+			}
+			var out []string
+			for _, edit := range action.Edit.Changes[uri] {
+				out = append(out, edit.NewText)
+			}
+			return out
+		}
+		return nil
+	}
+	return newTexts("Quote all literals in list"), newTexts("Quote literals in list that are strings")
+}
+
+// TestCodeActionQuotesOnlyLiteralsReadAsStrings: the second quote action
+// leaves every word that is not read as the string of its text: a
+// definition or an enum member of the document, a builtin, a member of a
+// built-in enum, and a path under the home directory. Nested lists too.
+func TestCodeActionQuotesOnlyLiteralsReadAsStrings(t *testing.T) {
+	uri := protocol.DocumentURI("file:///quote-list-strings.msh")
+	doc := "def helper ( -- str) \"x\" end\n" +
+		"enum Color = red | green int end\n" +
+		"[git helper [red Color] sort ok ~/notes x -v plain]\n" +
+		"[helper red sort]\n"
+	server := &lspServer{documents: map[protocol.DocumentURI]*lspDocument{uri: newLSPDocument(doc)}}
+
+	all, strs := quoteListEdits(t, server, uri, 2, 1)
+	if want := []string{"'git'", "'helper'", "'red'", "'Color'", "'sort'", "'ok'", "'~/notes'", "'x'", "'-v'", "'plain'"}; !reflect.DeepEqual(all, want) {
+		t.Fatalf("quote all: %q, want %q", all, want)
+	}
+	// `Color` is a type, which is not a word.
+	if want := []string{"'git'", "'Color'", "'-v'", "'plain'"}; !reflect.DeepEqual(strs, want) {
+		t.Fatalf("quote strings: %q, want %q", strs, want)
+	}
+
+	// A list with no word read as a string: there is nothing to quote.
+	all, strs = quoteListEdits(t, server, uri, 3, 1)
+	if want := []string{"'helper'", "'red'", "'sort'"}; !reflect.DeepEqual(all, want) {
+		t.Fatalf("quote all: %q, want %q", all, want)
+	}
+	if strs != nil {
+		t.Fatalf("quote strings is offered with nothing to quote: %q", strs)
+	}
+}
+
+// TestCodeActionQuoteStringsKeepsStartupWords: the definitions and enum
+// members of the startup files a document is checked after are not read as
+// strings. A document that is a startup file is not checked after itself or
+// the files after it, so their names are strings there.
+func TestCodeActionQuoteStringsKeepsStartupWords(t *testing.T) {
+	dir := t.TempDir()
+	stdPath, initPath := filepath.Join(dir, "std.msh"), filepath.Join(dir, "init.msh")
+	stdText := "def stdOne ( -- int) 1 end\nenum StdColor = stdRed | stdBlue end\n[stdOne initOne stdRed word]\n"
+	initText := "def initOne ( -- int) 2 end\n[stdOne initOne stdRed word]\n"
+	var files []lspStartupFile
+	for _, f := range []struct{ path, text string }{{stdPath, stdText}, {initPath, initText}} {
+		if err := os.WriteFile(f.path, []byte(f.text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := parseMShellInput(f.text, &TokenFile{f.path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, lspStartupFile{path: f.path, defs: parsed.Definitions, decls: declarationItems(parsed.Items)})
+	}
+	uri := func(p string) protocol.DocumentURI { return protocol.DocumentURI("file://" + filepath.ToSlash(p)) }
+	other := uri(filepath.Join(dir, "other.msh"))
+	server := &lspServer{startupFiles: files, documents: map[protocol.DocumentURI]*lspDocument{
+		other:         newLSPDocument("[stdOne initOne stdRed word]\n"),
+		uri(stdPath):  newLSPDocument(stdText),
+		uri(initPath): newLSPDocument(initText),
+	}}
+	server.stdlibDefs, server.startupDecls = joinStartupFiles(files)
+
+	cases := []struct {
+		name string
+		uri  protocol.DocumentURI
+		line uint32
+		want []string
+	}{
+		{"another document", other, 0, []string{"'word'"}},
+		// Its own definition, and the standard library's before it.
+		{"the init file", uri(initPath), 1, []string{"'word'"}},
+		// The init file loads after the standard library.
+		{"the standard library", uri(stdPath), 2, []string{"'initOne'", "'word'"}},
+	}
+	for _, c := range cases {
+		if _, strs := quoteListEdits(t, server, c.uri, c.line, 1); !reflect.DeepEqual(strs, c.want) {
+			t.Errorf("%s: quote strings: %q, want %q", c.name, strs, c.want)
+		}
+	}
+}
+
+// TestCoreBaseWordsAreRuntimeWords: every name the checker's table types is
+// a builtin or a startup definition at run time, so IsWord calls nothing a
+// word that a list would read as a string.
+func TestCoreBaseWordsAreRuntimeWords(t *testing.T) {
+	defs, decls, err := loadStartupForLSP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := NewCoreBase(defs, decls)
+	for id, sigs := range base.table.byName {
+		name := base.names.Name(NameId(id))
+		if _, builtin := BuiltInList[name]; len(sigs) > 0 && !builtin && !IsDefinitionDefined(name, defs) {
+			t.Errorf("the table types %q, which is neither a builtin nor a startup definition", name)
+		}
+	}
+	for _, name := range []string{"sort", "x", "return", "ok", "err", "just", "none", "map"} {
+		if !base.IsWord(name) {
+			t.Errorf("IsWord(%q) is false", name)
+		}
+	}
+	for _, name := range []string{"git", "-v", "Result", "notAWordAnywhere"} {
+		if base.IsWord(name) {
+			t.Errorf("IsWord(%q) is true", name)
 		}
 	}
 }
@@ -1849,8 +1989,8 @@ func TestCodeActionOnlyTargetsParsedListValues(t *testing.T) {
 	}
 
 	actions := actionsAt("[echo arg]")
-	if len(actions) != 1 || actions[0].Edit == nil {
-		t.Fatalf("expected an action in the match-arm list value, got %+v", actions)
+	if len(actions) != 2 || actions[0].Edit == nil {
+		t.Fatalf("expected the two quote actions in the match-arm list value, got %+v", actions)
 	}
 	edits := actions[0].Edit.Changes[uri]
 	if len(edits) != 2 || edits[0].NewText != "'echo'" || edits[1].NewText != "'arg'" {
@@ -1874,8 +2014,8 @@ func TestCodeActionDoesNotCrossIntoOtherParseConstructs(t *testing.T) {
 			End:   protocol.Position{Line: 0, Character: 1},
 		},
 	})
-	if len(actions) != 1 || actions[0].Edit == nil {
-		t.Fatalf("expected one code action with edits, got %+v", actions)
+	if len(actions) != 2 || actions[0].Edit == nil {
+		t.Fatalf("expected two code actions with edits, got %+v", actions)
 	}
 	edits := actions[0].Edit.Changes[uri]
 	want := []string{"'inner'", "'arg'", "'outer'"}

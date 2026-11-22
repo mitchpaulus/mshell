@@ -131,6 +131,13 @@ type lspDocument struct {
 
 	sigsOnce sync.Once
 	sigs     map[string][]string
+
+	// declared are the names the document's own definitions and enum
+	// members take, and wordBase is the base it is checked with
+	// (lspServer.readsAsString).
+	declaredOnce sync.Once
+	declared     map[string]struct{}
+	wordBase     *CoreBase
 }
 
 // lspCheck is what the type checker says of a document.
@@ -778,9 +785,7 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 	actions = append(actions, s.typeFixActions(doc, params)...)
 	actions = append(actions, s.treatAsStdLibActions(doc, params)...)
 	if codeActionKindRequested(params.Context.Only, protocol.RefactorRewrite) {
-		if a, ok := quoteLiteralsAction(doc, file, params); ok {
-			actions = append(actions, a)
-		}
+		actions = append(actions, s.quoteLiteralsActions(doc, file, params)...)
 		if a, ok := prefixQuoteAction(doc, file, params); ok {
 			actions = append(actions, a)
 		}
@@ -916,12 +921,20 @@ func rangesOverlap(a, b protocol.Range) bool {
 	return !before(a.End, b.Start) && !before(b.End, a.Start)
 }
 
-// quoteLiteralsAction offers to quote every bare word in the innermost
-// list literal at the cursor.
-func quoteLiteralsAction(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) (protocol.CodeAction, bool) {
+const (
+	quoteAllLiteralsTitle    = "Quote all literals in list"
+	quoteStringLiteralsTitle = "Quote literals in list that are strings"
+)
+
+// quoteLiteralsActions offers to quote the bare words in the innermost
+// list literal at the cursor: every one of them, and only those the list
+// reads as strings (readsAsString), which leaves the list meaning what it
+// did. The second is offered even when it quotes the same words as the
+// first, so an editor key bound to it works in every list.
+func (s *lspServer) quoteLiteralsActions(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) []protocol.CodeAction {
 	line, col, ok := cursorAt(doc, params.Range.Start)
 	if !ok {
-		return protocol.CodeAction{}, false
+		return nil
 	}
 	var selected *MShellParseList
 	itemsAtCursor(file, line, col, func(items []MShellParseItem) {
@@ -935,30 +948,93 @@ func quoteLiteralsAction(doc *lspDocument, file *MShellFile, params protocol.Cod
 		}
 	})
 	if selected == nil {
-		return protocol.CodeAction{}, false
+		return nil
 	}
 
 	literals := collectListLiterals(selected)
 	if len(literals) == 0 {
-		return protocol.CodeAction{}, false
+		return nil
 	}
-	edits := make([]protocol.TextEdit, 0, len(literals))
+	uri := params.TextDocument.URI
+	all := make([]protocol.TextEdit, 0, len(literals))
 	for _, tok := range literals {
-		edits = append(edits, protocol.TextEdit{
+		all = append(all, protocol.TextEdit{
 			Range:   doc.tokenRange(tok),
 			NewText: "'" + tok.Lexeme + "'",
 		})
 	}
+	// The edits of the words read as strings are the same edits with some
+	// left out, or the same slice if none is.
+	readsAsString := s.readsAsString(uri, doc, file)
+	notString := func(tok Token) bool { return !readsAsString(tok.Lexeme) }
+	strs := all
+	if slices.ContainsFunc(literals, notString) {
+		strs = make([]protocol.TextEdit, 0, len(literals)-1)
+		for i, tok := range literals {
+			if !notString(tok) {
+				strs = append(strs, all[i])
+			}
+		}
+	}
 
-	return protocol.CodeAction{
-		Title: "Quote all literals in list",
-		Kind:  protocol.RefactorRewrite,
-		Edit: &protocol.WorkspaceEdit{
-			Changes: map[protocol.DocumentURI][]protocol.TextEdit{
-				params.TextDocument.URI: edits,
-			},
-		},
-	}, true
+	action := func(title string, edits []protocol.TextEdit) protocol.CodeAction {
+		return protocol.CodeAction{
+			Title: title,
+			Kind:  protocol.RefactorRewrite,
+			Edit:  &protocol.WorkspaceEdit{Changes: map[protocol.DocumentURI][]protocol.TextEdit{uri: edits}},
+		}
+	}
+	actions := []protocol.CodeAction{action(quoteAllLiteralsTitle, all)}
+	if len(strs) > 0 {
+		actions = append(actions, action(quoteStringLiteralsTitle, strs))
+	}
+	return actions
+}
+
+// readsAsString gives a function telling whether a bare word in a list of
+// the document is the string of its own text, as the runtime reads it: not
+// a definition or an enum member of the document or of the startup files it
+// is checked after, not a builtin, and not a path under the home directory,
+// which is expanded. Quoting such a word leaves the list as it was.
+//
+// The document's names and its base are worked out once per version of the
+// document, so asking on every cursor move reads only maps.
+func (s *lspServer) readsAsString(uri protocol.DocumentURI, doc *lspDocument, file *MShellFile) func(name string) bool {
+	doc.declaredOnce.Do(func() {
+		doc.declared = declaredNames(file.Definitions, file.Items)
+		doc.wordBase, _, _ = s.baseFor(uri)
+	})
+	own, base := doc.declared, doc.wordBase
+	return func(name string) bool {
+		if _, ok := own[name]; ok {
+			return false
+		}
+		return !strings.HasPrefix(name, "~/") && !base.IsWord(name)
+	}
+}
+
+// declaredNames are the names of defs and of the members of the enums
+// declared in items, the names findDeclaration finds that are words. It is
+// nil if there are none.
+func declaredNames(defs []MShellDefinition, items []MShellParseItem) map[string]struct{} {
+	var names map[string]struct{}
+	add := func(name string) {
+		if names == nil {
+			names = make(map[string]struct{}, len(defs))
+		}
+		names[name] = struct{}{}
+	}
+	for i := range defs {
+		add(defs[i].Name)
+	}
+	for _, item := range items {
+		if enum, ok := item.(*MShellEnumDecl); ok {
+			for _, member := range enum.Members {
+				add(member)
+			}
+		}
+	}
+	return names
 }
 
 func collectListLiterals(list *MShellParseList) []Token {

@@ -506,6 +506,10 @@ use $"($nu.default-config-dir)/completions/msh.nu" *
 The bundled language server provides a code action named `Quote all literals in list` when the cursor is inside a parsed list value containing bare literal tokens.
 The action single-quotes every bare literal in the innermost containing list, including literals in nested child lists.
 Existing strings, numbers, variables, paths, and operators are unchanged.
+This changes the meaning of a bare word that is not a string: a quoted definition or builtin is no longer called.
+
+The code action `Quote literals in list that are strings` quotes only the bare literals the list reads as strings, so the list means what it did.
+It leaves definitions, builtins, enum members, and `~/` paths unquoted: with a definition `helper`, `[git helper -v]` becomes `['git' helper '-v']`.
 
 ### Binary map overrides
 
