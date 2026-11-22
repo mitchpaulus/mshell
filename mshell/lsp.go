@@ -241,6 +241,43 @@ func (d *lspDocument) tokenRange(tok Token) protocol.Range {
 	}
 }
 
+// lspLineScan gives the ranges of tokens that are asked for in the order
+// of the text. It goes on from where the token before ended, so the tokens
+// of one line read the line once between them; tokenRange reads from the
+// start of the line for each, which is quadratic in a long line.
+type lspLineScan struct {
+	doc *lspDocument
+	// The scan is at 0-based rune column col of line, units UTF-16 code
+	// units and off bytes into it.
+	line, col, off int
+	units          uint32
+}
+
+// position is lspDocument.position.
+func (c *lspLineScan) position(line, col int) protocol.Position {
+	if line < 0 || line >= len(c.doc.Lines) {
+		return c.doc.position(line, col)
+	}
+	if line != c.line || col < c.col {
+		c.line, c.col, c.off, c.units = line, 0, 0, 0
+	}
+	text := c.doc.Lines[line]
+	for c.col < col && c.off < len(text) {
+		r, size := utf8.DecodeRuneInString(text[c.off:])
+		c.off += size
+		c.units += uint32(utf16.RuneLen(r))
+		c.col++
+	}
+	return protocol.Position{Line: uint32(line), Character: c.units}
+}
+
+// tokenRange is lspDocument.tokenRange.
+func (c *lspLineScan) tokenRange(tok *Token) protocol.Range {
+	col := tok.Column - 1
+	start := c.position(tok.Line-1, col)
+	return protocol.Range{Start: start, End: c.position(tok.Line-1, col+utf8.RuneCountInString(tok.Lexeme))}
+}
+
 type builtinInfo struct {
 	Name        string
 	Description string
@@ -956,25 +993,40 @@ func (s *lspServer) quoteLiteralsActions(doc *lspDocument, file *MShellFile, par
 		return nil
 	}
 	uri := params.TextDocument.URI
-	all := make([]protocol.TextEdit, 0, len(literals))
+	// Every edit's new text is a part of one string, and the words are in
+	// the order of the text, so each line is read once (lspLineScan).
+	size := 2 * len(literals)
 	for _, tok := range literals {
-		all = append(all, protocol.TextEdit{
-			Range:   doc.tokenRange(tok),
-			NewText: "'" + tok.Lexeme + "'",
-		})
+		size += len(tok.Lexeme)
 	}
+	var quoted strings.Builder
+	quoted.Grow(size)
+	for _, tok := range literals {
+		quoted.WriteByte('\'')
+		quoted.WriteString(tok.Lexeme)
+		quoted.WriteByte('\'')
+	}
+	newText := quoted.String()
 	// The edits of the words read as strings are the same edits with some
 	// left out, or the same slice if none is.
 	readsAsString := s.readsAsString(uri, doc, file)
-	notString := func(tok Token) bool { return !readsAsString(tok.Lexeme) }
-	strs := all
-	if slices.ContainsFunc(literals, notString) {
-		strs = make([]protocol.TextEdit, 0, len(literals)-1)
-		for i, tok := range literals {
-			if !notString(tok) {
-				strs = append(strs, all[i])
-			}
+	all := make([]protocol.TextEdit, len(literals))
+	var strs []protocol.TextEdit
+	same := true
+	scan := lspLineScan{doc: doc}
+	for i, tok := range literals {
+		n := len(tok.Lexeme) + 2
+		all[i] = protocol.TextEdit{Range: scan.tokenRange(tok), NewText: newText[:n]}
+		newText = newText[n:]
+		if isString := readsAsString(tok.Lexeme); !isString && same {
+			same = false
+			strs = append(make([]protocol.TextEdit, 0, len(literals)-1), all[:i]...)
+		} else if isString && !same {
+			strs = append(strs, all[i])
 		}
+	}
+	if same {
+		strs = all
 	}
 
 	action := func(title string, edits []protocol.TextEdit) protocol.CodeAction {
@@ -1037,15 +1089,17 @@ func declaredNames(defs []MShellDefinition, items []MShellParseItem) map[string]
 	return names
 }
 
-func collectListLiterals(list *MShellParseList) []Token {
-	literals := make([]Token, 0)
+// collectListLiterals are the bare words of list and of the lists in it,
+// in the order of the text.
+func collectListLiterals(list *MShellParseList) []*Token {
+	var literals []*Token
 	var collect func(*MShellParseList)
 	collect = func(current *MShellParseList) {
 		for _, item := range current.Items {
 			switch v := item.(type) {
 			case *Token:
 				if v.Type == LITERAL {
-					literals = append(literals, *v)
+					literals = append(literals, v)
 				}
 			case *MShellParseList:
 				collect(v)

@@ -73,6 +73,51 @@ func BenchmarkCodeActionsRefactor(b *testing.B) {
 	}
 }
 
+// BenchmarkQuoteLiteralsActions is a refactor code action request with the
+// cursor in a list of bare words, some of them builtins: a short list, and
+// 1000 words on ten to a line and all on one line, where the time must not
+// grow with the square of the line's length.
+func BenchmarkQuoteLiteralsActions(b *testing.B) {
+	list := func(n, perLine int) string {
+		var sb strings.Builder
+		sb.WriteString("[")
+		for i := range n {
+			switch {
+			case i == 0:
+			case perLine > 0 && i%perLine == 0:
+				sb.WriteString("\n ")
+			default:
+				sb.WriteString(" ")
+			}
+			if i%5 == 1 {
+				sb.WriteString("sort")
+			} else {
+				fmt.Fprintf(&sb, "word%04d", i)
+			}
+		}
+		sb.WriteString("]\n")
+		return sb.String()
+	}
+	for _, c := range []struct {
+		name       string
+		n, perLine int
+	}{{"10", 10, 0}, {"1000/lines", 1000, 10}, {"1000/oneLine", 1000, 0}} {
+		uri := protocol.DocumentURI("file:///list.msh")
+		s := &lspServer{stdlibDefs: benchStdlib(b), documents: map[protocol.DocumentURI]*lspDocument{uri: newLSPDocument(list(c.n, c.perLine))}}
+		params := benchCodeActionParams(0, 1)
+		params.TextDocument.URI = uri
+		b.Run(c.name, func(b *testing.B) {
+			if got := s.codeActions(params); len(got) != 2 {
+				b.Fatalf("%d actions, want 2", len(got))
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				s.codeActions(params)
+			}
+		})
+	}
+}
+
 // BenchmarkCodeActionsAutomatic is the request an editor sends as the
 // cursor moves to decide whether to show a light bulb: no kind filter, so
 // it includes the type checker's quick fixes.

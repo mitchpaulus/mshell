@@ -1664,6 +1664,48 @@ func TestCoreBaseWordsAreRuntimeWords(t *testing.T) {
 	}
 }
 
+// TestLSPLineScanMatchesTokenRange: a scan gives the range tokenRange
+// gives, for tokens in the order of the text and in any other order, where
+// a character is one, two or three bytes, or two UTF-16 code units.
+func TestLSPLineScanMatchesTokenRange(t *testing.T) {
+	doc := newLSPDocument("[a é😀 b [日本語 😀😀 c] d\n" +
+		"\n" +
+		"  e 😀 [f]\tg]\n" +
+		"[h]")
+	file, err := doc.parsed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var toks []*Token
+	for _, item := range file.Items {
+		toks = append(toks, collectListLiterals(item.(*MShellParseList))...)
+	}
+	if len(toks) != 12 {
+		t.Fatalf("%d literals, want 12", len(toks))
+	}
+	check := func(scan *lspLineScan, tok *Token) {
+		t.Helper()
+		if got, want := scan.tokenRange(tok), doc.tokenRange(*tok); got != want {
+			t.Errorf("%q at %d:%d: %+v, want %+v", tok.Lexeme, tok.Line, tok.Column, got, want)
+		}
+	}
+	scan := &lspLineScan{doc: doc}
+	for _, tok := range toks {
+		check(scan, tok)
+	}
+	// Backwards, and each token twice: the scan starts its line again.
+	for i := len(toks) - 1; i >= 0; i-- {
+		check(scan, toks[i])
+		check(scan, toks[i])
+	}
+	// Past the end of a line and of the document, and before their starts.
+	for _, at := range [][2]int{{0, 1000}, {1, 5}, {99, 3}, {-1, 2}, {0, -4}, {2, 3}, {2, 1}} {
+		if got, want := scan.position(at[0], at[1]), doc.position(at[0], at[1]); got != want {
+			t.Errorf("position(%d, %d): %+v, want %+v", at[0], at[1], got, want)
+		}
+	}
+}
+
 // prefixQuoteResult runs the prefix quote code action at line and character
 // of doc, and gives the text after its edit, or false if it is not offered.
 func prefixQuoteResult(t *testing.T, doc string, line, character uint32) (string, bool) {
