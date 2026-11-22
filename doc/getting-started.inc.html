@@ -1117,6 +1117,8 @@ and code actions that single-quote the bare literals in the parsed list value co
 <code>Quote literals in list that are strings</code> quotes the words that name nothing, which are errors until they are quoted,
 leaving definitions, builtins, enum members and <code>~/</code> paths as they are,
 and <code>Quote all literals in list</code> quotes every one.
+The error on such a word has a quick fix that quotes that word,
+and <code>Quote literals in file that are strings</code>, offered anywhere in the file, quotes every one the type checker reports.
 Environment variable completion draws from the actual process environment as well as any environment variables already
 referenced in the current file.
 </p>

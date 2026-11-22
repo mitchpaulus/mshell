@@ -186,7 +186,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A bare word is only ever a definition, a built-in or an enum member, so a new one no longer changes what an existing list means,
   and a misspelled word is an error instead of text.
   The error says to quote the word, and every such word in a file is reported at once, by `--type-check-only` and in the editor.
-  The language server's `Quote literals in list that are strings` code action quotes a list's words.
+  In the editor each error has a quick fix that quotes the word, the `Quote literals in file that are strings` code action quotes every one in the file,
+  and `Quote literals in list that are strings` quotes those of one list.
   The interactive command line is unchanged: a line that starts with a program's name, such as `git status -u`, takes its words as strings.
   A list literal typed there follows the new rule, and Tab quotes a file or argument it completes inside one.
 - A number too large to read, in a literal, an index such as `:99999999999999999999:`, or a positional argument, is an error when the script is read, not when that code runs.

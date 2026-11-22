@@ -10,6 +10,7 @@ This is the official extension for the concatenative shell-like programming lang
   - Variable name completion (triggered by `@`)
   - Variable rename support
   - Code actions to quote the bare literals in the list containing the cursor: only those that name nothing (not definitions or builtins), which are errors until quoted, or all of them
+  - A quick fix on each such error, and a code action that quotes every one in the file
 - Run the active mshell file from the editor title bar in a VS Code terminal
 - Run the active mshell file with F5 via a minimal debug adapter
 

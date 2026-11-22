@@ -510,6 +510,9 @@ It leaves definitions, builtins, enum members, and `~/` paths unquoted: with a d
 Both work on the innermost containing list, including literals in nested child lists.
 Existing strings, numbers, variables, paths, and operators are unchanged.
 
+The error on a bare word in a list that names nothing has a quick fix that quotes that word.
+`Quote literals in file that are strings` (kind `source.fixAll`), offered anywhere in the file, quotes every such word the type checker reports.
+
 ### Binary map overrides
 
 mshell supports a simple bin map file that overrides PATH lookups. The file lives alongside the history files (e.g. `$XDG_DATA_HOME/msh/msh_bins.txt` or `~/.local/share/msh/msh_bins.txt` on Linux/macOS, or `%LOCALAPPDATA%\msh\msh_bins.txt` on Windows).

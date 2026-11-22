@@ -1165,15 +1165,19 @@ func (c *coreChecker) word(tok Token) {
 	}
 	// A word that names nothing is an error everywhere, in a list literal
 	// too: a string is quoted.
-	c.errs = append(c.errs, TypeError{Kind: TErrUnknownIdentifier, Pos: tok, Name: tok.Lexeme,
-		Hint: "if it is a string, quote it: '" + tok.Lexeme + "'"})
+	e := TypeError{Kind: TErrUnknownIdentifier, Pos: tok, Name: tok.Lexeme,
+		Hint: "if it is a string, quote it: '" + tok.Lexeme + "'"}
 	if c.listDepth > 0 {
 		// Directly in a list literal the word is nearly always a string
 		// that needs its quotes. Checking goes on as if it had them, so
-		// every such word is reported, not only the first.
+		// every such word is reported, not only the first, and each
+		// error carries the fix.
+		e.Fix = TypeFix{Kind: FixQuote, Title: "Quote '" + tok.Lexeme + "'", At: tok}
+		c.errs = append(c.errs, e)
 		c.push(TidStr, true)
 		return
 	}
+	c.errs = append(c.errs, e)
 	c.abandoned = true
 }
 
