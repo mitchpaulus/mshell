@@ -149,6 +149,9 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		}
 	case TErrUnknownIdentifier:
 		fmt.Fprintf(&sb, "unknown identifier '%s'", e.Name)
+		if e.Hint != "" {
+			fmt.Fprintf(&sb, "; %s", e.Hint)
+		}
 	case TErrBranchStackSize:
 		fmt.Fprintf(&sb, "branches produce stacks of differing sizes:%s", e.Hint)
 	case TErrNonExhaustiveMatch:

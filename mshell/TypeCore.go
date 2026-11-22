@@ -582,6 +582,9 @@ type coreChecker struct {
 	floor     int
 	diverged  bool
 	abandoned bool
+	// listDepth is above zero for the words written directly in a list
+	// literal, where a bare word that names nothing is reported and
+	// checking goes on (word).
 	listDepth int
 	ret       coreRetKind
 	retOuts   []TypeId
@@ -1073,7 +1076,7 @@ func (c *coreChecker) token(tok Token) {
 }
 
 // word checks a LITERAL token: return, x, a stack shuffle, a def, a builtin,
-// or a bare word in a list literal.
+// or an enum member. Any other word is an error.
 func (c *coreChecker) word(tok Token) {
 	if c.shuffle(tok) {
 		return
@@ -1160,12 +1163,17 @@ func (c *coreChecker) word(tok Token) {
 		c.push(TidStr, true)
 		return
 	}
+	// A word that names nothing is an error everywhere, in a list literal
+	// too: a string is quoted.
+	c.errs = append(c.errs, TypeError{Kind: TErrUnknownIdentifier, Pos: tok, Name: tok.Lexeme,
+		Hint: "if it is a string, quote it: '" + tok.Lexeme + "'"})
 	if c.listDepth > 0 {
-		// A bare word in a list literal is a string: `[ls -l]`.
+		// Directly in a list literal the word is nearly always a string
+		// that needs its quotes. Checking goes on as if it had them, so
+		// every such word is reported, not only the first.
 		c.push(TidStr, true)
 		return
 	}
-	c.errs = append(c.errs, TypeError{Kind: TErrUnknownIdentifier, Pos: tok, Name: tok.Lexeme})
 	c.abandoned = true
 }
 
@@ -2237,8 +2245,9 @@ func (c *coreChecker) formatString(fs *MShellParseFormatString) {
 // child runs items on their own stack, as the runtime runs a list
 // literal's body or a dict value, and returns the start of the slots they
 // leave.
-// A bare word is a string only directly in a list literal (inList), as
-// the runtime reads it only in a list's own frame.
+// The words written directly in a list literal (inList) are the ones an
+// unknown word is recovered from (word): not those of a quote, an if arm
+// or a dict value inside it.
 func (c *coreChecker) child(items []MShellParseItem) (start int, outerFloor int) {
 	return c.childIn(items, false)
 }

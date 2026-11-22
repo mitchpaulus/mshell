@@ -10,7 +10,7 @@
 [["cmd1"], ["cmd2"]]
 "2025-12-14T13:56:00"
 "abs/mypath.txt"
-[{"line": 27, "column": 2, "start": 376, "lexeme": "'quote'", "type": "SINGLEQUOTESTRING"}, {"line": 27, "column": 10, "start": 384, "lexeme": "10", "type": "INTEGER"}]
+[{"line": 27, "column": 2, "start": 382, "lexeme": "'quote'", "type": "SINGLEQUOTESTRING"}, {"line": 27, "column": 10, "start": 390, "lexeme": "10", "type": "INTEGER"}]
 true
 false
 {"key 1": [1, 0.1], "key3": null, "key4": {"nested": false}, "key\\t2": true}

@@ -1,2 +1,2 @@
 "Hello\n" psub fd_path!
-[cat @fd_path];
+['cat' @fd_path];

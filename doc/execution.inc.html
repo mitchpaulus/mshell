@@ -97,7 +97,7 @@ yourself:
 
 <pre>
 <code><span class="mshellLINECOMMENT"># &#34;Was it not found?&#34; on Linux (-258 at exec, -255 on PATH) and Windows (-1026)</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">my-cmd</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellQUESTION">?</span> <span class="mshellVARSTORE">notFound!</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;my-cmd&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellQUESTION">?</span> <span class="mshellVARSTORE">notFound!</span>
 <span class="mshellVARRETRIEVE">@notFound</span> <span class="mshellINTEGER">-255</span> <span class="mshellEQUALS">=</span> <span class="mshellVARRETRIEVE">@notFound</span> <span class="mshellINTEGER">-258</span> <span class="mshellEQUALS">=</span> <span class="mshellVARRETRIEVE">@notFound</span> <span class="mshellINTEGER">-1026</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">or</span> <span class="mshellLITERAL">or</span>
 </code>
 </pre>
@@ -109,10 +109,10 @@ For that, you use the <code>></code>, <code>>></code>, <code>*</code>, and <code
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`fileToRedirectTo`</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stdout to the file, truncating it.</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`fileToRedirectTo`</span> <span class="mshellSTDAPPEND">&gt;&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stdout to the file, appending.</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISK">*</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stdout on the stack as a string.</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISKBINARY">*b</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stdout on the stack as a binary.</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`fileToRedirectTo`</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stdout to the file, truncating it.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`fileToRedirectTo`</span> <span class="mshellSTDAPPEND">&gt;&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stdout to the file, appending.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISK">*</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stdout on the stack as a string.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISKBINARY">*b</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stdout on the stack as a binary.</span>
 </code>
 </pre>
 
@@ -131,8 +131,8 @@ This ensures both streams share the same file descriptor, preserving the order o
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`output.log`</span> <span class="mshellSTDOUTANDSTDERRREDIRECT">&amp;></span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects both stdout and stderr to the file, truncating it.</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`output.log`</span> <span class="mshellSTDOUTANDSTDERRAPPEND">&amp;>></span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects both stdout and stderr to the file, appending.</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`output.log`</span> <span class="mshellSTDOUTANDSTDERRREDIRECT">&amp;></span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects both stdout and stderr to the file, truncating it.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`output.log`</span> <span class="mshellSTDOUTANDSTDERRAPPEND">&amp;>></span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects both stdout and stderr to the file, appending.</span>
 </code>
 </pre>
 
@@ -143,10 +143,10 @@ use a single file descriptor for both streams, avoiding race conditions. However
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`errors.log`</span> <span class="mshellSTDERRREDIRECT">2&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stderr to the file, truncating it.</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`errors.log`</span> <span class="mshellSTDERRAPPEND">2&gt;&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stderr to the file, appending.</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET">^</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stderr on the stack as a string.</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET BINARY">^b</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stderr on the stack as a binary.</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`errors.log`</span> <span class="mshellSTDERRREDIRECT">2&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stderr to the file, truncating it.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`errors.log`</span> <span class="mshellSTDERRAPPEND">2&gt;&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stderr to the file, appending.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET">^</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stderr on the stack as a string.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET BINARY">^b</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stderr on the stack as a binary.</span>
 </code>
 </pre>
 
@@ -157,8 +157,8 @@ Standard output will always be pushed first, and then standard error.
 <p> So the following are equivalent: </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISKBINARY">*b</span> <span class="mshellCARET BINARY">^b</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Order here does not matter</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET BINARY">^b</span> <span class="mshellASTERISKBINARY">*b</span> <span class="mshellBANG">!</span> 
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISKBINARY">*b</span> <span class="mshellCARET BINARY">^b</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Order here does not matter</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET BINARY">^b</span> <span class="mshellASTERISKBINARY">*b</span> <span class="mshellBANG">!</span> 
 </code>
 </pre>
 
@@ -175,10 +175,10 @@ Both streams share a single destination, preserving output order, and this works
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTDERRTOSTDOUT">2&gt;&amp;1</span> <span class="mshellASTERISK">*</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Captures stdout and stderr interleaved as one string.</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">make</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTDERRTOSTDOUT">2&gt;&amp;1</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">grep</span> <span class="mshellLITERAL">-i</span> <span class="mshellLITERAL">error</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span><span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># stderr flows through the pipe.</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTDOUTTOSTDERR">1&gt;&amp;2</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># stdout appears on stderr, e.g. visible even when the surrounding output is captured.</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`output.log`</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellSTDERRTOSTDOUT">2&gt;&amp;1</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Both streams into output.log; equivalent to &amp;&gt;.</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTDERRTOSTDOUT">2&gt;&amp;1</span> <span class="mshellASTERISK">*</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Captures stdout and stderr interleaved as one string.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;make&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTDERRTOSTDOUT">2&gt;&amp;1</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;grep&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;-i&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;error&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span><span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># stderr flows through the pipe.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTDOUTTOSTDERR">1&gt;&amp;2</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># stdout appears on stderr, e.g. visible even when the surrounding output is captured.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;yourCommand&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`output.log`</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellSTDERRTOSTDOUT">2&gt;&amp;1</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Both streams into output.log; equivalent to &amp;&gt;.</span>
 </code>
 </pre>
 
@@ -187,14 +187,14 @@ Both streams share a single destination, preserving output order, and this works
 <p>
 A stream's destination can be set once: a file redirect, a capture, an in-place redirect, or a merge.
 Applying a second destination to the same stream is an error, caught both by the static type checker and at runtime.
-For example, <code>[cmd] * `f` ></code> (capture and file redirect on stdout), <code>[cmd] 2>&amp;1 ^</code> (merge and capture on stderr),
-and <code>[cmd] 2>&amp;1 1>&amp;2</code> (circular merge) are all rejected.
+For example, <code>['cmd'] * `f` ></code> (capture and file redirect on stdout), <code>['cmd'] 2>&amp;1 ^</code> (merge and capture on stderr),
+and <code>['cmd'] 2>&amp;1 1>&amp;2</code> (circular merge) are all rejected.
 <code>2>&amp;1</code> also cannot be combined with <code>&lt;&gt;</code>, since stderr text would be written back into the edited file.
 </p>
 
 <p>
 A redirect or capture changes the list it is written on; it does not make a new one.
-So a redirect goes on a list nothing else refers to: straight after the list literal (<code>[cmd] *</code>), or on a copy.
+So a redirect goes on a list nothing else refers to: straight after the list literal (<code>['cmd'] *</code>), or on a copy.
 On a list stored in a variable, <code>@c *</code> is a type error, since <code>c</code> would then hold a command with a capture where the checker expects one without; write <code>@c deepCopy *</code>.
 <code>&lt;</code> and <code>&amp;</code> change nothing the checker tracks, so they are fine on any list.
 See <a href="type_system.html#type-system-in-place">Changing a Type in Place</a>.
@@ -244,7 +244,7 @@ Capture the individual command lists inside the quotation instead — for exampl
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">cmd1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">cmd2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">deepCopy</span> <span class="mshellASTERISK">*</span> <span class="mshellBANG">!</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLINECOMMENT"># Run each command, collect stdouts as a list of strings.</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;cmd1&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;cmd2&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">deepCopy</span> <span class="mshellASTERISK">*</span> <span class="mshellBANG">!</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLINECOMMENT"># Run each command, collect stdouts as a list of strings.</span>
 </code>
 </pre>
 
@@ -270,9 +270,9 @@ The exception is <code>loop</code>: the file is opened once when the loop starts
 
 <pre>
 <code><span class="mshellLEFT_PAREN">(</span>
-    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSTRING">"Running step 1"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span>
-    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSTRING">"Running step 2"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span>
-    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSTRING">"Running step 3"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;echo&#39;</span> <span class="mshellSTRING">"Running step 1"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;echo&#39;</span> <span class="mshellSTRING">"Running step 2"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;echo&#39;</span> <span class="mshellSTRING">"Running step 3"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span>
 <span class="mshellRIGHT_PAREN">)</span> <span class="mshellPATH">`build.log`</span> <span class="mshellSTDAPPEND">&gt;&gt;</span> <span class="mshellEXECUTE">x</span> <span class="mshellLINECOMMENT"># All command outputs appended to build.log</span>
 </code>
 </pre>
@@ -286,28 +286,28 @@ Use <code>&lt;</code> to feed data into stdin. The type of the value on top of t
 <p><code>String</code> values are encoded as UTF-8 and streamed as text.</p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTRING">&#34;line 1\nline 2\n&#34;</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Counts the lines from the provided string</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;wc&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;-l&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTRING">&#34;line 1\nline 2\n&#34;</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Counts the lines from the provided string</span>
 <span class="mshellEOF"></span></code>
 </pre>
 
 <p><code>Path</code> values open the referenced file and stream its contents.</p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`myfile.txt`</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Equivalent to shell input redirection from a file</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;wc&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;-l&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`myfile.txt`</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Equivalent to shell input redirection from a file</span>
 <span class="mshellEOF"></span></code>
 </pre>
 
 <p>
-A bare word in a list literal is a string, so it is fed as text, not read as a file:
-<code>[echo [wc -c] data.txt &lt; * !] !</code> counts the 8 characters of <code>data.txt</code>.
-Write a path to name a file: <code>[echo [wc -c] `data.txt` &lt; * !] !</code>.
+A string is fed as text, not read as a file:
+<code>['echo' ['wc' '-c'] 'data.txt' &lt; * !] !</code> counts the 8 characters of <code>data.txt</code>.
+Write a path to name a file: <code>['echo' ['wc' '-c'] `data.txt` &lt; * !] !</code>.
 On the interactive command line, <code>wc -c &lt; data.txt</code> reads the file: there the word after <code>&lt;</code> becomes a path.
 </p>
 
 <p><code>Binary</code> values are written directly without any string conversion.</p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">md5sum</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`binary_stdin.bin`</span> <span class="mshellLITERAL">readFileBytes</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Streams raw bytes into the command</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;md5sum&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`binary_stdin.bin`</span> <span class="mshellLITERAL">readFileBytes</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Streams raw bytes into the command</span>
 <span class="mshellEOF"></span></code>
 </pre>
 
@@ -321,7 +321,7 @@ from moreutils.
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">sort</span> <span class="mshellLITERAL">-u</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`file.txt`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellBANG">!</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;sort&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;-u&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`file.txt`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellBANG">!</span>
 <span class="mshellEOF"></span></code>
 </pre>
 
@@ -330,8 +330,8 @@ This is equivalent to, but safer than:
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">sort</span> <span class="mshellLITERAL">-u</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`file.txt`</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellPATH">`file.txt.tmp`</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellBANG">!</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">mv</span> <span class="mshellLITERAL">file.txt.tmp</span> <span class="mshellLITERAL">file.txt</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellBANG">!</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;sort&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;-u&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`file.txt`</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellPATH">`file.txt.tmp`</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellBANG">!</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;mv&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;file.txt.tmp&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;file.txt&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellBANG">!</span>
 <span class="mshellEOF"></span></code>
 </pre>
 
@@ -356,16 +356,16 @@ This is equivalent to, but safer than:
 
 <pre>
 <code><span class="mshellLINECOMMENT"># Sort a file in place, removing duplicates</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">sort</span> <span class="mshellLITERAL">-u</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`data.txt`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellBANG">!</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;sort&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;-u&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`data.txt`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellBANG">!</span>
 
 <span class="mshellLINECOMMENT"># Format JSON in place</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">jq</span> <span class="mshellLITERAL">.</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`config.json`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellBANG">!</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;jq&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;.&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`config.json`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellBANG">!</span>
 
 <span class="mshellLINECOMMENT"># Filter lines in place (keep only lines containing "error")</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">grep</span> <span class="mshellLITERAL">error</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`log.txt`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellBANG">!</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;grep&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;error&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`log.txt`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellBANG">!</span>
 
 <span class="mshellLINECOMMENT"># Using with ? to check exit code without failing</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">sort</span> <span class="mshellLITERAL">-u</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`file.txt`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellQUESTION">?</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;sort&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;-u&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`file.txt`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellQUESTION">?</span>
 <span class="mshellINTEGER">0</span> <span class="mshellEQUALS">=</span> <span class="mshellIF">if</span>
     <span class="mshellSTRING">"File sorted successfully"</span> <span class="mshellLITERAL">wl</span>
 <span class="mshellELSE">else</span>

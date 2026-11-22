@@ -486,7 +486,7 @@ var sessionBenchLines = []string{
 	`@s "-" + wl`,
 	`none r!  5 just r!`,
 	`@r 0 maybe 1 + drop`,
-	`[echo hi] c!`,
+	`['echo' 'hi'] c!`,
 	`true if 1 else 2 end drop`,
 	`[1 2] (x! @x 2 *) map (3 >) filter len drop`,
 }

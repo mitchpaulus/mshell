@@ -1,1 +1,1 @@
-type error at line 2, column 42: Cannot apply '>': stdout already has a file redirect ('>'). Each stream has exactly one destination.
+type error at line 2, column 44: Cannot apply '>': stdout already has a file redirect ('>'). Each stream has exactly one destination.

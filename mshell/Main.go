@@ -1030,6 +1030,10 @@ type TermState struct {
 	tabCycleMatches    []string
 	// tabCycleQuoteWords[i] is quotesWords for tabCycleMatches[i].
 	tabCycleQuoteWords []bool
+	// tabQuoteAllWords is set when the word being completed is not one of
+	// a command line's own words: in a list literal, or on a line that is
+	// not a command line, a string is always quoted.
+	tabQuoteAllWords bool
 	// insertTokens is reused by buildCompletionInsert and
 	// buildSharedCompletionInsert to lex a match without allocating.
 	insertTokens []Token
@@ -2033,22 +2037,52 @@ func quotesWords(kind TabMatchType) bool {
 	return kind == TABMATCHVALUE || kind == TABMATCHFILE
 }
 
+// isWord reports whether name, typed bare, names a builtin, a definition
+// or an enum member of the session. Any other bare word is a string on a
+// command line, and an error anywhere else.
+func (state *TermState) isWord(name string) bool {
+	if _, ok := BuiltInList[name]; ok {
+		return true
+	}
+	if _, ok := state.evalState.EnumMembers[name]; ok {
+		return true
+	}
+	return IsDefinitionDefined(name, state.stdLibDefs)
+}
+
+// inOpenBracket reports whether the end of tokens is inside a list, dict
+// or quote that is still open.
+func inOpenBracket(tokens []Token) bool {
+	depth := 0
+	for i := range tokens {
+		switch tokens[i].Type {
+		case LEFT_SQUARE_BRACKET, LEFT_PAREN, LEFT_CURLY:
+			depth++
+		case RIGHT_SQUARE_BRACKET, RIGHT_PAREN, RIGHT_CURLY:
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return depth > 0
+}
+
 // wordReadsAsText reports whether tok, the only token of text, is read as
-// the string text in a command list: a plain word that is not a builtin,
-// a definition or an enum member, or an integer written the way it prints.
+// the string text where it is being completed. On a command line that is
+// a plain word that is not a builtin, a definition or an enum member;
+// anywhere else (tabQuoteAllWords) no plain word is. A path under the
+// home directory, which is expanded, and an integer written the way it
+// prints are read as their text everywhere.
 func (state *TermState) wordReadsAsText(tok Token, text string) bool {
 	switch tok.Type {
 	case LITERAL:
 		if tok.Lexeme != text {
 			return false
 		}
-		if _, ok := BuiltInList[text]; ok {
-			return false
+		if state.tabQuoteAllWords {
+			return strings.HasPrefix(text, "~/")
 		}
-		if _, ok := state.evalState.EnumMembers[text]; ok {
-			return false
-		}
-		return !IsDefinitionDefined(text, state.stdLibDefs)
+		return !state.isWord(text)
 	case INTEGER:
 		n, err := parseIntLiteral(text)
 		return err == nil && strconv.Itoa(n) == text
@@ -2117,9 +2151,14 @@ func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, 
 		needsQuote := (len(tokens) > 2 && err == nil) || needsQuoteForWhitespace
 		if !needsQuote && quoteWords && err == nil && len(tokens) == 2 {
 			switch tokens[0].Type {
-			case LITERAL, MINUS, DOUBLEDASH, INTEGER, FLOAT:
-				// The start of a word, an option or a number: what it
-				// reads as is decided once the whole match is in.
+			case LITERAL, MINUS, DOUBLEDASH:
+				// The start of a word or an option: on a command line,
+				// what it reads as is decided once the whole match is
+				// in. Anywhere else it is quoted whatever it ends as.
+				needsQuote = state.tabQuoteAllWords && !strings.HasPrefix(longestCommonPrefix, "~/")
+			case INTEGER, FLOAT:
+				// The start of a number: what it reads as is decided
+				// once the whole match is in.
 			default:
 				// `@preview/` or `<`: no match can be typed bare.
 				needsQuote = true
@@ -3931,13 +3970,13 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 			} else if pipeline != nil {
 				// Directly create the AST without re-parsing
 				var toMShellErr error
-				parsed, toMShellErr = pipeline.ToMShellFile()
+				parsed, toMShellErr = pipeline.ToMShellFile(state.isWord)
 				if toMShellErr != nil {
 					fmt.Fprintf(os.Stderr, "\r\nError transforming simple CLI: %s\r\n", toMShellErr)
 					fmt.Fprintf(os.Stdout, "\033[1G")
 					goto PromptPrint
 				}
-				state.Logf("Command: %s\n", pipeline.ToMShellString())
+				state.Logf("Command: %s\n", pipeline.ToMShellString(state.isWord))
 			} else {
 				// Empty pipeline, reset to original
 				l.resetInput(currentCommandStr)
@@ -4467,6 +4506,8 @@ func (state *TermState) completeAtCursor() {
 
 	// Check if we are in binary completion
 	binaryToken, binaryCompletion := state.isFirstTokenBinary(tokens)
+	// Only a command line's own words are strings without quotes.
+	state.tabQuoteAllWords = !binaryCompletion || inOpenBracket(tokens)
 
 	completionSource := state.currentCommand
 	replaceEnd := state.index

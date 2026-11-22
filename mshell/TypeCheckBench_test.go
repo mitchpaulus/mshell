@@ -34,7 +34,7 @@ func benchStdlib(tb testing.TB) []MShellDefinition {
 var benchShapes = map[string]string{
 	"tokens": "1 2 + drop",
 	"list":   "[1 2 3] len drop",
-	"cmd":    "[ls -l foo] drop",
+	"cmd":    "['ls' '-l' 'foo'] drop",
 	"dict":   "{a: 1, b: \"x\"} drop",
 	"fmt":    "$\"{1}-{\"a\"}\" drop",
 	"nested": "[[1 2] [3]] len drop",

@@ -51,7 +51,7 @@ func TestFmBindingInertReasons(t *testing.T) {
 		{`{keys: [r'a'], action: [fmPromptSearch fmPrompt 'TODO' editInsert fmLineAccept] fmOps}`, ""},
 		{`{keys: [r'a'], action: [fmHelp fmDown fmHelpClose fmUp] fmOps}`, ""},
 		{`{keys: [r'a'], action: [fmPromptRename fmPrompt editLineStart fmLineCancel fmTop] fmOps}`, ""},
-		{`{keys: [r'a'], action: [([ls];) fmRun fmQuit] fmOps, mode: fmModeHelp}`, ""},
+		{`{keys: [r'a'], action: [(['ls'];) fmRun fmQuit] fmOps, mode: fmModeHelp}`, ""},
 		{`{keys: [r'a'], action: [fmDown editLeft] fmOps}`, "'editLeft' cannot run in fmModeNormal"},
 		{`{keys: [r'a'], action: [editAccept] fmOps, mode: fmModeInsert}`, "'editAccept' cannot run in fmModeInsert"},
 		{`{keys: [r'a'], action: [fmHelp fmSearchNext] fmOps}`, "'fmSearchNext' cannot run in fmModeHelp"},

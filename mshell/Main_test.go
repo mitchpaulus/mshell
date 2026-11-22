@@ -466,6 +466,74 @@ func TestBuildCompletionInsertQuotesWordsThatMeanSomethingElse(t *testing.T) {
 	}
 }
 
+// Outside a command line's own words, in a list literal say, a bare word
+// is never a string, so a completed file or argument is quoted whatever
+// its text. A path under the home directory and an integer stay as typed.
+func TestCompletionInsertQuotesEveryWordOffCommandLine(t *testing.T) {
+	state := TermState{l: NewLexer("", nil), tabQuoteAllWords: true}
+	for _, tc := range []struct {
+		match string
+		file  bool
+		want  string
+	}{
+		{"status", false, "'status'"},
+		{"--long", false, "'--long'"},
+		{"notes.txt", true, "`notes.txt` "},
+		{"src/", true, "`src/"},
+		{"~/notes.txt", true, "~/notes.txt"},
+		{"5", false, "5"},
+		{"sort", false, "'sort'"},
+	} {
+		if got := state.buildCompletionInsert(tc.match, LITERAL, tc.file, true); got != tc.want {
+			t.Errorf("buildCompletionInsert(%q, file=%v) = %q, want %q", tc.match, tc.file, got, tc.want)
+		}
+	}
+	// A builtin or definition name is a word, and is left as it is.
+	if got := state.buildCompletionInsert("sort", LITERAL, false, false); got != "sort" {
+		t.Errorf("builtin sort = %q, want sort", got)
+	}
+	// The start several matches share opens the quote they all need.
+	for _, tc := range []struct {
+		prefix string
+		files  bool
+		want   string
+	}{
+		{"sta", false, "'sta"},
+		{"--lo", false, "'--lo"},
+		{"not", true, "`not"},
+		{"~/no", true, "~/no"},
+	} {
+		if got := state.buildSharedCompletionInsert(tc.prefix, LITERAL, tc.files, true); got != tc.want {
+			t.Errorf("buildSharedCompletionInsert(%q, files=%v) = %q, want %q", tc.prefix, tc.files, got, tc.want)
+		}
+	}
+}
+
+func TestInOpenBracket(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{
+		{"git sta", false},
+		{"[git sta", true},
+		{"echo [a b] c", false},
+		{"echo [a (b", true},
+		{"['git' 'status'] ", false},
+		{"git log | grep ", false},
+		{"{a: ", true},
+	} {
+		l := NewLexer(tc.line, nil)
+		l.allowUnterminatedString = true
+		tokens, err := l.Tokenize()
+		if err != nil {
+			t.Fatalf("%q: %v", tc.line, err)
+		}
+		if got := inOpenBracket(tokens); got != tc.want {
+			t.Errorf("inOpenBracket(%q) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+}
+
 func TestBuildSharedCompletionInsertOpensQuoteForValues(t *testing.T) {
 	state := TermState{l: NewLexer("", nil)}
 	for _, tc := range []struct{ prefix, want string }{

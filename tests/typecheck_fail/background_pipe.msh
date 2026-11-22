@@ -1,2 +1,2 @@
 # '&' runs one command; the runtime refuses a pipe.
-[[echo hi] [cat]] | & ;
+[['echo' 'hi'] ['cat']] | & ;

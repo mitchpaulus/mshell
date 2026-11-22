@@ -27,7 +27,7 @@ U+0009 match
     rune r : $"rune {@r toInt}",
     _ : 'not a rune',
 end wl
-[echo r'a' U+0062] ; 
+['echo' r'a' U+0062] ; 
 def keyName (rune | str -- str)
     match
         rune r : 'rune',

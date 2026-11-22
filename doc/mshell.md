@@ -81,17 +81,17 @@ that works on more than one platform, OR the relevant codes together yourself:
 
 ```mshell
 # "Was it not found?" on both Linux (-258 at exec, -255 on PATH) and Windows (-1026)
-[my-cmd]? notFound!
+['my-cmd']? notFound!
 @notFound -255 = @notFound -258 = @notFound -1026 = or or
 ```
 
 The other choice you often have when executing commands is what to do with the standard output. Sometimes you will want to redirect it to a file, other times you will want to leave the contents on the stack to process further. For that, you use the `>`, `>>`, `*`, and `*b` operators.
 
 ```mshell
-[yourCommand] `fileToRedirectTo` > !  # Redirects stdout to the file, truncating it.
-[yourCommand] `fileToRedirectTo` >> ! # Redirects stdout to the file, appending.
-[yourCommand] * !                     # Puts all of stdout on the stack as a string.
-[yourCommand] *b !                    # Puts all of stdout on the stack as a binary.
+['yourCommand'] `fileToRedirectTo` > !  # Redirects stdout to the file, truncating it.
+['yourCommand'] `fileToRedirectTo` >> ! # Redirects stdout to the file, appending.
+['yourCommand'] * !                     # Puts all of stdout on the stack as a string.
+['yourCommand'] *b !                    # Puts all of stdout on the stack as a binary.
 ```
 
 You can do similar things with standard error. To redirect standard error to a file, use `2>`, and `^` instead of `*`.
@@ -99,17 +99,17 @@ You can do similar things with standard error. To redirect standard error to a f
 To redirect both standard output and standard error to the same file, use `&>` (truncate) or `&>>` (append). This ensures both streams share the same file descriptor, preserving the order of output.
 
 ```mshell
-[yourCommand] `output.log` &> !  # Redirects both stdout and stderr to the file, truncating it.
-[yourCommand] `output.log` &>> ! # Redirects both stdout and stderr to the file, appending.
+['yourCommand'] `output.log` &> !  # Redirects both stdout and stderr to the file, truncating it.
+['yourCommand'] `output.log` &>> ! # Redirects both stdout and stderr to the file, appending.
 ```
 
 If you manually use `>` and `2>` with exactly the same path string, mshell will automatically use a single file descriptor for both streams, avoiding race conditions. However, if the append modes differ (e.g., `>` and `2>>` to the same file), an error will be raised.
 
 ```mshell
-[yourCommand] `errors.log` 2> !   # Redirects stderr to the file, truncating it.
-[yourCommand] `errors.log` 2>> !  # Redirects stderr to the file, appending.
-[yourCommand] ^ !                # Puts all of stderr on the stack as a string.
-[yourCommand] ^b !               # Puts all of stderr on the stack as a binary.
+['yourCommand'] `errors.log` 2> !   # Redirects stderr to the file, truncating it.
+['yourCommand'] `errors.log` 2>> !  # Redirects stderr to the file, appending.
+['yourCommand'] ^ !                # Puts all of stderr on the stack as a string.
+['yourCommand'] ^b !               # Puts all of stderr on the stack as a binary.
 ```
 
 If you want to put both standard output and standard error onto the stack, you can do that.
@@ -118,8 +118,8 @@ Standard output will always be pushed first, and then standard error.
 So the following are equivalent:
 
 ```mshell
-[yourCommand] *b ^b ! # Order here does not matter
-[yourCommand] ^b *b !
+['yourCommand'] *b ^b ! # Order here does not matter
+['yourCommand'] ^b *b !
 ```
 
 #### Merging one stream into the other
@@ -132,18 +132,18 @@ so there is no `> file 2>&1` vs `2>&1 > file` ordering trap.
 Both streams share a single destination, preserving output order, on every platform.
 
 ```mshell
-[yourCommand] 2>&1 * !                 # Captures stdout and stderr interleaved as one string.
-[[make] 2>&1 [grep -i error]] |;       # stderr flows through the pipe.
-[yourCommand] 1>&2 ;                   # stdout appears on stderr.
-[yourCommand] `output.log` > 2>&1 !    # Both streams into output.log; equivalent to &>.
+['yourCommand'] 2>&1 * !                 # Captures stdout and stderr interleaved as one string.
+[['make'] 2>&1 ['grep' '-i' 'error']] |; # stderr flows through the pipe.
+['yourCommand'] 1>&2 ;                   # stdout appears on stderr.
+['yourCommand'] `output.log` > 2>&1 !    # Both streams into output.log; equivalent to &>.
 ```
 
 #### Each stream has exactly one destination
 
 A stream's destination can be set once: a file redirect, a capture, an in-place redirect, or a merge.
 Applying a second destination to the same stream is an error, caught both by the static type checker and at runtime.
-For example, ``[cmd] * `f` >`` (capture and file redirect on stdout), `[cmd] 2>&1 ^` (merge and capture on stderr),
-and `[cmd] 2>&1 1>&2` (circular merge) are all rejected.
+For example, ``['cmd'] * `f` >`` (capture and file redirect on stdout), `['cmd'] 2>&1 ^` (merge and capture on stderr),
+and `['cmd'] 2>&1 1>&2` (circular merge) are all rejected.
 `2>&1` also cannot be combined with `<>`, since stderr text would be written back into the edited file.
 
 Summary of external command operators:
@@ -178,7 +178,7 @@ It is also useful when you have many commands that you want to run while appendi
 
 The captures (`*`, `*b`, `^`, `^b`) and the in-place redirect (`<>`) are *not* allowed on quotations,
 because they would change the quotation's stack effect.
-Capture the individual command lists inside the quotation instead, e.g. `[[cmd1] [cmd2]] (deepCopy * !) map` to run each command and collect stdouts.
+Capture the individual command lists inside the quotation instead, e.g. `[['cmd1'] ['cmd2']] (deepCopy * !) map` to run each command and collect stdouts.
 
 Destination conflicts on quotations (e.g. two `>` redirects, or `2>&1` plus `2>`) are caught at runtime.
 Since redirects never change a quotation's stack effect, they are invisible to the static type checker.
@@ -197,9 +197,9 @@ The exception is `loop`: the file is opened once when the loop starts, so all it
 
 ```mshell
 (
-    [echo "Running step 1"]!
-    [echo "Running step 2"]!
-    [echo "Running step 3"]!
+    ['echo' "Running step 1"]!
+    ['echo' "Running step 2"]!
+    ['echo' "Running step 3"]!
 ) `build.log` >> x # All command outputs appended to build.log
 ```
 
@@ -207,22 +207,22 @@ The exception is `loop`: the file is opened once when the loop starts, so all it
 
 Use `<` to feed data into stdin. The type of the value on top of the stack determines how the input is provided.
 
-`String` values are encoded as UTF-8 and streamed as text, including a bare word from a list literal; use a path to read a file.
+`String` values are encoded as UTF-8 and streamed as text; use a path to read a file.
 
 ```mshell
-[wc -l] "line 1\nline 2\n" < ; # Counts the lines from the provided string
+['wc' '-l'] "line 1\nline 2\n" < ; # Counts the lines from the provided string
 ```
 
 `Path` values open the referenced file and stream its contents.
 
 ```mshell
-[wc -l] `myfile.txt` < ; # Equivalent to shell input redirection from a file
+['wc' '-l'] `myfile.txt` < ; # Equivalent to shell input redirection from a file
 ```
 
 `Binary` values are written directly without any string conversion.
 
 ```mshell
-[md5sum] `binary_stdin.bin` readFileBytes < ; # Streams raw bytes into the command
+['md5sum'] `binary_stdin.bin` readFileBytes < ; # Streams raw bytes into the command
 ```
 
 ### In-place file modification
@@ -230,14 +230,14 @@ Use `<` to feed data into stdin. The type of the value on top of the stack deter
 The `<>` operator enables in-place file modification. It reads a file's contents, passes them to the command's stdin, and on successful completion (exit code 0), writes the command's stdout back to the same file. This is similar to the `sponge` command from moreutils.
 
 ```mshell
-[sort -u] `file.txt` <> !
+['sort' '-u'] `file.txt` <> !
 ```
 
 This is equivalent to, but safer than:
 
 ```mshell
-[sort -u] `file.txt` < `file.txt.tmp` > !
-[mv file.txt.tmp file.txt] !
+['sort' '-u'] `file.txt` < `file.txt.tmp` > !
+['mv' 'file.txt.tmp' 'file.txt'] !
 ```
 
 #### Semantics
@@ -257,16 +257,16 @@ This is equivalent to, but safer than:
 
 ```mshell
 # Sort a file in place, removing duplicates
-[sort -u] `data.txt` <> !
+['sort' '-u'] `data.txt` <> !
 
 # Format JSON in place
-[jq .] `config.json` <> !
+['jq' '.'] `config.json` <> !
 
 # Filter lines in place (keep only lines containing "error")
-[grep error] `log.txt` <> !
+['grep' 'error'] `log.txt` <> !
 
 # Using with ? to check exit code without failing
-[sort -u] `file.txt` <> ?
+['sort' '-u'] `file.txt` <> ?
 0 = if
     "File sorted successfully" wl
 else
@@ -301,7 +301,7 @@ To manage the file, use the `msh bin` subcommands:
 Process substitution is done using the `psub` operator.
 
 ```mshell
-[my_command_needing_file "my test" psub];
+['my_command_needing_file' "my test" psub];
 ```
 
 ## Startup Files
@@ -503,13 +503,12 @@ use $"($nu.default-config-dir)/completions/msh.nu" *
 
 ### Language Server
 
-The bundled language server provides a code action named `Quote all literals in list` when the cursor is inside a parsed list value containing bare literal tokens.
-The action single-quotes every bare literal in the innermost containing list, including literals in nested child lists.
-Existing strings, numbers, variables, paths, and operators are unchanged.
-This changes the meaning of a bare word that is not a string: a quoted definition or builtin is no longer called.
-
-The code action `Quote literals in list that are strings` quotes only the bare literals the list reads as strings, so the list means what it did.
+The bundled language server provides two code actions when the cursor is inside a parsed list value containing bare literal tokens.
+`Quote literals in list that are strings` single-quotes the bare words that name nothing, which are errors until they are quoted.
 It leaves definitions, builtins, enum members, and `~/` paths unquoted: with a definition `helper`, `[git helper -v]` becomes `['git' helper '-v']`.
+`Quote all literals in list` single-quotes every bare literal, so a quoted definition or builtin is no longer called.
+Both work on the innermost containing list, including literals in nested child lists.
+Existing strings, numbers, variables, paths, and operators are unchanged.
 
 ### Binary map overrides
 
@@ -604,8 +603,9 @@ No commas are required between elements.
 [1 2 3]
 ```
 
-Inside a list literal, a bare word that is not a definition or built-in is a string, exactly as if it were quoted: `[ls -l]` is `["ls" "-l"]`.
-Bare words are an error outside a list literal.
+A bare word is always a name: a definition, a built-in, or an enum member.
+A bare word that names nothing is an error, inside a list literal too, so a string is quoted: write `['ls' '-l']`, not `[ls -l]`.
+A path under the home directory (`~/notes.txt`) is written bare, and is a string with `~` replaced.
 
 Lists can be added together with the `+` operator. The result is a new list object.
 
@@ -660,7 +660,7 @@ A member, an enum, a `type`, a definition and a builtin each need a name of thei
 `?` unwraps an `ok` and fails on an `err`, with the error's `str` as the message.
 `orElse` gives an `ok` back as is, and on an `err` runs a quotation on the error that returns a new `Result`.
 `httpGet`, `httpPost`, `parseToml`, `toDt`, `fileSize`, `modTime`, `evalSymLinks` and `linkCount` give `Result[T str]`, with why they failed in the `err`.
-Because `ok` and `err` are words, quote them in a command list: `[echo 'ok']`.
+Because `ok` and `err` are words, quote them in a command list: `['echo' 'ok']`.
 
 ```mshell
 def safeDiv (int int -- Result[int str])
@@ -799,7 +799,7 @@ A literal around a stored value is new only on the outside: `{a: @xs} as {a: [in
 ```
 
 `deepCopy` copies every list, dict and grid inside a value, once per path; strings and numbers are shared; a value that contains itself is an error.
-Words that change a type in place need a new value: a redirect (`[cmd] *` and `[cmd @args] *` are fine; `@c *` on a stored list is an error, use `@c deepCopy *`), a type-changing `updateCol`, `gridAddCol`, `gridRemoveCol`, `gridRenameCol`, and an `extend` that widens a column.
+Words that change a type in place need a new value: a redirect (`['cmd'] *` and `['cmd' @args] *` are fine; `@c *` on a stored list is an error, use `@c deepCopy *`), a type-changing `updateCol`, `gridAddCol`, `gridRemoveCol`, `gridRenameCol`, and an `extend` that widens a column.
 
 A def output marked `new` is fresh for callers (`def load ( -- new Json)`).
 The mark must match the body exactly: missing on an output that is new on every path, or present on one that may be shared, is an error.
@@ -1285,7 +1285,7 @@ $args match
 end wl
 ```
 
-A bare word in a pattern is a name, though it is a string in a list literal: `[GET path]` matches any two element list, so write `['GET' path]`.
+A bare word in a pattern is a name: `[GET path]` matches any two element list, so write `['GET' path]`.
 A bare word starting with `-` (`-h`) is an error; quote it.
 An enum member without payload values tests the element (`[lparen inner rparen]`); a member with payload values cannot be matched in a position, so bind the element and match it on its own.
 

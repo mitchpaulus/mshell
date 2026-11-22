@@ -396,12 +396,12 @@ Where a program needs a copy, the error says so, and the program writes <code><s
 Some words change a value's type where it is: a redirect changes where a command's output goes, and <code><span class="mshellLITERAL">updateCol</span></code> can change a grid column's type.
 These need a new value.
 Writing the redirect straight after the list literal, or updating a grid straight from <code><span class="mshellLITERAL">parseCsv</span></code> and <code><span class="mshellLITERAL">toGrid</span></code>, is new; on a stored value they are errors that suggest <code><span class="mshellLITERAL">deepCopy</span></code>.
-The literal may hold stored values, such as a stored list of arguments (<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">grep</span> <span class="mshellVARRETRIEVE">@flags</span> <span class="mshellSTRING">&#34;x&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISK">*</span></code>): the redirect changes only the new list.
+The literal may hold stored values, such as a stored list of arguments (<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;grep&#39;</span> <span class="mshellVARRETRIEVE">@flags</span> <span class="mshellSTRING">&#34;x&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISK">*</span></code>): the redirect changes only the new list.
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSTRING">&#34;hi&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISK">*</span> <span class="mshellEXECUTE">;</span> <span class="mshellVARSTORE">out!</span>            <span class="mshellLINECOMMENT"># ok: the literal is new</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSTRING">&#34;hi&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">c!</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;echo&#39;</span> <span class="mshellSTRING">&#34;hi&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISK">*</span> <span class="mshellEXECUTE">;</span> <span class="mshellVARSTORE">out!</span>            <span class="mshellLINECOMMENT"># ok: the literal is new</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;echo&#39;</span> <span class="mshellSTRING">&#34;hi&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">c!</span>
 <span class="mshellVARRETRIEVE">@c</span> <span class="mshellASTERISK">*</span> <span class="mshellEXECUTE">;</span>                          <span class="mshellLINECOMMENT"># error: c is stored</span>
 <span class="mshellVARRETRIEVE">@c</span> <span class="mshellLITERAL">deepCopy</span> <span class="mshellASTERISK">*</span> <span class="mshellEXECUTE">;</span>                 <span class="mshellLINECOMMENT"># ok</span><span class="mshellEOF"></span></code>
 </pre>

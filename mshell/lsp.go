@@ -964,10 +964,11 @@ const (
 )
 
 // quoteLiteralsActions offers to quote the bare words in the innermost
-// list literal at the cursor: every one of them, and only those the list
-// reads as strings (readsAsString), which leaves the list meaning what it
-// did. The second is offered even when it quotes the same words as the
-// first, so an editor key bound to it works in every list.
+// list literal at the cursor: every one of them, and only those that name
+// nothing (readsAsString), which are errors until they are quoted and
+// leaves the words that are called as they are. The second is offered even
+// when it quotes the same words as the first, so an editor key bound to it
+// works in every list.
 func (s *lspServer) quoteLiteralsActions(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) []protocol.CodeAction {
 	line, col, ok := cursorAt(doc, params.Range.Start)
 	if !ok {
@@ -1044,10 +1045,11 @@ func (s *lspServer) quoteLiteralsActions(doc *lspDocument, file *MShellFile, par
 }
 
 // readsAsString gives a function telling whether a bare word in a list of
-// the document is the string of its own text, as the runtime reads it: not
-// a definition or an enum member of the document or of the startup files it
-// is checked after, not a builtin, and not a path under the home directory,
-// which is expanded. Quoting such a word leaves the list as it was.
+// the document names nothing, and so is meant as the string of its own
+// text: not a definition or an enum member of the document or of the
+// startup files it is checked after, not a builtin, and not a path under
+// the home directory, which is expanded. Such a word is an error until it
+// is quoted.
 //
 // The document's names and its base are worked out once per version of the
 // document, so asking on every cursor move reads only maps.

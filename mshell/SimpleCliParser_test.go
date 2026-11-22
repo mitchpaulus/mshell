@@ -246,6 +246,59 @@ func TestSimpleCliParser_EmptyInput(t *testing.T) {
 	}
 }
 
+// testIsWord is the word test a session gives ToMShellFile: builtins only.
+func testIsWord(name string) bool {
+	_, ok := BuiltInList[name]
+	return ok
+}
+
+// sourceOf writes tokens and lists the way they are typed.
+func sourceOf(items []MShellParseItem) string {
+	parts := make([]string, len(items))
+	for i, item := range items {
+		switch v := item.(type) {
+		case *Token:
+			parts[i] = v.Lexeme
+		case *MShellParseList:
+			parts[i] = "[" + sourceOf(v.Items) + "]"
+		default:
+			parts[i] = item.DebugString()
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// A command line leaves no bare string: every word of a command that is
+// not a builtin, a definition or an enum member becomes a quoted string,
+// so the list is the one a script would write. A list among the arguments
+// is ordinary mshell and is left as it was typed.
+func TestSimpleCliParser_ToMShellFile_QuotesBareWords(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"ls -la", "['ls' '-la'] ;"},
+		{"git status -u --long", "['git' 'status' '-u' '--long'] ;"},
+		{"sort data.txt", "['sort' 'data.txt'] ;"},
+		{"ls '*.txt' glob", "['ls' '*.txt' glob] ;"},
+		{"cat ~/notes.txt", "['cat' ~/notes.txt] ;"},
+		{"redo 1.pdf", "['redo' '1.pdf'] ;"},
+		{"sleep 5", "['sleep' 5] ;"},
+		{"echo \"a b\" @x", "['echo' \"a b\" @x] ;"},
+		{"echo [a b]", "['echo' [a b]] ;"},
+		{"cat a.txt | grep -i foo", "[['cat' 'a.txt'] ['grep' '-i' 'foo']] | ;"},
+	} {
+		pipeline, err := NewMShellSimpleCliParser(NewLexer(tc.input, nil)).Parse()
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", tc.input, err)
+		}
+		file, err := pipeline.ToMShellFile(testIsWord)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", tc.input, err)
+		}
+		if got := sourceOf(file.Items); got != tc.want {
+			t.Errorf("%q:\n got %s\nwant %s", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestSimpleCliParser_ToMShellFile_SingleCommand(t *testing.T) {
 	input := "ls -la"
 	l := NewLexer(input, nil)
@@ -256,7 +309,7 @@ func TestSimpleCliParser_ToMShellFile_SingleCommand(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	file, fileErr := pipeline.ToMShellFile()
+	file, fileErr := pipeline.ToMShellFile(testIsWord)
 	if fileErr != nil {
 		t.Fatalf("Unexpected error: %v", fileErr)
 	}
@@ -297,7 +350,7 @@ func TestSimpleCliParser_ToMShellFile_PipelineWithRedirect(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	file, fileErr := pipeline.ToMShellFile()
+	file, fileErr := pipeline.ToMShellFile(testIsWord)
 	if fileErr != nil {
 		t.Fatalf("Unexpected error: %v", fileErr)
 	}
@@ -345,7 +398,7 @@ func TestSimpleCliParser_ToMShellFile_ListArgument(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	file, fileErr := pipeline.ToMShellFile()
+	file, fileErr := pipeline.ToMShellFile(testIsWord)
 	if fileErr != nil {
 		t.Fatalf("Unexpected error: %v", fileErr)
 	}
@@ -377,8 +430,9 @@ func TestSimpleCliParser_ToMShellFile_ListArgument(t *testing.T) {
 }
 
 // The command name (first item) is force-quoted so an executable wins over a
-// builtin of the same name, but argument-position literals are preserved as
-// LITERAL tokens so operators like `glob` still act as operators at runtime.
+// builtin of the same name, but an argument-position literal that names a
+// word is preserved as a LITERAL token, so operators like `glob` still act as
+// operators at runtime.
 func TestSimpleCliParser_ToMShellFile_ArgLiteralsPreserved(t *testing.T) {
 	input := "numargs '*' glob"
 	l := NewLexer(input, nil)
@@ -389,7 +443,7 @@ func TestSimpleCliParser_ToMShellFile_ArgLiteralsPreserved(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	file, fileErr := pipeline.ToMShellFile()
+	file, fileErr := pipeline.ToMShellFile(testIsWord)
 	if fileErr != nil {
 		t.Fatalf("Unexpected error: %v", fileErr)
 	}
@@ -431,7 +485,7 @@ func TestSimpleCliParser_ToMShellFile_StdinWordIsPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%q: unexpected error: %v", input, err)
 		}
-		file, err := pipeline.ToMShellFile()
+		file, err := pipeline.ToMShellFile(testIsWord)
 		if err != nil {
 			t.Fatalf("%q: unexpected error: %v", input, err)
 		}
@@ -453,7 +507,7 @@ func TestSimpleCliParser_ToMShellFile_StdinWordIsPath(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("%q: no '<' in %s", input, pipeline.ToMShellString())
+			t.Errorf("%q: no '<' in %s", input, pipeline.ToMShellString(testIsWord))
 		}
 	}
 }

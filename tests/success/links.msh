@@ -4,8 +4,8 @@ tempFile f!
 @f str "-sym" + toPath s!
 @f str "-broken" + toPath b!
 @f @h hardLink
-['ln' -s @f @s];
-['ln' -s "nowhere-msh-links-test" @b];
+['ln' '-s' @f @s];
+['ln' '-s' "nowhere-msh-links-test" @b];
 
 "linkCount" wl
 @f linkCount ? str wl

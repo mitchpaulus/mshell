@@ -1,5 +1,5 @@
 [
-    echo
+    'echo'
 ]
 (
     'hello' append 'world' append

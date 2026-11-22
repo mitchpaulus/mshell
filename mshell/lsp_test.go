@@ -2344,6 +2344,30 @@ func TestTypeExprParseErrorPosition(t *testing.T) {
 // TestDiagnosticsShowStartupErrors shows an error in the startup files'
 // declarations on every document, as the command line fails every script
 // on it.
+// Every bare word in a list that names nothing gets its own diagnostic, at
+// the word, so a file written with bare strings shows all of them at once.
+func TestDiagnosticsForEveryBareWordInLists(t *testing.T) {
+	src := "[git status -u] ;\n[[make] [grep y]] | ;\n"
+	diags := (&lspServer{}).computeDiagnostics("", src)
+	want := []struct {
+		line, start, end uint32
+		name             string
+	}{
+		{0, 1, 4, "git"}, {0, 5, 11, "status"}, {0, 12, 14, "-u"},
+		{1, 2, 6, "make"}, {1, 9, 13, "grep"}, {1, 14, 15, "y"},
+	}
+	if len(diags) != len(want) {
+		t.Fatalf("got %d diagnostics, want %d: %v", len(diags), len(want), diags)
+	}
+	for i, w := range want {
+		d := diags[i]
+		if d.Range.Start.Line != w.line || d.Range.Start.Character != w.start || d.Range.End.Character != w.end ||
+			!strings.Contains(d.Message, "unknown identifier '"+w.name+"'") {
+			t.Errorf("diagnostic %d = %v %q, want %s at %d:%d-%d", i, d.Range, d.Message, w.name, w.line, w.start, w.end)
+		}
+	}
+}
+
 func TestDiagnosticsShowStartupErrors(t *testing.T) {
 	parsed, err := parseMShellInput("type U = [int] | [str]\n", &TokenFile{"init.msh"})
 	if err != nil {

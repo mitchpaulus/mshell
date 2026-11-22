@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On an `err` the quotation gets the error and returns a new `Result`. The quotation runs only when needed.
 - `Result`: a built-in enum for a value or the error that stopped it, `enum Result[a e] = ok a | err e end`.
   `?` unwraps an `ok`, and fails on an `err` with the error's `str` as the message.
-  Since `ok` and `err` are now words, a bare `ok` or `err` in a command list must be quoted: `[echo 'ok']`.
+  Since `ok` and `err` are now words, quote them to pass them to a command on the interactive command line: `echo 'ok'`.
 - `parseToml`: parse a TOML document from a string, binary, or file path. It gives a `Result[{Toml} str]`, an `err` saying why for text that is not valid TOML. `Toml` is a new built-in type.
 - `ExcelCell`: a built-in type for a cell `parseExcel` gives, `str | float | bool | ExcelError`, so stored rows can be typed `[[ExcelCell]]`.
   An error cell is an `excelError` holding the error's text, such as `"#DIV/0!"`.
@@ -34,8 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The language server supports goto declaration and goto definition on a `type` alias, an enum, an enum member, or a definition,
   going to its declaration in the file or in the standard library or init file.
 - The language server offers a `Quote literals in list that are strings` code action, next to `Quote all literals in list`.
-  It quotes only the bare words the list reads as strings, and leaves definitions, builtins, enum members and `~/` paths as they are,
-  so the list means what it did: with a definition `helper`, `[git helper -v]` becomes `['git' helper '-v']`.
+  It quotes only the bare words that name nothing, and leaves definitions, builtins, enum members and `~/` paths as they are:
+  with a definition `helper`, `[git helper -v]` becomes `['git' helper '-v']`.
 - The language server offers a `Convert to prefix quote` code action that rewrites a quote followed by a word, such as `(2 *) map`, as `map. 2 * end`.
   A quote on one line stays on one line; a multiline quote gets `map.` and `end` on their own lines.
 - Enums: `enum Shape = circle float | rect float float | dot end` declares a type whose values are one of its members.
@@ -182,10 +182,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A definition there with a type error stays defined, but code that calls it is refused, with the error; code that does not call it is checked as before.
 - The match pattern for a date/time is `datetime`, the same as the type name: `datetime d : ...`. Previously it was `date`.
 - `return` at the top level of an interactive line exits the shell, as it ends a script. Previously it ended only the line.
-- A bare word in a list literal is a string, exactly as if it were quoted: `[ls -l]` is `["ls" "-l"]`.
-  `typeof` gives `String`, a `str` match arm matches it, and every word that takes a string takes it.
-  `<`, `parseCsv`, `parseHtml` and `parseJson` read a string as the text itself, so a bare word given to them is text, not a file name: write a path (`` `data.csv` ``) to name a file.
-  A printed list shows the word quoted.
+- A bare word that names nothing is an error in a list literal, as it is everywhere else. A string is quoted: `[ls -l]` is now written `['ls' '-l']`.
+  A bare word is only ever a definition, a built-in or an enum member, so a new one no longer changes what an existing list means,
+  and a misspelled word is an error instead of text.
+  The error says to quote the word, and every such word in a file is reported at once, by `--type-check-only` and in the editor.
+  The language server's `Quote literals in list that are strings` code action quotes a list's words.
+  The interactive command line is unchanged: a line that starts with a program's name, such as `git status -u`, takes its words as strings.
+  A list literal typed there follows the new rule, and Tab quotes a file or argument it completes inside one.
 - A number too large to read, in a literal, an index such as `:99999999999999999999:`, or a positional argument, is an error when the script is read, not when that code runs.
   A slice like `1:99999999999999999999` used to crash.
 - The type checker (run on every script, by `--type-check-only`, and by the language server) is new.

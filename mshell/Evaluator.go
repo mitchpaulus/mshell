@@ -1657,8 +1657,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		if def, ok := state.lookupDefinition(frame.Definitions, funcToken.Lexeme); ok {
 			return state.callDefinition(def, t, frame)
 		}
-		callStackItem := CallStackItem{MShellParseItem: nil, Name: "literal", CallStackType: frame.CallStackItem.CallStackType}
-		return nilIfNothingToDo(state.evaluateBuiltinToken(funcToken, stack, frame.Context, frame.Definitions, callStackItem))
+		return nilIfNothingToDo(state.evaluateBuiltinToken(funcToken, stack, frame.Context, frame.Definitions))
 
 	case *MShellParseIfBlock:
 		return state.processIfBlock(t, frame)
@@ -2280,7 +2279,7 @@ func (state *EvalState) processTokenToken(item MShellParseItem, t *Token, frame 
 		if def, ok := state.lookupDefinition(frame.Definitions, t.Lexeme); ok {
 			return state.callDefinition(def, item, frame)
 		}
-		return nilIfNothingToDo(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem))
+		return nilIfNothingToDo(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions))
 
 	case BREAK:
 		if state.LoopDepth == 0 {
@@ -2302,10 +2301,7 @@ func (state *EvalState) processTokenToken(item MShellParseItem, t *Token, frame 
 
 	}
 
-	// Keep the frame's call stack type, which decides whether a bare
-	// literal is allowed (only inside a list).
-	callStackItem := CallStackItem{MShellParseItem: nil, Name: "token", CallStackType: frame.CallStackItem.CallStackType}
-	return nilIfNothingToDo(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions, callStackItem))
+	return nilIfNothingToDo(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions))
 }
 
 // processInterpret handles the builtin `x`: it pops a quotation and pushes
@@ -6743,7 +6739,7 @@ func (state *EvalState) evalTildeToken(t *Token, stack *MShellStack) EvalResult 
 
 // evaluateBuiltinToken evaluates a token that is not a call to a
 // definition. Callers must have already checked for a definition.
-func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
+func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition) EvalResult {
 			if t.Type == EOF {
 				return SimpleSuccess()
 			} else if t.Type == LITERAL {
@@ -12837,14 +12833,9 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.evalTildeToken(&t, stack)
 					}
 
-					// If we aren't in a list context, throw an error.
-					// Nearly always this is unintended.
-					if callStackItem.CallStackType != CALLSTACKLIST {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Found literal token '%s' outside of a list context. Normally this is unintended. Either make it a string literal or path, or ensure the definition is available.\n", t.Line, t.Column, t.Lexeme))
-					}
-
-					// A bare word in a list literal is a string: `[ls -l]`.
-					stack.Push(MShellString{t.Lexeme})
+					// A word that names nothing is an error everywhere, in
+					// a list literal too: a string is quoted.
+					return state.TypeMismatch(fmt.Sprintf("%d:%d: Unknown word '%s'. If it is a string, quote it: '%s'. Otherwise ensure the definition is available.\n", t.Line, t.Column, t.Lexeme, t.Lexeme))
 				}
 			} else if t.Type == ASTERISK {
 				obj1, err := stack.Pop()

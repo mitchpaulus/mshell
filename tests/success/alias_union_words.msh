@@ -5,9 +5,9 @@ type N = int | float
 type S = str | path
 "abc" as S upper str wl
 # A redirect target may be a union or alias of str and path.
-[cat] "from a str" as S < ;
+['cat'] "from a str" as S < ;
 "" wl
-[cat] true if "either" else `/dev/null` end < ;
+['cat'] true if "either" else `/dev/null` end < ;
 "" wl
 # ~ and ~/rest are strings under the home directory.
 ~/foo "/foo" endsWith str wl
