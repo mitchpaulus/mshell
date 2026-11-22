@@ -131,6 +131,13 @@ type lspDocument struct {
 
 	sigsOnce sync.Once
 	sigs     map[string][]string
+
+	// declared are the names the document's own definitions and enum
+	// members take, and wordBase is the base it is checked with
+	// (lspServer.readsAsString).
+	declaredOnce sync.Once
+	declared     map[string]struct{}
+	wordBase     *CoreBase
 }
 
 // lspCheck is what the type checker says of a document.
@@ -232,6 +239,43 @@ func (d *lspDocument) tokenRange(tok Token) protocol.Range {
 		Start: d.position(tok.Line-1, col),
 		End:   d.position(tok.Line-1, col+utf8.RuneCountInString(tok.Lexeme)),
 	}
+}
+
+// lspLineScan gives the ranges of tokens that are asked for in the order
+// of the text. It goes on from where the token before ended, so the tokens
+// of one line read the line once between them; tokenRange reads from the
+// start of the line for each, which is quadratic in a long line.
+type lspLineScan struct {
+	doc *lspDocument
+	// The scan is at 0-based rune column col of line, units UTF-16 code
+	// units and off bytes into it.
+	line, col, off int
+	units          uint32
+}
+
+// position is lspDocument.position.
+func (c *lspLineScan) position(line, col int) protocol.Position {
+	if line < 0 || line >= len(c.doc.Lines) {
+		return c.doc.position(line, col)
+	}
+	if line != c.line || col < c.col {
+		c.line, c.col, c.off, c.units = line, 0, 0, 0
+	}
+	text := c.doc.Lines[line]
+	for c.col < col && c.off < len(text) {
+		r, size := utf8.DecodeRuneInString(text[c.off:])
+		c.off += size
+		c.units += uint32(utf16.RuneLen(r))
+		c.col++
+	}
+	return protocol.Position{Line: uint32(line), Character: c.units}
+}
+
+// tokenRange is lspDocument.tokenRange.
+func (c *lspLineScan) tokenRange(tok *Token) protocol.Range {
+	col := tok.Column - 1
+	start := c.position(tok.Line-1, col)
+	return protocol.Range{Start: start, End: c.position(tok.Line-1, col+utf8.RuneCountInString(tok.Lexeme))}
 }
 
 type builtinInfo struct {
@@ -778,9 +822,7 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 	actions = append(actions, s.typeFixActions(doc, params)...)
 	actions = append(actions, s.treatAsStdLibActions(doc, params)...)
 	if codeActionKindRequested(params.Context.Only, protocol.RefactorRewrite) {
-		if a, ok := quoteLiteralsAction(doc, file, params); ok {
-			actions = append(actions, a)
-		}
+		actions = append(actions, s.quoteLiteralsActions(doc, file, params)...)
 		if a, ok := prefixQuoteAction(doc, file, params); ok {
 			actions = append(actions, a)
 		}
@@ -916,12 +958,20 @@ func rangesOverlap(a, b protocol.Range) bool {
 	return !before(a.End, b.Start) && !before(b.End, a.Start)
 }
 
-// quoteLiteralsAction offers to quote every bare word in the innermost
-// list literal at the cursor.
-func quoteLiteralsAction(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) (protocol.CodeAction, bool) {
+const (
+	quoteAllLiteralsTitle    = "Quote all literals in list"
+	quoteStringLiteralsTitle = "Quote literals in list that are strings"
+)
+
+// quoteLiteralsActions offers to quote the bare words in the innermost
+// list literal at the cursor: every one of them, and only those the list
+// reads as strings (readsAsString), which leaves the list meaning what it
+// did. The second is offered even when it quotes the same words as the
+// first, so an editor key bound to it works in every list.
+func (s *lspServer) quoteLiteralsActions(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) []protocol.CodeAction {
 	line, col, ok := cursorAt(doc, params.Range.Start)
 	if !ok {
-		return protocol.CodeAction{}, false
+		return nil
 	}
 	var selected *MShellParseList
 	itemsAtCursor(file, line, col, func(items []MShellParseItem) {
@@ -935,41 +985,121 @@ func quoteLiteralsAction(doc *lspDocument, file *MShellFile, params protocol.Cod
 		}
 	})
 	if selected == nil {
-		return protocol.CodeAction{}, false
+		return nil
 	}
 
 	literals := collectListLiterals(selected)
 	if len(literals) == 0 {
-		return protocol.CodeAction{}, false
+		return nil
 	}
-	edits := make([]protocol.TextEdit, 0, len(literals))
+	uri := params.TextDocument.URI
+	// Every edit's new text is a part of one string, and the words are in
+	// the order of the text, so each line is read once (lspLineScan).
+	size := 2 * len(literals)
 	for _, tok := range literals {
-		edits = append(edits, protocol.TextEdit{
-			Range:   doc.tokenRange(tok),
-			NewText: "'" + tok.Lexeme + "'",
-		})
+		size += len(tok.Lexeme)
+	}
+	var quoted strings.Builder
+	quoted.Grow(size)
+	for _, tok := range literals {
+		quoted.WriteByte('\'')
+		quoted.WriteString(tok.Lexeme)
+		quoted.WriteByte('\'')
+	}
+	newText := quoted.String()
+	// The edits of the words read as strings are the same edits with some
+	// left out, or the same slice if none is.
+	readsAsString := s.readsAsString(uri, doc, file)
+	all := make([]protocol.TextEdit, len(literals))
+	var strs []protocol.TextEdit
+	same := true
+	scan := lspLineScan{doc: doc}
+	for i, tok := range literals {
+		n := len(tok.Lexeme) + 2
+		all[i] = protocol.TextEdit{Range: scan.tokenRange(tok), NewText: newText[:n]}
+		newText = newText[n:]
+		if isString := readsAsString(tok.Lexeme); !isString && same {
+			same = false
+			strs = append(make([]protocol.TextEdit, 0, len(literals)-1), all[:i]...)
+		} else if isString && !same {
+			strs = append(strs, all[i])
+		}
+	}
+	if same {
+		strs = all
 	}
 
-	return protocol.CodeAction{
-		Title: "Quote all literals in list",
-		Kind:  protocol.RefactorRewrite,
-		Edit: &protocol.WorkspaceEdit{
-			Changes: map[protocol.DocumentURI][]protocol.TextEdit{
-				params.TextDocument.URI: edits,
-			},
-		},
-	}, true
+	action := func(title string, edits []protocol.TextEdit) protocol.CodeAction {
+		return protocol.CodeAction{
+			Title: title,
+			Kind:  protocol.RefactorRewrite,
+			Edit:  &protocol.WorkspaceEdit{Changes: map[protocol.DocumentURI][]protocol.TextEdit{uri: edits}},
+		}
+	}
+	actions := []protocol.CodeAction{action(quoteAllLiteralsTitle, all)}
+	if len(strs) > 0 {
+		actions = append(actions, action(quoteStringLiteralsTitle, strs))
+	}
+	return actions
 }
 
-func collectListLiterals(list *MShellParseList) []Token {
-	literals := make([]Token, 0)
+// readsAsString gives a function telling whether a bare word in a list of
+// the document is the string of its own text, as the runtime reads it: not
+// a definition or an enum member of the document or of the startup files it
+// is checked after, not a builtin, and not a path under the home directory,
+// which is expanded. Quoting such a word leaves the list as it was.
+//
+// The document's names and its base are worked out once per version of the
+// document, so asking on every cursor move reads only maps.
+func (s *lspServer) readsAsString(uri protocol.DocumentURI, doc *lspDocument, file *MShellFile) func(name string) bool {
+	doc.declaredOnce.Do(func() {
+		doc.declared = declaredNames(file.Definitions, file.Items)
+		doc.wordBase, _, _ = s.baseFor(uri)
+	})
+	own, base := doc.declared, doc.wordBase
+	return func(name string) bool {
+		if _, ok := own[name]; ok {
+			return false
+		}
+		return !strings.HasPrefix(name, "~/") && !base.IsWord(name)
+	}
+}
+
+// declaredNames are the names of defs and of the members of the enums
+// declared in items, the names findDeclaration finds that are words. It is
+// nil if there are none.
+func declaredNames(defs []MShellDefinition, items []MShellParseItem) map[string]struct{} {
+	var names map[string]struct{}
+	add := func(name string) {
+		if names == nil {
+			names = make(map[string]struct{}, len(defs))
+		}
+		names[name] = struct{}{}
+	}
+	for i := range defs {
+		add(defs[i].Name)
+	}
+	for _, item := range items {
+		if enum, ok := item.(*MShellEnumDecl); ok {
+			for _, member := range enum.Members {
+				add(member)
+			}
+		}
+	}
+	return names
+}
+
+// collectListLiterals are the bare words of list and of the lists in it,
+// in the order of the text.
+func collectListLiterals(list *MShellParseList) []*Token {
+	var literals []*Token
 	var collect func(*MShellParseList)
 	collect = func(current *MShellParseList) {
 		for _, item := range current.Items {
 			switch v := item.(type) {
 			case *Token:
 				if v.Type == LITERAL {
-					literals = append(literals, *v)
+					literals = append(literals, v)
 				}
 			case *MShellParseList:
 				collect(v)

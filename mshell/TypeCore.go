@@ -51,6 +51,18 @@ type CoreBase struct {
 	pool sync.Pool
 }
 
+// IsWord reports whether name, written bare, is a word of the base and so
+// is not read as a string in a list: a builtin, a definition of the startup
+// files, or a member of a built-in enum or of one the startup files declare.
+// A program's own definitions and enum members are words too.
+func (b *CoreBase) IsWord(name string) bool {
+	if _, ok := BuiltInList[name]; ok {
+		return true
+	}
+	id, ok := b.names.Lookup(name)
+	return ok && (b.table.name(id) != nil || b.ctors[id] != nil)
+}
+
 // coreBuiltins is the part of a base that depends only on the binary: an
 // arena and name table holding the built-in aliases and enums, and the
 // builtin table. A base adds the startup files' declarations and

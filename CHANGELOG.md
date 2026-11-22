@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `setCursorShape` sets the cursor's shape while the interactive shell reads a command.
 - The language server supports goto declaration and goto definition on a `type` alias, an enum, an enum member, or a definition,
   going to its declaration in the file or in the standard library or init file.
+- The language server offers a `Quote literals in list that are strings` code action, next to `Quote all literals in list`.
+  It quotes only the bare words the list reads as strings, and leaves definitions, builtins, enum members and `~/` paths as they are,
+  so the list means what it did: with a definition `helper`, `[git helper -v]` becomes `['git' helper '-v']`.
 - The language server offers a `Convert to prefix quote` code action that rewrites a quote followed by a word, such as `(2 *) map`, as `map. 2 * end`.
   A quote on one line stays on one line; a multiline quote gets `map.` and `end` on their own lines.
 - Enums: `enum Shape = circle float | rect float float | dot end` declares a type whose values are one of its members.
