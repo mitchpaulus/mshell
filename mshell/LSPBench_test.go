@@ -25,6 +25,24 @@ func benchCodeActionDoc(b *testing.B) (*lspDocument, *MShellFile) {
 	return doc, file
 }
 
+// benchLine is the 0-based line of doc that holds text. The lines of the
+// standard library move as it is edited, so a benchmark finds its line by
+// the text on it.
+func benchLine(b *testing.B, doc *lspDocument, text string) uint32 {
+	b.Helper()
+	for i, line := range doc.Lines {
+		if strings.Contains(line, text) {
+			return uint32(i)
+		}
+	}
+	b.Fatalf("no line holds %q", text)
+	return 0
+}
+
+// benchPrefixQuoteLine is a line of the standard library with a quote the
+// prefix quote code action rewrites, `drop` at character 16.
+const benchPrefixQuoteLine = "    @count seq (drop @item) map"
+
 func benchCodeActionParams(line, character uint32) protocol.CodeActionParams {
 	pos := protocol.Position{Line: line, Character: character}
 	return protocol.CodeActionParams{
@@ -43,8 +61,8 @@ func BenchmarkPrefixQuoteAction(b *testing.B) {
 		params protocol.CodeActionParams
 		offer  bool
 	}{
-		// `@count seq (drop @item) map`, cursor on `drop`.
-		{"hit", benchCodeActionParams(379, 16), true},
+		// Cursor on `drop`.
+		{"hit", benchCodeActionParams(benchLine(b, doc, benchPrefixQuoteLine), 16), true},
 		// The first line of the file.
 		{"miss", benchCodeActionParams(0, 0), false},
 	}
@@ -61,12 +79,51 @@ func BenchmarkPrefixQuoteAction(b *testing.B) {
 	}
 }
 
+// BenchmarkIffToIfAction runs the iff code action alone, as an editor does
+// on each cursor move: on an `iff` of the standard library and off one, and
+// on the last of 10000 at the top level of a file, where the time must not
+// grow with the size of the file.
+func BenchmarkIffToIfAction(b *testing.B) {
+	doc, file := benchCodeActionDoc(b)
+	const call = "( ['auto' 'always' 'never'] ) ( __rgDefaultOptions ) iff"
+	hit := benchLine(b, doc, call)
+	const n = 10000
+	flat := newLSPDocument(strings.Repeat("true (1 drop) (2 drop) iff\n", n))
+	flatFile, err := flat.parsed()
+	if err != nil {
+		b.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		doc    *lspDocument
+		file   *MShellFile
+		params protocol.CodeActionParams
+		offer  bool
+	}{
+		{"hit", doc, file, benchCodeActionParams(hit, uint32(strings.Index(doc.Lines[hit], call)+len(call)-1)), true},
+		// The first line of the file.
+		{"miss", doc, file, benchCodeActionParams(0, 0), false},
+		{"hit/10000", flat, flatFile, benchCodeActionParams(n-1, 24), true},
+	}
+	for _, c := range cases {
+		b.Run(c.name, func(b *testing.B) {
+			if _, ok := iffToIfAction(c.doc, c.file, c.params); ok != c.offer {
+				b.Fatalf("offered %v, want %v", ok, c.offer)
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				iffToIfAction(c.doc, c.file, c.params)
+			}
+		})
+	}
+}
+
 // BenchmarkCodeActionsRefactor is a whole refactor code action request,
 // parse included.
 func BenchmarkCodeActionsRefactor(b *testing.B) {
 	doc, _ := benchCodeActionDoc(b)
 	s := &lspServer{documents: map[protocol.DocumentURI]*lspDocument{"file:///std.msh": doc}}
-	params := benchCodeActionParams(379, 16)
+	params := benchCodeActionParams(benchLine(b, doc, benchPrefixQuoteLine), 16)
 	b.ReportAllocs()
 	for b.Loop() {
 		s.codeActions(params)
@@ -214,14 +271,11 @@ func BenchmarkLSPRequests(b *testing.B) {
 	uri := protocol.DocumentURI("file:///user.msh")
 	doc := newLSPDocument(text)
 	s.documents[uri] = doc
-	// Line 168 is `def uwt (-- [[str]]) sl (wsplit) map  end`.
-	if !strings.HasPrefix(doc.Lines[168], "def uwt") {
-		b.Fatalf("line 168 is %q", doc.Lines[168])
-	}
+	line := benchLine(b, doc, "def uwt (-- [[str]]) sl (wsplit) map  end")
 	at := func(char uint32) protocol.TextDocumentPositionParams {
 		return protocol.TextDocumentPositionParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-			Position:     protocol.Position{Line: 168, Character: char},
+			Position:     protocol.Position{Line: line, Character: char},
 		}
 	}
 	b.Run("cursorMove", func(b *testing.B) {

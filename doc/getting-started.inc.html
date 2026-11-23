@@ -1119,6 +1119,10 @@ leaving definitions, builtins, enum members and <code>~/</code> paths as they ar
 and <code>Quote all literals in list</code> quotes every one.
 The error on such a word has a quick fix that quotes that word,
 and <code>Quote literals in file that are strings</code>, offered anywhere in the file, quotes every one the type checker reports.
+Two more code actions rewrite code in its other form.
+<code>Convert to prefix quote</code>, on a quote followed by a word, rewrites <code>(2 *) map</code> as <code>map. 2 * end</code>.
+<code>Convert iff to if block</code>, on an <code>iff</code> with its quotes written just before it,
+rewrites <code>@ok ("yes" wl) ("no" wl) iff</code> as <code>@ok if "yes" wl else "no" wl end</code>.
 Environment variable completion draws from the actual process environment as well as any environment variables already
 referenced in the current file.
 </p>
