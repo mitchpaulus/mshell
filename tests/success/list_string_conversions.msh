@@ -1,5 +1,5 @@
-# Bare words from a list literal work as strings.
-[+5 inf abc aGk=] w!
+# Strings from a list literal convert as any string does.
+['+5' 'inf' 'abc' 'aGk='] w!
 @w 0 nth toInt str wl
 @w 1 nth toFloat str wl
 @w 2 nth toInt str wl

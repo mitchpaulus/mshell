@@ -27,4 +27,4 @@ end
 5 ok 5 ok = str wl
 5 ok "5" err = str wl
 5 ok match Result r : "a result", end wl
-[echo 'ok' "err"] ;
+['echo' 'ok' "err"] ;

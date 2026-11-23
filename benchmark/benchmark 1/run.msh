@@ -18,14 +18,14 @@ $MSHELL? if $MSHELL else "msh" end mshellBin!
 [ "load" "filter" "groupby" "join" ] (
     s!
     $"=== {@s} ===" wl
-    [hyperfine
-        --warmup 2
-        --runs 10
-        --export-markdown $"results/{@s}.md"
-        --export-json $"results/{@s}.json"
-        -n $"pandas/{@s}"  $"uv run pandas/{@s}.py"
-        -n $"polars/{@s}"  $"uv run polars/{@s}.py"
-        -n $"mshell/{@s}"  $"{@mshellBin} mshell/{@s}.msh"
+    ['hyperfine'
+        '--warmup' 2
+        '--runs' 10
+        '--export-markdown' $"results/{@s}.md"
+        '--export-json' $"results/{@s}.json"
+        '-n' $"pandas/{@s}"  $"uv run pandas/{@s}.py"
+        '-n' $"polars/{@s}"  $"uv run polars/{@s}.py"
+        '-n' $"mshell/{@s}"  $"{@mshellBin} mshell/{@s}.msh"
     ]!
 ) each
 

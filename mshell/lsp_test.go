@@ -1466,6 +1466,7 @@ func TestCodeActionQuotesAllLiteralsInInnermostList(t *testing.T) {
 			Start: protocol.Position{Line: 0, Character: 24},
 			End:   protocol.Position{Line: 0, Character: 24},
 		},
+		Context: protocol.CodeActionContext{Only: []protocol.CodeActionKind{protocol.RefactorRewrite}},
 	})
 
 	// Every bare word in the list is read as a string, so both quote
@@ -1513,6 +1514,7 @@ func TestCodeActionQuotesNestedLiteralsFromOuterList(t *testing.T) {
 			Start: protocol.Position{Line: 0, Character: 6},
 			End:   protocol.Position{Line: 0, Character: 6},
 		},
+		Context: protocol.CodeActionContext{Only: []protocol.CodeActionKind{protocol.RefactorRewrite}},
 	})
 
 	if len(actions) != 2 || actions[0].Edit == nil {
@@ -2017,6 +2019,7 @@ func TestCodeActionOnlyTargetsParsedListValues(t *testing.T) {
 				Start: position,
 				End:   position,
 			},
+			Context: protocol.CodeActionContext{Only: []protocol.CodeActionKind{protocol.RefactorRewrite}},
 		})
 	}
 
@@ -2192,6 +2195,102 @@ func TestCodeActionFixesNewMarks(t *testing.T) {
 	}
 }
 
+// A bare word in a list that names nothing comes with a quick fix that
+// quotes it, and one action, offered wherever the cursor is, quotes every
+// such word in the file. Words that are called, patterns and types are left
+// alone, and the file checks once the edits are made.
+func TestCodeActionQuotesEveryUnknownWordInFile(t *testing.T) {
+	uri := protocol.DocumentURI("file:///quote-file.msh")
+	doc := "def helper ( -- str) \"h\" end\n" +
+		"[git status helper -u] ;\n" +
+		"[[printf \"café\\n\"] [grep café]] | ;\n" +
+		"[1 2] => [a b]\n" +
+		"(f! [cat @f] ;) drop\n"
+	server := &lspServer{documents: map[protocol.DocumentURI]*lspDocument{uri: newLSPDocument(doc)}}
+	at := func(line, char uint32, only ...protocol.CodeActionKind) protocol.CodeActionParams {
+		return protocol.CodeActionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Range:        protocol.Range{Start: protocol.Position{Line: line, Character: char}, End: protocol.Position{Line: line, Character: char}},
+			Context:      protocol.CodeActionContext{Only: only},
+		}
+	}
+
+	// On one word: the fix for that word.
+	actions := server.codeActions(at(1, 6, protocol.QuickFix))
+	if len(actions) != 1 || actions[0].Title != "Quote 'status'" || !actions[0].IsPreferred {
+		t.Fatalf("expected the fix for status, got %+v", actions)
+	}
+	edit := actions[0].Edit.Changes[uri][0]
+	if edit.NewText != "'status'" || edit.Range.Start != (protocol.Position{Line: 1, Character: 5}) || edit.Range.End != (protocol.Position{Line: 1, Character: 11}) {
+		t.Fatalf("unexpected edit %+v", edit)
+	}
+	// A word that is called has no error, so no fix.
+	if actions := server.codeActions(at(1, 14, protocol.QuickFix)); len(actions) != 0 {
+		t.Fatalf("expected no fix on a definition's name, got %+v", actions)
+	}
+
+	// Anywhere in the file: every such word at once.
+	actions = server.codeActions(at(0, 0, sourceFixAll))
+	if len(actions) != 1 || actions[0].Title != "Quote literals in file that are strings" || actions[0].Kind != sourceFixAll {
+		t.Fatalf("expected the quote-in-file action, got %+v", actions)
+	}
+	edits := actions[0].Edit.Changes[uri]
+	var got []string
+	for _, e := range edits {
+		got = append(got, e.NewText)
+	}
+	want := []string{"'git'", "'status'", "'-u'", "'printf'", "'grep'", "'café'", "'cat'"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("quoted %v, want %v", got, want)
+	}
+	// With no kind asked for, it is offered next to the list's own actions.
+	found := false
+	for _, a := range server.codeActions(at(1, 6)) {
+		found = found || a.Title == "Quote literals in file that are strings"
+	}
+	if !found {
+		t.Fatalf("the quote-in-file action is not offered when no kind is asked for")
+	}
+
+	// The edited file has no errors left.
+	fixed := applyTextEdits(t, doc, edits)
+	wantText := "def helper ( -- str) \"h\" end\n" +
+		"['git' 'status' helper '-u'] ;\n" +
+		"[['printf' \"café\\n\"] ['grep' 'café']] | ;\n" +
+		"[1 2] => [a b]\n" +
+		"(f! ['cat' @f] ;) drop\n"
+	if fixed != wantText {
+		t.Fatalf("edited text:\n%s\nwant:\n%s", fixed, wantText)
+	}
+	if diags := (&lspServer{}).computeDiagnostics("", fixed); len(diags) != 0 {
+		t.Fatalf("the edited file still has diagnostics: %+v", diags)
+	}
+}
+
+// applyTextEdits applies edits that do not overlap, last first.
+func applyTextEdits(t *testing.T, text string, edits []protocol.TextEdit) string {
+	t.Helper()
+	doc := newLSPDocument(text)
+	offset := func(p protocol.Position) int {
+		off := 0
+		for i := 0; i < int(p.Line); i++ {
+			off += len(doc.Lines[i]) + 1
+		}
+		units := uint32(0)
+		for i, r := range doc.Lines[p.Line] {
+			if units >= p.Character {
+				return off + i
+			}
+			units += uint32(len(utf16.Encode([]rune{r})))
+		}
+		return off + len(doc.Lines[p.Line])
+	}
+	for i := len(edits) - 1; i >= 0; i-- {
+		text = text[:offset(edits[i].Range.Start)] + edits[i].NewText + text[offset(edits[i].Range.End):]
+	}
+	return text
+}
+
 // A word the table types in one form and the walker in another (the dict
 // form of urlEncode) shows both on hover.
 func TestHoverIndexMergesWalkerForms(t *testing.T) {
@@ -2344,6 +2443,30 @@ func TestTypeExprParseErrorPosition(t *testing.T) {
 // TestDiagnosticsShowStartupErrors shows an error in the startup files'
 // declarations on every document, as the command line fails every script
 // on it.
+// Every bare word in a list that names nothing gets its own diagnostic, at
+// the word, so a file written with bare strings shows all of them at once.
+func TestDiagnosticsForEveryBareWordInLists(t *testing.T) {
+	src := "[git status -u] ;\n[[make] [grep y]] | ;\n"
+	diags := (&lspServer{}).computeDiagnostics("", src)
+	want := []struct {
+		line, start, end uint32
+		name             string
+	}{
+		{0, 1, 4, "git"}, {0, 5, 11, "status"}, {0, 12, 14, "-u"},
+		{1, 2, 6, "make"}, {1, 9, 13, "grep"}, {1, 14, 15, "y"},
+	}
+	if len(diags) != len(want) {
+		t.Fatalf("got %d diagnostics, want %d: %v", len(diags), len(want), diags)
+	}
+	for i, w := range want {
+		d := diags[i]
+		if d.Range.Start.Line != w.line || d.Range.Start.Character != w.start || d.Range.End.Character != w.end ||
+			!strings.Contains(d.Message, "unknown identifier '"+w.name+"'") {
+			t.Errorf("diagnostic %d = %v %q, want %s at %d:%d-%d", i, d.Range, d.Message, w.name, w.line, w.start, w.end)
+		}
+	}
+}
+
 func TestDiagnosticsShowStartupErrors(t *testing.T) {
 	parsed, err := parseMShellInput("type U = [int] | [str]\n", &TokenFile{"init.msh"})
 	if err != nil {

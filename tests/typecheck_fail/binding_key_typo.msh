@@ -1,1 +1,1 @@
-{keys: [r'x' ctlr], action: [editAccept] bindingOps} bindingAdd
+{keys: [r'x' 'ctlr'], action: [editAccept] bindingOps} bindingAdd

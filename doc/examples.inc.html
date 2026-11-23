@@ -288,7 +288,7 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
             <td> Print every line after replacing each field by its absolute value </td>
             <td><code>{ <span class="awk-keyword">for</span> (i = 1; i &lt;= <span class="awk-builtin">NF</span>; i = i + 1) <span class="awk-field">$i</span> = (<span class="awk-field">$i</span> &lt; 0) ? -<span class="awk-field">$i</span> : <span class="awk-field">$i</span>; <span class="awk-function">print</span> }</code></td>
             <td>
-                ⟦  [msh --html]  'wt ((toFloat? abs str) map wjoin wl) each' < ! ⟧
+                ⟦  ['msh' '--html']  'wt ((toFloat? abs str) map wjoin wl) each' < ! ⟧
                 <!-- <code><span class="mshellLITERAL">wt</span> ((toFloat? abs str) map wjoin wl) each</code> -->
             </td>
         </tr>

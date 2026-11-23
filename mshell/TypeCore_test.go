@@ -279,14 +279,19 @@ func TestCoreChecker(t *testing.T) {
 		{`"a\nb" lines 1: as [str | int] drop`, true, ""},
 
 		// Commands: a redirect changes the type, so the list must be fresh (P7).
-		{`[echo hi] * ; wl`, true, ""},
-		{`[echo hi] c! @c * ; drop`, false, "the list must be new"},
-		{`[echo hi] c! @c deepCopy * ; wl`, true, ""},
-		{`[echo hi] * * ;`, false, "already has a capture"},
-		{`[[echo a] [cat]] | * ; wl`, true, ""},
-		{`[[make] 2>&1 [grep y]] | ;`, true, ""},
-		{`[[make] 2>&1 [grep y]] 0 nth ;`, false, "different redirects"},
-		{`[echo hi] e ; len wl`, true, ""},
+		{`['echo' 'hi'] * ; wl`, true, ""},
+		{`['echo' 'hi'] c! @c * ; drop`, false, "the list must be new"},
+		{`['echo' 'hi'] c! @c deepCopy * ; wl`, true, ""},
+		{`['echo' 'hi'] * * ;`, false, "already has a capture"},
+		{`[['echo' 'a'] ['cat']] | * ; wl`, true, ""},
+		{`[['make'] 2>&1 ['grep' 'y']] | ;`, true, ""},
+		{`[['make'] 2>&1 ['grep' 'y']] 0 nth ;`, false, "different redirects"},
+		{`['echo' 'hi'] e ; len wl`, true, ""},
+		// A word that names nothing is an error in a list literal too.
+		{`[echo hi] ;`, false, "unknown identifier 'echo'; if it is a string, quote it: 'echo'"},
+		{`['echo' hi] ;`, false, "unknown identifier 'hi'"},
+		{`[1 2 3 lenn] len wl`, false, "unknown identifier 'lenn'"},
+		{`['cat' ~/notes.txt] ;`, true, ""},
 		{`(1 wl) "out.txt" > x`, true, ""},
 		{`[[1]] ;`, true, ""},
 		{`[{a: 1}] ;`, false, "a command's arguments"},
@@ -508,6 +513,35 @@ func TestCoreChecker(t *testing.T) {
 		}
 		if !ok && !strings.Contains(errs[0], tc.want) {
 			t.Errorf("%s: first error %q does not contain %q", tc.src, errs[0], tc.want)
+		}
+	}
+}
+
+// Every bare word written directly in a list literal that names nothing is
+// reported, not only the first: checking goes on as if each were quoted, so
+// a file is fixed in one pass. Anywhere else the first unknown word stops
+// the unit, since what it would do to the stack is not known.
+func TestCoreCheckerReportsEveryBareWordInLists(t *testing.T) {
+	base := NewCoreBase(nil, nil)
+	for _, tc := range []struct {
+		src  string
+		want []string
+	}{
+		{"[git status -u] ;\n[[make] [grep y]] | ;\n(f! [cat @f] ;) drop", []string{"git", "status", "-u", "make", "grep", "y", "cat"}},
+		{"def f ( -- ) [echo hi] ; end\n[ls] ;", []string{"echo", "hi", "ls"}},
+		{`['git' status len] drop`, []string{"status"}},
+		{"[ true if foo else bar end ] drop\n[ls] ;", []string{"foo"}},
+		{"foo\n[ls] ;", []string{"foo"}},
+	} {
+		errs, ok := coreCheck(t, base, tc.src)
+		if ok || len(errs) != len(tc.want) {
+			t.Errorf("%s: ok = %v, errors %v, want one for each of %v", tc.src, ok, errs, tc.want)
+			continue
+		}
+		for i, name := range tc.want {
+			if !strings.Contains(errs[i], "unknown identifier '"+name+"'; if it is a string, quote it: '"+name+"'") {
+				t.Errorf("%s: error %d is %q, want unknown identifier '%s'", tc.src, i, errs[i], name)
+			}
 		}
 	}
 }

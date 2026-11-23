@@ -7,7 +7,7 @@ def render (str -- str)
             @rest "⟧" splitOnce match
                 just close :
                     @close => [code after]
-                    @prefix [msh "-c" @code] * ! + @after render +,
+                    @prefix ['msh' "-c" @code] * ! + @after render +,
                 none : @template,
             end,
         none : @template,

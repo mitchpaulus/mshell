@@ -1,5 +1,5 @@
 def test (str --)
-    s! [xxd -p -c 1] @s chomp < * ! lines " " join wl
+    s! ['xxd' '-p' '-c' 1] @s chomp < * ! lines " " join wl
 end
 "abc\n" test # 'abc'
 "abc\r\n" test # 'abc'

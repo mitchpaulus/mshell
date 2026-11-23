@@ -1,0 +1,17 @@
+# A string from a list literal is a string, whichever way it is used.
+['ls'] :0: typeof wl
+['echo' "x"] (match str s : "str" wl, _ : "other" wl, end) each
+
+# '>' takes a string as a file name.
+['string_redirect_out.txt'] :0: outFile!
+("from quote" wl) @outFile > x
+`string_redirect_out.txt` readFile w
+`string_redirect_out.txt` rm
+
+# '<' takes a string as the input text, and a path as a file to read.
+['string_redirect.msh'] :0: input!
+(stdin wl) @input < x
+['head' '-n' 1] `string_redirect.msh` < ;
+
+# Directly in a list literal too: the text string_redirect.msh, 19 characters.
+['echo' ['wc' '-c'] 'string_redirect.msh' < * !] !

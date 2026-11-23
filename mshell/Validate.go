@@ -578,7 +578,6 @@ func (v *validator) visit(value MShellObject, t TypeId) (bool, error) {
 		case TidStr:
 			switch value.(type) {
 			case MShellString:
-				// A bare word in a list literal is a string too.
 				return true, nil
 			}
 			return false, nil

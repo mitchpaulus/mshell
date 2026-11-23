@@ -22,7 +22,7 @@
 {keys: [r';' r'j'], action: [(j) editRun] bindingOps} bindingAdd
 
 # lf on F1.
-{keys: [keyF1], action: [([lf];) editRun] bindingOps} bindingAdd
+{keys: [keyF1], action: [(['lf'];) editRun] bindingOps} bindingAdd
 
 # Today's date (YYYY-MM-DD) at the cursor on Alt-D.
 def insertDate (EditState -- new Maybe[[EditOp]])

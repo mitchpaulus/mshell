@@ -1,3 +1,0 @@
-# A bare word is a string only directly in a list literal, not in an if
-# arm inside one.
-[ true if foo else bar end ] str wl

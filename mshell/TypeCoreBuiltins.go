@@ -339,7 +339,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	}
 	t.urlEncodeDict = b.typ("{str: UrlEncodable}")
 
-	// A path names a file; a str (a bare word in a list literal too) is the text.
+	// A path names a file; a str is the text.
 	b.reg("parseJson", "(str | path | binary -- new Json)")
 	b.reg("parseToml", "(str | path | binary -- new Result[{Toml} str])")
 	// The document node: tag "" with the <html> element as its child.

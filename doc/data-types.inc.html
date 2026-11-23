@@ -32,15 +32,22 @@ The source code for all these types is in a single file at: <a href="https://git
 <h1 id="data-type-literal">Literal <a class="section-link" href="#data-type-literal" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
-Since brevity is a strong design goal, like most shells, many basic tokens can be written as-is.
-But unlike in most shells, we limit where the number of places literal tokens can be used.
-They can only be used in list literals, because that's how commands are input.
-Outside of lists, it will result in an error.
+A literal token is a word written as-is, with no quotes around it.
+In a script it is always a name: a definition, a built-in, or an enum member.
+A word that names nothing is an error, in a list literal too.
+A string is quoted, so the command <code>ls -l</code> is written <code>['ls' '-l']</code>.
 </p>
 
 <p>
-A literal token is a string, exactly as if it were quoted: <code>[ls -l]</code> is the same list as <code>["ls" "-l"]</code>.
-So where a string is the text itself, as in <code>&lt;</code> or <code>parseJson</code>, a literal token is text too; name a file with a path.
+The one place a string is written without quotes is the interactive command line.
+A line that starts with the name of a program, such as <code>ls -l</code>, is a command,
+and each of its words that is not a definition, a built-in or an enum member is a string:
+the line runs as <code>['ls' '-l'];</code>.
+A list literal typed on the command line follows the rule for scripts.
+</p>
+
+<p>
+A path under the home directory, such as <code>~/notes.txt</code>, is written as-is everywhere, and is a string with <code>~</code> replaced.
 </p>
 
 <p>
@@ -304,8 +311,8 @@ In <code>msh</code>, this choice can be made by using the appropriate type.
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`myfile.txt`</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Counts the number of lines in myfile.txt</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTRING">&#34;line 1\nline 2\n&#34;</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Counts the number of lines in the string &#34;line 1\nline 2\n&#34; (2)</span></code>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;wc&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;-l&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`myfile.txt`</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Counts the number of lines in myfile.txt</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;wc&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;-l&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTRING">&#34;line 1\nline 2\n&#34;</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Counts the number of lines in the string &#34;line 1\nline 2\n&#34; (2)</span></code>
 </pre>
 
 <h1 id="data-type-dictionary">Dictionary <a class="section-link" href="#data-type-dictionary" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
@@ -606,12 +613,12 @@ Built-in functions that can fail for more than one reason also give a <code>Resu
 </pre>
 
 <p>
-<code>ok</code> and <code>err</code> are words, so a bare <code>ok</code> or <code>err</code> in a list literal makes a Result.
+<code>ok</code> and <code>err</code> are words, on the interactive command line too, where <code>echo ok</code> would give the command a Result.
 Quote them to pass them to a command:
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSINGLEQUOTESTRING">&#39;ok&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellEXECUTE">;</span>           <span class="mshellLINECOMMENT"># ok</span></code>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;echo&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;ok&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellEXECUTE">;</span>           <span class="mshellLINECOMMENT"># ok</span></code>
 </pre>
 
 <h1 id="data-type-pipe">Pipe <a class="section-link" href="#data-type-pipe" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
@@ -626,8 +633,8 @@ It's created by the <code>|</code> operator.
 
 <pre>
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span>
-  <span class="mshellLEFT_SQUARE_BRACKET">[</span> <span class="mshellLITERAL">myCommand</span> <span class="mshellRIGHT_SQUARE_BRACKET">]</span>
-  <span class="mshellLEFT_SQUARE_BRACKET">[</span> <span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span> <span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+  <span class="mshellLEFT_SQUARE_BRACKET">[</span> <span class="mshellSINGLEQUOTESTRING">&#39;myCommand&#39;</span> <span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+  <span class="mshellLEFT_SQUARE_BRACKET">[</span> <span class="mshellSINGLEQUOTESTRING">&#39;wc&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;-l&#39;</span> <span class="mshellRIGHT_SQUARE_BRACKET">]</span>
 <span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span> <span class="mshellEXECUTE">;</span>  <span class="mshellLINECOMMENT"># Counting the number of lines of output from myCommand</span></code>
 </pre>
 

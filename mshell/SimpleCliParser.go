@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 )
 
 // SimpleCliParser parses simple CLI-style commands with pipes and redirects.
@@ -162,8 +163,8 @@ func (e *SimpleCliParseError) Error() string {
 }
 
 // ToMShellString transforms the simple CLI parse tree into mshell syntax (for debugging).
-func (pipeline *SimpleCliPipeline) ToMShellString() string {
-	file, err := pipeline.ToMShellFile()
+func (pipeline *SimpleCliPipeline) ToMShellString(isWord func(name string) bool) string {
+	file, err := pipeline.ToMShellFile(isWord)
 	if err != nil {
 		return fmt.Sprintf("Error: %s", err)
 	}
@@ -177,7 +178,12 @@ func (pipeline *SimpleCliPipeline) ToMShellString() string {
 // ToMShellFile transforms the simple CLI parse tree directly into an MShellFile AST.
 // Since items are already parsed as MShellParseItems, we just need to wrap them
 // in the appropriate list structure and add operators.
-func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
+//
+// A command line is the one place a string is written without quotes, and
+// the result has none left: each bare word of a command is quoted here
+// unless isWord says it names a builtin, a definition or an enum member
+// (convertItemsForExecution).
+func (pipeline *SimpleCliPipeline) ToMShellFile(isWord func(name string) bool) (*MShellFile, error) {
 	hasPipe := len(pipeline.Commands) > 1
 
 	// Convert stdin redirect: LITERAL becomes PATH, string-like types pass through
@@ -224,7 +230,7 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
 		for i, cmd := range pipeline.Commands {
 			// Create inner command list from parsed items
 			cmdList := &MShellParseList{
-				Items:      convertItemsForExecution(cmd.Items),
+				Items:      convertItemsForExecution(cmd.Items, isWord),
 				StartToken: Token{Type: LEFT_SQUARE_BRACKET, Lexeme: "["},
 				EndToken:   Token{Type: RIGHT_SQUARE_BRACKET, Lexeme: "]"},
 			}
@@ -257,7 +263,7 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
 	} else {
 		// Single command: [cmd items] redirect < redirect > ;
 		cmdList := &MShellParseList{
-			Items:      convertItemsForExecution(pipeline.Commands[0].Items),
+			Items:      convertItemsForExecution(pipeline.Commands[0].Items, isWord),
 			StartToken: Token{Type: LEFT_SQUARE_BRACKET, Lexeme: "["},
 			EndToken:   Token{Type: RIGHT_SQUARE_BRACKET, Lexeme: "]"},
 		}
@@ -290,41 +296,38 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
 // string so that an executable always wins over a builtin/operator of the same name
 // (e.g. `date`, `sort`, `cp`). This matches the long-standing CLI behavior.
 //
-// Every remaining item is preserved as-is. At runtime, a literal in argument position
-// that names a builtin or definition acts as that operator (e.g. `'*' glob` expands the
-// wildcard), and any other literal is treated as a string. We deliberately do NOT quote
-// these, so operators keep working as a direct AST transformation rather than relying on
-// string manipulation.
-func convertItemsForExecution(items []MShellParseItem) []MShellParseItem {
+// A bare literal in argument position that isWord names stays a word, so it acts as
+// that operator (e.g. `'*' glob` expands the wildcard), as does a path under the home
+// directory (`~/x`), which is expanded. Any other bare literal is an argument typed
+// without quotes, and becomes a single-quoted string: a list literal has no bare
+// strings, so the command list is written the way a script writes it.
+//
+// Only the command's own items are converted. A list, dict or quote among them is
+// ordinary mshell and is preserved as-is.
+func convertItemsForExecution(items []MShellParseItem, isWord func(name string) bool) []MShellParseItem {
 	result := make([]MShellParseItem, len(items))
 	for i, item := range items {
-		if i == 0 {
-			result[i] = convertCommandNameForExecution(item)
-		} else {
-			result[i] = item
+		result[i] = item
+		tok, ok := item.(*Token)
+		if !ok || tok.Type != LITERAL {
+			continue
 		}
+		if i > 0 && (isWord(tok.Lexeme) || strings.HasPrefix(tok.Lexeme, "~/")) {
+			continue
+		}
+		result[i] = quoteLiteralToken(tok)
 	}
 	return result
 }
 
-// convertCommandNameForExecution converts a command-name item for execution.
-// A bare LITERAL becomes a single-quoted string so the command wins over any
-// builtin/operator of the same name; other types are preserved as-is.
-func convertCommandNameForExecution(item MShellParseItem) MShellParseItem {
-	switch v := item.(type) {
-	case *Token:
-		if v.Type == LITERAL {
-			return &Token{
-				Type:   SINGLEQUOTESTRING,
-				Lexeme: "'" + v.Lexeme + "'",
-				Line:   v.Line,
-				Column: v.Column,
-				Start:  v.Start,
-			}
-		}
-		return v
-	default:
-		// Lists, dicts, quotes, etc. are preserved as-is
-		return item
+// quoteLiteralToken is the single-quoted string of a bare literal's text.
+// A literal cannot hold a single quote (literalStop).
+func quoteLiteralToken(tok *Token) *Token {
+	return &Token{
+		Type:   SINGLEQUOTESTRING,
+		Lexeme: "'" + tok.Lexeme + "'",
+		Line:   tok.Line,
+		Column: tok.Column,
+		Start:  tok.Start,
 	}
 }

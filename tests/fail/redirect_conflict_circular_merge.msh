@@ -1,2 +1,2 @@
 # Conflict: merging both streams into each other is circular
-[ls] 2>&1 1>&2 ;
+['ls'] 2>&1 1>&2 ;

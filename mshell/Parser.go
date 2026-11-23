@@ -2353,8 +2353,8 @@ func validatePatternPosition(item MShellParseItem, names *[]string, hint string)
 				return nil
 			}
 			if strings.HasPrefix(p.Lexeme, "-") {
-				// In a list literal, `-h` is the string "-h"; in a
-				// pattern, a bare word is a name.
+				// A bare word in a pattern is a name, and `-h` is not
+				// one: it is nearly always meant as the string.
 				return fmt.Errorf("%d:%d: '%s' in a pattern would be a name. To match the string, quote it: '%s'.", p.Line, p.Column, p.Lexeme, p.Lexeme)
 			}
 			*names = append(*names, p.Lexeme)

@@ -156,6 +156,7 @@ type lspCheck struct {
 // lspTypeFix is a type error with a fix: its diagnostic and its edit.
 type lspTypeFix struct {
 	title string
+	kind  TypeFixKind
 	diag  protocol.Diagnostic
 	edit  protocol.TextEdit
 }
@@ -903,9 +904,16 @@ func (s *lspServer) startupFilesBeforeDocument(uri protocol.DocumentURI) int {
 	return startupFilesBefore(documentPath(uri), s.startupPaths()...)
 }
 
+// The titles of the actions that apply every fix of one sort in a file.
+const (
+	fixNewMarksTitle       = "Fix every `new` mark in this file"
+	quoteFileLiteralsTitle = "Quote literals in file that are strings"
+)
+
 // typeFixActions offers the fixes the core checker attaches to its errors:
 // each one whose error is in the requested range, as a quick fix, and all
-// of them at once.
+// of one sort at once, wherever the cursor is: every `new` mark, and every
+// bare word in a list that names nothing, which is quoted.
 func (s *lspServer) typeFixActions(doc *lspDocument, params protocol.CodeActionParams) []protocol.CodeAction {
 	quick := codeActionKindRequested(params.Context.Only, protocol.QuickFix)
 	all := codeActionKindRequested(params.Context.Only, sourceFixAll)
@@ -914,10 +922,12 @@ func (s *lspServer) typeFixActions(doc *lspDocument, params protocol.CodeActionP
 	}
 	uri := params.TextDocument.URI
 	var actions []protocol.CodeAction
-	var every []protocol.TextEdit
+	var marks, quotes []protocol.TextEdit
 	for _, fix := range s.checked(uri, doc).fixes {
-		if all {
-			every = append(every, fix.edit)
+		if all && fix.kind == FixQuote {
+			quotes = append(quotes, fix.edit)
+		} else if all {
+			marks = append(marks, fix.edit)
 		}
 		if quick && rangesOverlap(fix.diag.Range, params.Range) {
 			actions = append(actions, protocol.CodeAction{
@@ -929,12 +939,17 @@ func (s *lspServer) typeFixActions(doc *lspDocument, params protocol.CodeActionP
 			})
 		}
 	}
-	if all && len(every) > 0 {
-		actions = append(actions, protocol.CodeAction{
-			Title: "Fix every `new` mark in this file",
-			Kind:  sourceFixAll,
-			Edit:  &protocol.WorkspaceEdit{Changes: map[protocol.DocumentURI][]protocol.TextEdit{uri: every}},
-		})
+	for _, every := range []struct {
+		title string
+		edits []protocol.TextEdit
+	}{{fixNewMarksTitle, marks}, {quoteFileLiteralsTitle, quotes}} {
+		if len(every.edits) > 0 {
+			actions = append(actions, protocol.CodeAction{
+				Title: every.title,
+				Kind:  sourceFixAll,
+				Edit:  &protocol.WorkspaceEdit{Changes: map[protocol.DocumentURI][]protocol.TextEdit{uri: every.edits}},
+			})
+		}
 	}
 	return actions
 }
@@ -943,8 +958,12 @@ func (s *lspServer) typeFixActions(doc *lspDocument, params protocol.CodeActionP
 // only, so fixing every mark of a long file is linear in its size.
 func typeFixEdit(doc *lspDocument, f TypeFix) protocol.TextEdit {
 	start := doc.position(f.At.Line-1, f.At.Column-1)
-	if f.Kind == FixDelete {
+	switch f.Kind {
+	case FixDelete:
 		return protocol.TextEdit{Range: protocol.Range{Start: start, End: doc.position(f.Until.Line-1, f.Until.Column-1)}}
+	case FixQuote:
+		end := doc.position(f.At.Line-1, f.At.Column-1+utf8.RuneCountInString(f.At.Lexeme))
+		return protocol.TextEdit{Range: protocol.Range{Start: start, End: end}, NewText: "'" + f.At.Lexeme + "'"}
 	}
 	return protocol.TextEdit{Range: protocol.Range{Start: start, End: start}, NewText: f.Text}
 }
@@ -964,10 +983,11 @@ const (
 )
 
 // quoteLiteralsActions offers to quote the bare words in the innermost
-// list literal at the cursor: every one of them, and only those the list
-// reads as strings (readsAsString), which leaves the list meaning what it
-// did. The second is offered even when it quotes the same words as the
-// first, so an editor key bound to it works in every list.
+// list literal at the cursor: every one of them, and only those that name
+// nothing (readsAsString), which are errors until they are quoted and
+// leaves the words that are called as they are. The second is offered even
+// when it quotes the same words as the first, so an editor key bound to it
+// works in every list.
 func (s *lspServer) quoteLiteralsActions(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) []protocol.CodeAction {
 	line, col, ok := cursorAt(doc, params.Range.Start)
 	if !ok {
@@ -1044,10 +1064,11 @@ func (s *lspServer) quoteLiteralsActions(doc *lspDocument, file *MShellFile, par
 }
 
 // readsAsString gives a function telling whether a bare word in a list of
-// the document is the string of its own text, as the runtime reads it: not
-// a definition or an enum member of the document or of the startup files it
-// is checked after, not a builtin, and not a path under the home directory,
-// which is expanded. Quoting such a word leaves the list as it was.
+// the document names nothing, and so is meant as the string of its own
+// text: not a definition or an enum member of the document or of the
+// startup files it is checked after, not a builtin, and not a path under
+// the home directory, which is expanded. Such a word is an error until it
+// is quoted.
 //
 // The document's names and its base are worked out once per version of the
 // document, so asking on every cursor move reads only maps.
@@ -1767,7 +1788,7 @@ func (s *lspServer) checked(uri protocol.DocumentURI, doc *lspDocument) *lspChec
 				diag := typeErrorToDiagnostic(doc, e, arena, names)
 				check.diags = append(check.diags, diag)
 				if e.Severity == SeverityError && e.Fix.Kind != FixNone {
-					check.fixes = append(check.fixes, lspTypeFix{title: e.Fix.Title, diag: diag, edit: typeFixEdit(doc, e.Fix)})
+					check.fixes = append(check.fixes, lspTypeFix{title: e.Fix.Title, kind: e.Fix.Kind, diag: diag, edit: typeFixEdit(doc, e.Fix)})
 				}
 				// The error says where the name is defined already.
 				if e.Kind == TErrDeclaration && strings.Contains(e.Hint, stdLibTokenFile.Path) {

@@ -439,7 +439,7 @@ This makes argument lists easy to take apart.
 </pre>
 
 <p>
-A bare word in a pattern is a name, even though it is a string in a list literal.
+A bare word in a pattern is a name.
 <code>[GET path]</code> binds two names and matches any two element list; write <code>['GET' path]</code> to match the string.
 A bare word starting with <code>-</code>, like <code>-h</code>, is an error: quote it as <code>'-h'</code>.
 </p>

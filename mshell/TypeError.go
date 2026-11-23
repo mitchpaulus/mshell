@@ -102,6 +102,8 @@ const (
 	// FixDelete deletes the text from the start of At to the start of
 	// Until.
 	FixDelete
+	// FixQuote puts single quotes around the token At, a bare word.
+	FixQuote
 )
 
 // TypeFix is an edit to the source that fixes a type error.
@@ -149,6 +151,9 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		}
 	case TErrUnknownIdentifier:
 		fmt.Fprintf(&sb, "unknown identifier '%s'", e.Name)
+		if e.Hint != "" {
+			fmt.Fprintf(&sb, "; %s", e.Hint)
+		}
 	case TErrBranchStackSize:
 		fmt.Fprintf(&sb, "branches produce stacks of differing sizes:%s", e.Hint)
 	case TErrNonExhaustiveMatch:

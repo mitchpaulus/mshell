@@ -1,2 +1,2 @@
 # Conflict: two stdout file redirects must error
-[ls] `conflict_f.txt` > `conflict_g.txt` > ;
+['ls'] `conflict_f.txt` > `conflict_g.txt` > ;

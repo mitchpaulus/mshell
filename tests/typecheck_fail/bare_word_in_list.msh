@@ -1,0 +1,3 @@
+# A word that names nothing is an error in a list literal too: a string
+# is quoted, ['ls' '-l'].
+[ls -l] str wl

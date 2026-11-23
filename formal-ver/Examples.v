@@ -1081,9 +1081,9 @@ Proof. vm_compute. eauto. Qed.
 
 (** ** Runes ([ai/runes.typ])
 
-    A rune is its own kind.  A string is never a rune, so a misspelled key in a
-    list literal (a bare word, which is a string) cannot pass for one, and a kind
-    pattern on [rune | str] separates the two members. *)
+    A rune is its own kind.  A string is never a rune, so a string in a list of
+    keys cannot pass for one, and a kind pattern on [rune | str] separates the
+    two members. *)
 Example str_not_rune : ~ sub TStr TRune.
 Proof. intros Hs. apply sub_unfold in Hs. inversion Hs. Qed.
 

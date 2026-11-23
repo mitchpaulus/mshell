@@ -32,10 +32,10 @@ none deepCopy str wl
 4 @q x str wl
 
 # A command keeps its redirects.
-[echo hello] * deepCopy ; trim wl
+['echo' 'hello'] * deepCopy ; trim wl
 
 # A pipe's commands are copied.
-[[echo a] [echo b]] | p!
+[['echo' 'a'] ['echo' 'b']] | p!
 @p deepCopy pc!
 @pc toJson wl
 
