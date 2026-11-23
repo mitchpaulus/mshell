@@ -827,6 +827,9 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 		if a, ok := prefixQuoteAction(doc, file, params); ok {
 			actions = append(actions, a)
 		}
+		if a, ok := iffToIfAction(doc, file, params); ok {
+			actions = append(actions, a)
+		}
 	}
 	return actions
 }
@@ -1244,6 +1247,189 @@ func prefixQuoteText(doc *lspDocument, call quoteCall) string {
 	return head + strings.Join(lines, "\n") + "end"
 }
 
+const iffToIfTitle = "Convert iff to if block"
+
+// iffToIfAction offers, with the cursor on an `iff`, to rewrite it and the
+// quotes written just before it as an if block: `c (a) (b) iff` becomes
+// `c if a else b end`, and `c (a) iff` becomes `c if a end`. Written on one
+// line it stays on one line; otherwise `if` ends its line, and `else` and
+// `end` go on their own lines.
+//
+// A quote written at its `iff` runs in the variables of the code around it,
+// as the body of an if block does, and a quote cannot hold a `return`, so
+// the rewrite keeps the meaning. One quote before the `iff` is taken as the
+// quote run when true: what comes before it is not looked at, and if that
+// leaves a quote and not a condition, the if block is a type error.
+func iffToIfAction(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) (protocol.CodeAction, bool) {
+	line, col, ok := cursorAt(doc, params.Range.Start)
+	if !ok {
+		return protocol.CodeAction{}, false
+	}
+	var iff *Token
+	var onTrue, onFalse *MShellParseQuote
+	itemsAtCursor(file, line, col, func(items []MShellParseItem) {
+		for i, item := range items {
+			tok, ok := item.(*Token)
+			if !ok || tok.Type != IFF || !spanHolds(tok, tok, line, col) {
+				continue
+			}
+			last := parenQuoteBefore(doc, items, i, tok)
+			if last == nil {
+				continue
+			}
+			if i < 2 {
+				iff, onTrue = tok, last
+			} else if _, isQuote := items[i-2].(*MShellParseQuote); !isQuote {
+				iff, onTrue = tok, last
+			} else if first := parenQuoteBefore(doc, items, i-1, &last.StartToken); first != nil {
+				iff, onTrue, onFalse = tok, first, last
+			}
+		}
+	})
+	if iff == nil {
+		return protocol.CodeAction{}, false
+	}
+
+	open := onTrue.StartToken
+	return protocol.CodeAction{
+		Title: iffToIfTitle,
+		Kind:  protocol.RefactorRewrite,
+		Edit: &protocol.WorkspaceEdit{
+			Changes: map[protocol.DocumentURI][]protocol.TextEdit{
+				params.TextDocument.URI: {{
+					Range: protocol.Range{
+						Start: doc.position(open.Line-1, open.Column-1),
+						End:   doc.position(iff.Line-1, iff.Column-1+utf8.RuneCountInString(iff.Lexeme)),
+					},
+					NewText: iffToIfText(doc, onTrue, onFalse, iff),
+				}},
+			},
+		},
+	}, true
+}
+
+// parenQuoteBefore is the quote in parentheses that is the item before
+// items[i], or nil if that item is not one, or more than spaces and line
+// breaks come between it and next, the first token of items[i]: a comment
+// there would be lost.
+func parenQuoteBefore(doc *lspDocument, items []MShellParseItem, i int, next *Token) *MShellParseQuote {
+	if i == 0 {
+		return nil
+	}
+	quote, ok := items[i-1].(*MShellParseQuote)
+	if !ok || quote.StartToken.Type != LEFT_PAREN || quote.EndToken.Type != RIGHT_PAREN ||
+		!onlySpaceBetween(doc, &quote.EndToken, next) {
+		return nil
+	}
+	return quote
+}
+
+// iffToIfText is the if block that replaces the quotes of an `iff` and the
+// `iff`. onFalse is nil if there is no quote for false.
+func iffToIfText(doc *lspDocument, onTrue, onFalse *MShellParseQuote, iff *Token) string {
+	open := onTrue.StartToken
+	openLine := doc.Lines[open.Line-1]
+
+	if open.Line == iff.Line {
+		text := "if"
+		if body := quoteBodyOnLine(doc, onTrue); body != "" {
+			text += " " + body
+		}
+		if onFalse != nil {
+			text += " else"
+			if body := quoteBodyOnLine(doc, onFalse); body != "" {
+				text += " " + body
+			}
+		}
+		return text + " end"
+	}
+
+	// The lines of a body are left as they are, so the body is indented as
+	// the first of them is. A body all on the lines of its parentheses has
+	// no such line, and is indented one step more than the `if`.
+	indent := leadingIndent(openLine[:byteIndex(openLine, open.Column-1)])
+	bodyIndent, found := quoteBodyIndent(doc, onTrue)
+	if !found && onFalse != nil {
+		bodyIndent, found = quoteBodyIndent(doc, onFalse)
+	}
+	if !found {
+		unit := "    "
+		if strings.Contains(indent, "\t") {
+			unit = "\t"
+		}
+		bodyIndent = indent + unit
+	}
+
+	// At most a line for each line from the `(` to the `iff`, one more for
+	// the text after each `(`, and `if`, `else` and `end`.
+	lines := append(make([]string, 0, iff.Line-open.Line+6), "if")
+	lines = appendQuoteBodyLines(lines, doc, onTrue, bodyIndent)
+	if onFalse != nil {
+		lines = appendQuoteBodyLines(append(lines, indent+"else"), doc, onFalse, bodyIndent)
+	}
+	lines = append(lines, indent+"end")
+	// The line breaks written are those of the line the `if` is on.
+	if strings.HasSuffix(openLine, "\r") {
+		return strings.Join(lines, "\r\n")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// quoteBodyOnLine is the text between the parentheses of a quote written on
+// one line, without the spaces around it.
+func quoteBodyOnLine(doc *lspDocument, quote *MShellParseQuote) string {
+	line := doc.Lines[quote.StartToken.Line-1]
+	return strings.TrimSpace(line[byteIndex(line, quote.StartToken.Column-1)+1 : byteIndex(line, quote.EndToken.Column-1)])
+}
+
+// quoteBodyIndent is the indent of the first line with text after the line
+// a quote opens on, up to its `)`, or false if there is none.
+func quoteBodyIndent(doc *lspDocument, quote *MShellParseQuote) (string, bool) {
+	open, close := quote.StartToken, quote.EndToken
+	if open.Line == close.Line {
+		return "", false
+	}
+	for _, line := range doc.Lines[open.Line : close.Line-1] {
+		if strings.TrimSpace(line) != "" {
+			return leadingIndent(line), true
+		}
+	}
+	closeLine := doc.Lines[close.Line-1]
+	if last := closeLine[:byteIndex(closeLine, close.Column-1)]; strings.TrimSpace(last) != "" {
+		return leadingIndent(last), true
+	}
+	return "", false
+}
+
+// appendQuoteBodyLines appends the lines of a quote's body, without the
+// carriage return of a line that ends in one. Text after `(` and text
+// before `)` each become a line of their own, the first indented with
+// bodyIndent; the lines between are left as they are.
+func appendQuoteBodyLines(lines []string, doc *lspDocument, quote *MShellParseQuote, bodyIndent string) []string {
+	open, close := quote.StartToken, quote.EndToken
+	if open.Line == close.Line {
+		if body := quoteBodyOnLine(doc, quote); body != "" {
+			lines = append(lines, bodyIndent+body)
+		}
+		return lines
+	}
+	openLine := doc.Lines[open.Line-1]
+	// A string may go on past the end of this line, so only the spaces
+	// before the text are dropped.
+	first := strings.TrimSuffix(openLine[byteIndex(openLine, open.Column-1)+1:], "\r")
+	if strings.TrimSpace(first) != "" {
+		lines = append(lines, bodyIndent+strings.TrimLeft(first, " \t"))
+	}
+	for _, line := range doc.Lines[open.Line : close.Line-1] {
+		lines = append(lines, strings.TrimSuffix(line, "\r"))
+	}
+	closeLine := doc.Lines[close.Line-1]
+	if last := closeLine[:byteIndex(closeLine, close.Column-1)]; strings.TrimSpace(last) != "" {
+		lines = append(lines, strings.TrimRight(last, " \t"))
+	}
+	return lines
+}
+
 // leadingIndent is the spaces and tabs at the start of s.
 func leadingIndent(s string) string {
 	return s[:len(s)-len(strings.TrimLeft(s, " \t"))]
@@ -1270,19 +1456,56 @@ func cursorAt(doc *lspDocument, p protocol.Position) (int, int, bool) {
 	return int(p.Line) + 1, doc.runeCol(p) + 1, true
 }
 
-// itemsAtCursor calls visit with each list of items the cursor at 1-based
-// line and rune column col may be in, outermost first: the file's top
-// level, each definition's body, and the items inside every list, quote,
-// block or other item around the cursor. Items not around the cursor are
-// not looked into, so this reads a small part of a large file.
+// itemsAtCursor calls visit with the items around the cursor at 1-based
+// line and rune column col in each list of items the cursor may be in,
+// outermost first: the file's top level, the body of the definition at the
+// cursor, and the items inside every list, quote, block or other item
+// around the cursor.
+//
+// The items of a list are in the order of the text, as the definitions of
+// a file are, so those at the cursor are found by binary search, and the
+// time does not grow with the size of the file. visit gets every item
+// that holds the cursor, the two items before the first of them, and the
+// item after the last; an index under 2 there is an index under 2 in the
+// whole list.
 func itemsAtCursor(file *MShellFile, line, col int, visit func(items []MShellParseItem)) {
 	itemsAtCursorIn(file.Items, line, col, visit)
-	for i := range file.Definitions {
-		itemsAtCursorIn(file.Definitions[i].Items, line, col, visit)
+	// Definitions do not nest, so the cursor is in the last one whose name
+	// is at or before it, if in any.
+	defs := file.Definitions
+	lo, hi := 0, len(defs)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if name := &defs[mid].NameToken; name.Line > line || name.Line == line && name.Column > col {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	if lo > 0 {
+		itemsAtCursorIn(defs[lo-1].Items, line, col, visit)
 	}
 }
 
+// itemsNearCursor is how many items itemsAtCursorIn gives to visit at
+// most: two that may hold the cursor (one ending at it and one starting at
+// it), two before them, and one after.
+const itemsNearCursor = 5
+
 func itemsAtCursorIn(items []MShellParseItem, line, col int, visit func(items []MShellParseItem)) {
+	if len(items) > itemsNearCursor {
+		// lo is the first item that starts after the cursor.
+		lo, hi := 0, len(items)
+		for lo < hi {
+			mid := int(uint(lo+hi) >> 1)
+			if start := items[mid].GetStartToken(); start.Line > line || start.Line == line && start.Column > col {
+				hi = mid
+			} else {
+				lo = mid + 1
+			}
+		}
+		items = items[max(lo-itemsNearCursor+1, 0):min(lo+1, len(items))]
+	}
 	visit(items)
 	for _, item := range items {
 		switch v := item.(type) {

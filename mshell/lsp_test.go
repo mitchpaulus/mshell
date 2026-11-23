@@ -1712,7 +1712,15 @@ func TestLSPLineScanMatchesTokenRange(t *testing.T) {
 // of doc, and gives the text after its edit, or false if it is not offered.
 func prefixQuoteResult(t *testing.T, doc string, line, character uint32) (string, bool) {
 	t.Helper()
-	uri := protocol.DocumentURI("file:///prefix-quote.msh")
+	return rewriteActionResult(t, "Convert to prefix quote", doc, line, character)
+}
+
+// rewriteActionResult runs the refactor.rewrite code action named title at
+// line and character of doc, and gives the text after its edit, or false if
+// it is not offered.
+func rewriteActionResult(t *testing.T, title, doc string, line, character uint32) (string, bool) {
+	t.Helper()
+	uri := protocol.DocumentURI("file:///rewrite.msh")
 	opened := newLSPDocument(doc)
 	server := &lspServer{
 		documents: map[protocol.DocumentURI]*lspDocument{uri: opened},
@@ -1724,7 +1732,7 @@ func prefixQuoteResult(t *testing.T, doc string, line, character uint32) (string
 		Context:      protocol.CodeActionContext{Only: []protocol.CodeActionKind{protocol.RefactorRewrite}},
 	})
 	for _, action := range actions {
-		if action.Title != "Convert to prefix quote" {
+		if action.Title != title {
 			continue
 		}
 		if action.Kind != protocol.RefactorRewrite {
@@ -1953,6 +1961,315 @@ func TestCodeActionPrefixQuoteUnavailable(t *testing.T) {
 	}
 }
 
+func TestCodeActionIffToIf(t *testing.T) {
+	tests := []struct {
+		name      string
+		doc       string
+		line      uint32
+		character uint32
+		want      string
+	}{
+		{
+			name:      "true and false quotes on one line",
+			doc:       "@ok (\"yes\" wl) (\"no\" wl) iff",
+			character: 26,
+			want:      "@ok if \"yes\" wl else \"no\" wl end",
+		},
+		{
+			name:      "true quote only",
+			doc:       "@n 0 > (@items process) iff",
+			character: 25,
+			want:      "@n 0 > if @items process end",
+		},
+		{
+			name:      "cursor at the start of iff",
+			doc:       "true (1) (2) iff wl",
+			character: 13,
+			want:      "true if 1 else 2 end wl",
+		},
+		{
+			name:      "cursor just after iff",
+			doc:       "true (1) (2) iff wl",
+			character: 16,
+			want:      "true if 1 else 2 end wl",
+		},
+		{
+			name:      "spaces inside the parentheses",
+			doc:       "true (  1 ) ( 2  )   iff",
+			character: 22,
+			want:      "true if 1 else 2 end",
+		},
+		{
+			name:      "empty quotes",
+			doc:       "true () () iff",
+			character: 12,
+			want:      "true if else end",
+		},
+		{
+			name:      "empty true quote only",
+			doc:       "true () iff",
+			character: 9,
+			want:      "true if end",
+		},
+		{
+			name:      "no condition before the quote",
+			doc:       "def f (bool --)\n  (1 wl) iff\nend",
+			line:      1,
+			character: 10,
+			want:      "def f (bool --)\n  if 1 wl end\nend",
+		},
+		{
+			name:      "a quote before the two quotes is left",
+			doc:       "(0) true (1) (2) iff",
+			character: 18,
+			want:      "(0) true if 1 else 2 end",
+		},
+		{
+			name:      "nested iff, the inner one",
+			doc:       "true (false (1) (2) iff) (3) iff",
+			character: 21,
+			want:      "true (false if 1 else 2 end) (3) iff",
+		},
+		{
+			name:      "nested iff, the outer one",
+			doc:       "true (false (1) (2) iff) (3) iff",
+			character: 30,
+			want:      "true if false (1) (2) iff else 3 end",
+		},
+		{
+			name:      "unicode before the quotes",
+			doc:       "\"café😀\" wl true (1) (2) iff",
+			character: 28,
+			want:      "\"café😀\" wl true if 1 else 2 end",
+		},
+		{
+			name: "multiline already laid out",
+			doc: "def f (bool --)\n" +
+				"    (\n" +
+				"        \"yes\" wl\n" +
+				"    ) (\n" +
+				"        \"no\" wl\n" +
+				"    ) iff\n" +
+				"end",
+			line:      5,
+			character: 7,
+			want: "def f (bool --)\n" +
+				"    if\n" +
+				"        \"yes\" wl\n" +
+				"    else\n" +
+				"        \"no\" wl\n" +
+				"    end\n" +
+				"end",
+		},
+		{
+			name: "multiline true quote only",
+			doc: "@ok (\n" +
+				"  1 wl\n" +
+				"  2 wl\n" +
+				") iff wl",
+			line:      3,
+			character: 3,
+			want: "@ok if\n" +
+				"  1 wl\n" +
+				"  2 wl\n" +
+				"end wl",
+		},
+		{
+			name: "multiline with bodies next to the parentheses",
+			doc: "@ok (1 wl\n" +
+				"    2 wl) (3 wl\n" +
+				"    4 wl) iff",
+			line:      2,
+			character: 11,
+			want: "@ok if\n" +
+				"    1 wl\n" +
+				"    2 wl\n" +
+				"else\n" +
+				"    3 wl\n" +
+				"    4 wl\n" +
+				"end",
+		},
+		{
+			name: "one line quotes on separate lines",
+			doc: "  @ok (1 wl)\n" +
+				"      (2 wl) iff",
+			line:      1,
+			character: 14,
+			want: "  @ok if\n" +
+				"      1 wl\n" +
+				"  else\n" +
+				"      2 wl\n" +
+				"  end",
+		},
+		{
+			name: "one line quotes indent with tabs after a tab",
+			doc: "\t@ok (1 wl)\n" +
+				"\t(2 wl) iff",
+			line:      1,
+			character: 9,
+			want: "\t@ok if\n" +
+				"\t\t1 wl\n" +
+				"\telse\n" +
+				"\t\t2 wl\n" +
+				"\tend",
+		},
+		{
+			name: "one line quote takes the indent of the other quote's body",
+			doc: "@ok (1 wl) (\n" +
+				"  2 wl\n" +
+				") iff",
+			line:      2,
+			character: 3,
+			want: "@ok if\n" +
+				"  1 wl\n" +
+				"else\n" +
+				"  2 wl\n" +
+				"end",
+		},
+		{
+			name: "iff on its own line",
+			doc: "@ok (1) (2)\n" +
+				"iff",
+			line:      1,
+			character: 1,
+			want: "@ok if\n" +
+				"    1\n" +
+				"else\n" +
+				"    2\n" +
+				"end",
+		},
+		{
+			name: "multiline with an empty quote",
+			doc: "@ok () (\n" +
+				"  2\n" +
+				") iff",
+			line:      2,
+			character: 3,
+			want: "@ok if\n" +
+				"else\n" +
+				"  2\n" +
+				"end",
+		},
+		{
+			name: "comments in the bodies are kept",
+			doc: "@ok ( # yes\n" +
+				"  1 # one\n" +
+				") ( # no\n" +
+				"  2\n" +
+				"  # two\n" +
+				") iff # done",
+			line:      5,
+			character: 3,
+			want: "@ok if\n" +
+				"  # yes\n" +
+				"  1 # one\n" +
+				"else\n" +
+				"  # no\n" +
+				"  2\n" +
+				"  # two\n" +
+				"end # done",
+		},
+		{
+			name: "multiline string in a body is unchanged",
+			doc: "@ok (\"x \n" +
+				"  y\" wl) iff",
+			line:      1,
+			character: 10,
+			want: "@ok if\n" +
+				"  \"x \n" +
+				"  y\" wl\n" +
+				"end",
+		},
+		{
+			name: "multiline with unicode before the quote",
+			doc: "\"😀\" wl @ok (\n" +
+				"  1\n" +
+				") iff",
+			line:      2,
+			character: 4,
+			want: "\"😀\" wl @ok if\n" +
+				"  1\n" +
+				"end",
+		},
+		{
+			name: "carriage returns are kept",
+			doc: "@ok (\r\n" +
+				"  1\r\n" +
+				") (2) iff\r\n" +
+				"3",
+			line:      2,
+			character: 7,
+			want: "@ok if\r\n" +
+				"  1\r\n" +
+				"else\r\n" +
+				"  2\r\n" +
+				"end\r\n" +
+				"3",
+		},
+		{
+			name:      "in a quote",
+			doc:       "[1 2] (2 > (\"big\") (\"small\") iff) map",
+			character: 30,
+			want:      "[1 2] (2 > if \"big\" else \"small\" end) map",
+		},
+		{
+			name:      "in an if body",
+			doc:       "true if\n  false (1) (2) iff\nend",
+			line:      1,
+			character: 17,
+			want:      "true if\n  false if 1 else 2 end\nend",
+		},
+		{
+			name:      "in a match arm",
+			doc:       "1 match\n  1 : true (1) (2) iff\nend",
+			line:      1,
+			character: 20,
+			want:      "1 match\n  1 : true if 1 else 2 end\nend",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := rewriteActionResult(t, iffToIfTitle, tc.doc, tc.line, tc.character)
+			if !ok {
+				t.Fatal("expected an iff to if code action")
+			}
+			if got != tc.want {
+				t.Fatalf("got\n%s\nwant\n%s", got, tc.want)
+			}
+			// The rewrite parses.
+			if _, err := NewMShellParser(NewLexer(got, nil)).ParseFile(); err != nil {
+				t.Fatalf("the rewrite does not parse: %v\n%s", err, got)
+			}
+		})
+	}
+}
+
+func TestCodeActionIffToIfUnavailable(t *testing.T) {
+	tests := []struct {
+		name      string
+		doc       string
+		line      uint32
+		character uint32
+	}{
+		{name: "cursor on the condition", doc: "true (1) (2) iff", character: 2},
+		{name: "cursor in a quote", doc: "true (1) (2) iff", character: 6},
+		{name: "cursor past iff", doc: "true (1) (2) iff wl", character: 17},
+		{name: "no quote before iff", doc: "true @q iff", character: 9},
+		{name: "iff alone", doc: "iff", character: 1},
+		{name: "a word between the quote and iff", doc: "true (1) dup iff", character: 14},
+		{name: "comment before iff", doc: "true (1) # note\niff", line: 1, character: 1},
+		{name: "comment between the quotes", doc: "true (1) # note\n(2) iff", line: 1, character: 5},
+		{name: "prefix quote", doc: "true iff. 1 end", character: 6},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, ok := rewriteActionResult(t, iffToIfTitle, tc.doc, tc.line, tc.character); ok {
+				t.Fatalf("expected no iff to if code action, got %q", got)
+			}
+		})
+	}
+}
+
 func TestCodeActionUnavailableOutsideListOrForQuickFix(t *testing.T) {
 	uri := protocol.DocumentURI("file:///no-quote-list.msh")
 	doc := "word [echo arg]"
@@ -1985,6 +2302,84 @@ func TestCodeActionUnavailableOutsideListOrForQuickFix(t *testing.T) {
 		t.Fatalf("expected no refactor for a quick-fix-only request, got %+v", quickFixOnly)
 	}
 }
+// TestCodeActionsFindCursorInLongLists checks the rewrites in lists of
+// more items than itemsAtCursor gives to an action (itemsNearCursor), and
+// in a file of many definitions, where the items and the definition at
+// the cursor are found by binary search.
+func TestCodeActionsFindCursorInLongLists(t *testing.T) {
+	const iff, prefix = iffToIfTitle, "Convert to prefix quote"
+	pad := strings.Repeat("1 drop ", 20)
+	at := func(s string) uint32 { return uint32(len(pad) + len(s)) }
+	wrap := func(s string) string { return pad + s + " " + pad }
+
+	var defs strings.Builder
+	for i := range 30 {
+		fmt.Fprintf(&defs, "def f%d (--)\n    %s(%strue (1) (2) iff %s) drop %s\nend\n", i, pad, pad, pad, pad)
+	}
+	inDef := func(i int, line string) string {
+		lines := strings.Split(defs.String(), "\n")
+		lines[3*i+1] = line
+		return strings.Join(lines, "\n")
+	}
+	defLine := "    " + pad + "(" + pad + "true (1) (2) iff " + pad + ") drop " + pad
+	defWant := "    " + pad + "(" + pad + "true if 1 else 2 end " + pad + ") drop " + pad
+	defAt := uint32(len("    "+pad+"("+pad) + len("true (1) (2) i"))
+
+	tests := []struct {
+		name, title, doc string
+		line, character  uint32
+		want             string
+	}{
+		{"iff in the middle", iff, wrap("true (1) (2) iff"), 0, at("true (1) (2) i"), wrap("true if 1 else 2 end")},
+		{"iff just after its quote", iff, wrap("true (1) (2)iff"), 0, at("true (1) (2)"), wrap("true if 1 else 2 end")},
+		{"iff with one quote", iff, wrap("true (1) iff"), 0, at("true (1) i"), wrap("true if 1 end")},
+		{"iff last", iff, pad + "true (1) (2) iff", 0, at("true (1) (2) iff"), pad + "true if 1 else 2 end"},
+		{"iff and one quote first", iff, "(1) iff " + pad, 0, 5, "if 1 end " + pad},
+		{"iff and two quotes first", iff, "(1) (2) iff " + pad, 0, 9, "if 1 else 2 end " + pad},
+		{"prefix quote, cursor in the quote", prefix, wrap("[1] (2 *) map"), 0, at("[1] (2"), wrap("[1] map. 2 * end")},
+		{"prefix quote, cursor between quote and word", prefix, wrap("[1] (2 *)   map"), 0, at("[1] (2 *) "), wrap("[1] map. 2 * end")},
+		{"prefix quote, cursor at the end of the word", prefix, wrap("[1] (2 *) map"), 0, at("[1] (2 *) map"), wrap("[1] map. 2 * end")},
+		{"prefix quote last", prefix, pad + "[1] (2 *) map", 0, at("[1] (2 *) m"), pad + "[1] map. 2 * end"},
+		{"first definition", iff, defs.String(), 1, defAt, inDef(0, defWant)},
+		{"middle definition", iff, defs.String(), 3*14 + 1, defAt, inDef(14, defWant)},
+		{"last definition", iff, defs.String(), 3*29 + 1, defAt, inDef(29, defWant)},
+	}
+	if lines := strings.Split(defs.String(), "\n"); lines[1] != defLine {
+		t.Fatalf("definition line is %q, want %q", lines[1], defLine)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := rewriteActionResult(t, tt.title, tt.doc, tt.line, tt.character)
+			if !ok {
+				t.Fatalf("%q not offered", tt.title)
+			}
+			if got != tt.want {
+				t.Fatalf("got:\n%s\nwant:\n%s", got, tt.want)
+			}
+		})
+	}
+
+	// The list at the cursor, in a long list and a long list of lists.
+	for _, doc := range []string{wrap("[a b]"), "[" + wrap("[a b]") + "]"} {
+		uri := protocol.DocumentURI("file:///lists.msh")
+		server := &lspServer{documents: map[protocol.DocumentURI]*lspDocument{uri: newLSPDocument(doc)}}
+		pos := protocol.Position{Character: uint32(strings.Index(doc, "a b"))}
+		var edits []protocol.TextEdit
+		for _, action := range server.codeActions(protocol.CodeActionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Range:        protocol.Range{Start: pos, End: pos},
+			Context:      protocol.CodeActionContext{Only: []protocol.CodeActionKind{protocol.RefactorRewrite}},
+		}) {
+			if action.Title == quoteAllLiteralsTitle {
+				edits = action.Edit.Changes[uri]
+			}
+		}
+		if want := strings.Replace(doc, "[a b]", "['a' 'b']", 1); len(edits) != 2 || applyTextEdits(t, doc, edits) != want {
+			t.Fatalf("quoting the list at the cursor of %q gave edits %+v", doc, edits)
+		}
+	}
+}
+
 
 func TestCodeActionOnlyTargetsParsedListValues(t *testing.T) {
 	uri := protocol.DocumentURI("file:///parsed-lists.msh")

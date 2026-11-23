@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a definition `helper`, `[git helper -v]` becomes `['git' helper '-v']`.
 - The language server offers a `Convert to prefix quote` code action that rewrites a quote followed by a word, such as `(2 *) map`, as `map. 2 * end`.
   A quote on one line stays on one line; a multiline quote gets `map.` and `end` on their own lines.
+- The language server offers a `Convert iff to if block` code action on an `iff` that has its quotes written just before it:
+  `@ok ("yes" wl) ("no" wl) iff` becomes `@ok if "yes" wl else "no" wl end`, and `@ok ("yes" wl) iff` becomes `@ok if "yes" wl end`.
+  Written on one line it stays on one line; otherwise `else` and `end` get their own lines.
 - Enums: `enum Shape = circle float | rect float float | dot end` declares a type whose values are one of its members.
   A member's name makes a value from its payload (`2.0 circle`), and a `match` arm takes it apart (`circle r : ...`).
   The enum's name is a match pattern for any of its members (`Shape s : ...`).
