@@ -107,6 +107,7 @@ var BuiltInList = map[string]struct{}{
 	"fmBindingErase": {},
 	"fmBindingList": {},
 	"setPrompt": {},
+	"setRightPrompt": {},
 	"hour": {},
 	"httpGet": {},
 	"httpPost": {},
