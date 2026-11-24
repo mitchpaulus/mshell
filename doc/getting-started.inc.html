@@ -158,6 +158,41 @@ A command the prompt is running is stopped too.
 The error is printed once, not again while the prompt keeps failing the same way.
 </p>
 
+<h2 id="getting-started-right-prompt">Right prompt</h2>
+
+<p>
+<code>setRightPrompt</code> sets a second prompt, shown at the right edge of the row the command is typed on.
+It takes the same kind of quotation as <code>setPrompt</code>: it is given a <code>PromptInfo</code> and returns a list of <code>PromptItem</code> values.
+</p>
+
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">myRightPrompt</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">PromptInfo</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellLITERAL">new</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">PromptItem</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellVARSTORE">info!</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span>
+        <span class="mshellLITERAL">attrFaint</span> <span class="mshellLITERAL">setTextAttr</span>
+        <span class="mshellFORMATSTRINGSTART">$&#34;{</span><span class="mshellVARRETRIEVE">@info</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">lastDurationMs</span><span class="mshellQUESTION">?</span><span class="mshellFORMATSTRINGEND">} ms&#34;</span> <span class="mshellLITERAL">promptText</span>
+        <span class="mshellLITERAL">resetStyle</span>
+    <span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+<span class="mshellEND">end</span>
+
+<span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">myRightPrompt</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">setRightPrompt</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+The right prompt is one line, so <code>promptNewline</code> is an error in it.
+It is shown while the command is on one row and leaves at least one blank cell before it.
+When the command, or the history suggestion after it, grows past that, or the command takes more than one row, the right prompt is hidden until there is room again.
+A right prompt wider than the terminal is not shown.
+There is no built-in right prompt.
+</p>
+
+<p>
+The right prompt runs after the prompt, with the same <code>PromptInfo</code>, on its own stack and with its own 3 second limit.
+If it fails, no right prompt is shown, and the error is printed once.
+When both prompts use <code>setWindowTitle</code>, the title from <code>setPrompt</code> is used.
+</p>
+
 <p>
 <code>setCursorShape</code> sets the cursor's shape while the shell reads a command:
 <code>blinkingBlock</code>, <code>steadyBlock</code>, <code>blinkingUnderline</code>, <code>steadyUnderline</code>, <code>blinkingBar</code> or <code>steadyBar</code>.

@@ -1,0 +1,2 @@
+# The right prompt quote must return a list of PromptItem values.
+(drop ["< "]) setRightPrompt

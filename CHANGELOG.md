@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   text, line breaks, colors (16, 256 or RGB), text attributes, the window title and hyperlinks.
   It is given a `PromptInfo` with the stack's depth and types, and whether the last line succeeded, its exit code and how long it took.
   A prompt that fails, takes longer than 3 seconds, or is interrupted with Ctrl-C is stopped, and the built-in prompt is shown.
+- `setRightPrompt` sets a right prompt, from the same kind of quotation as `setPrompt`.
+  It is one line, shown at the right edge of the command's row, and hidden while the command reaches it or takes more than one row.
 - `setCursorShape` sets the cursor's shape while the interactive shell reads a command.
 - The language server supports goto declaration and goto definition on a `type` alias, an enum, an enum member, or a definition,
   going to its declaration in the file or in the standard library or init file.

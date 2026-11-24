@@ -36,3 +36,10 @@ myPrompt (str) map unlines w
 
 (myPrompt) setPrompt
 steadyBar setCursorShape
+
+def myRightPrompt (PromptInfo -- new [PromptItem])
+    info!
+    [attrFaint setTextAttr $"{@info :lastDurationMs?}ms" promptText resetStyle]
+end
+
+(myRightPrompt) setRightPrompt

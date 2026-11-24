@@ -547,6 +547,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("runtime", "( -- str)")
 	b.reg("hostname", "( -- str)")
 	b.reg("setPrompt", "((PromptInfo -- [PromptItem]) -- )")
+	b.reg("setRightPrompt", "((PromptInfo -- [PromptItem]) -- )")
 	b.reg("setCursorShape", "(CursorShape -- )")
 	b.reg("abbrAdd", "(Abbr -- )")
 	b.reg("abbrErase", "(AbbrMatch -- )")

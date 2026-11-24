@@ -15,6 +15,8 @@ import (
 // The interactive prompt a user defines (ai/prompt-design.typ). The init
 // file registers a quote with setPrompt; before each prompt the shell runs
 // it on a PromptInfo and paints the list of PromptItem values it returns.
+// A quote registered with setRightPrompt is run the same way, and its one
+// line is painted at the right edge of the command's row.
 // Text items are sanitized and style items take no cells, so the shell
 // lays the prompt out exactly, as it does command text.
 
@@ -338,11 +340,16 @@ func sgr(params ...int) string {
 }
 
 // renderPrompt turns the list a prompt quote returned into a prompt to
-// paint, or says what is wrong with it.
-func renderPrompt(obj MShellObject) (promptRender, error) {
+// paint, or says what is wrong with it. A right prompt is one line, so
+// promptNewline is wrong in it.
+func renderPrompt(obj MShellObject, right bool) (promptRender, error) {
+	name := "prompt"
+	if right {
+		name = "right prompt"
+	}
 	list, ok := obj.(*MShellList)
 	if !ok {
-		return promptRender{}, fmt.Errorf("the prompt must return a list of PromptItem values, not a %s", obj.TypeName())
+		return promptRender{}, fmt.Errorf("the %s must return a list of PromptItem values, not a %s", name, obj.TypeName())
 	}
 	var r promptRender
 	var text strings.Builder
@@ -352,10 +359,10 @@ func renderPrompt(obj MShellObject) (promptRender, error) {
 	for i, item := range list.Items {
 		e, ok := item.(*MShellEnum)
 		if !ok || e.EnumName != "PromptItem" {
-			return promptRender{}, fmt.Errorf("item %d of the prompt is a %s, not a PromptItem", i, item.TypeName())
+			return promptRender{}, fmt.Errorf("item %d of the %s is a %s, not a PromptItem", i, name, item.TypeName())
 		}
 		bad := func(format string, args ...any) error {
-			return fmt.Errorf("item %d of the prompt, '%s': %s", i, e.Member, fmt.Sprintf(format, args...))
+			return fmt.Errorf("item %d of the %s, '%s': %s", i, name, e.Member, fmt.Sprintf(format, args...))
 		}
 		switch e.Member {
 		case "promptText":
@@ -365,6 +372,9 @@ func renderPrompt(obj MShellObject) (promptRender, error) {
 			}
 			text.WriteString(terminalSafeText(s, false))
 		case "promptNewline":
+			if right {
+				return promptRender{}, bad("the right prompt is one line")
+			}
 			text.WriteByte('\n')
 		case "setFgColorRgb", "setBgColorRgb":
 			var rgb [3]int
@@ -541,8 +551,24 @@ func (state *TermState) promptInfo() *MShellDict {
 // the same way. The terminal is in its normal mode, so Ctrl-C arrives as an
 // interrupt.
 func (state *TermState) userPrompt() (promptRender, bool) {
-	ev := &state.evalState
-	quote := ev.PromptQuote
+	return state.runPromptQuote(state.evalState.PromptQuote, false)
+}
+
+// userRightPrompt runs the right prompt quote the init file set, as
+// userPrompt runs the prompt quote. When there is no quote, or it gives
+// nothing to use, there is no right prompt.
+func (state *TermState) userRightPrompt() promptRender {
+	render, _ := state.runPromptQuote(state.evalState.RightPromptQuote, true)
+	return render
+}
+
+// runPromptQuote runs the prompt quote, or the right prompt quote, for
+// userPrompt and userRightPrompt.
+func (state *TermState) runPromptQuote(quote *MShellQuotation, right bool) (promptRender, bool) {
+	what, fallback, lastProblem := "The prompt", "Showing the built-in prompt.", &state.promptProblem
+	if right {
+		what, fallback, lastProblem = "The right prompt", "Showing no right prompt.", &state.rightPromptProblem
+	}
 	if quote == nil {
 		return promptRender{}, false
 	}
@@ -555,24 +581,24 @@ func (state *TermState) userPrompt() (promptRender, bool) {
 	// A quote that finished with its list is shown, even if the time ran
 	// out as it finished.
 	var render promptRender
-	problem := run.problem("The prompt", "the shell", promptTimeout)
+	problem := run.problem(what, "the shell", promptTimeout)
 	if problem == "" && len(stack) != 1 {
-		problem = fmt.Sprintf("The prompt must leave one list on the stack, and left %d values.\n", len(stack))
+		problem = fmt.Sprintf("%s must leave one list on the stack, and left %d values.\n", what, len(stack))
 	} else if problem == "" {
 		var err error
-		if render, err = renderPrompt(stack[0]); err != nil {
+		if render, err = renderPrompt(stack[0], right); err != nil {
 			problem = err.Error() + ".\n"
 		}
 	}
 	if problem != "" {
-		if problem != state.promptProblem {
+		if problem != *lastProblem {
 			fmt.Fprint(os.Stderr, terminalSafeText(problem, true))
-			fmt.Fprintln(os.Stderr, "Showing the built-in prompt.")
+			fmt.Fprintln(os.Stderr, fallback)
 		}
-		state.promptProblem = problem
+		*lastProblem = problem
 		return promptRender{}, false
 	}
-	state.promptProblem = ""
+	*lastProblem = ""
 	return render, true
 }
 

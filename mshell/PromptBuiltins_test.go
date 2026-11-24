@@ -188,7 +188,7 @@ func TestRenderPromptHandlesEveryItem(t *testing.T) {
 			payloads = next
 		}
 		for _, payload := range payloads {
-			r, err := renderPrompt(promptList(promptItem(member, payload...)))
+			r, err := renderPrompt(promptList(promptItem(member, payload...)), false)
 			if err != nil {
 				t.Errorf("%s: %v", describeItem(member, payload), err)
 				continue

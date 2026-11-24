@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 )
 
 type commandViewport struct {
@@ -163,6 +164,16 @@ func (state *TermState) appendCommandPaint(dst []byte, region ProbeRegion) ([]by
 	// command. It may be the entire viewport on a one-row terminal.
 	paintedLayoutRows := visibleEnd-int(view.Start)
 	if view.Rows > paintedLayoutRows && paintedLayoutRows > 0 { dst = append(dst, '\r', '\n') }
+	// The right prompt shares the row of a one-row command, with at least one
+	// blank cell between them. The cursor is then on its row and before it, so
+	// a terminal that wraps the row again after a resize adds no rows above
+	// the cursor.
+	if width := state.rightPromptWidth; width > 0 && !next.PromptHidden && view.Rows == 1 && len(layout.Rows) == 1 &&
+		region.commandStartCol()+layout.Rows[0].Width+1+width <= region.Columns {
+		dst = append(dst, "\033[0m"...)
+		dst = appendProbeCursorControl(dst, int(region.Columns-width)+1, 'G')
+		dst = state.appendRightPrompt(dst)
+	}
 	// Each trailer row is truncated to atoms that fit one row, so painting it
 	// can never wrap. CRLF first cancels any pending wrap from the row above.
 	for i, line := range trailerLines {
@@ -282,6 +293,20 @@ func (state *TermState) prepareMeasuredCommandDisplay(writer io.Writer, readTerm
 	})
 }
 
+// appendRightPrompt writes the right prompt's text and styles from the
+// cursor, and turns its styles off after it.
+func (state *TermState) appendRightPrompt(dst []byte) []byte {
+	source, styles := state.rightPrompt.Text, state.rightPrompt.Styles
+	next := 0
+	for _, atom := range state.rightPromptAtoms {
+		for ; next < len(styles) && styles[next].Offset <= atom.SourceStart; next++ { dst = append(dst, styles[next].Seq...) }
+		dst = append(dst, atom.displayText(source)...)
+	}
+	// A hyperlink is ended by the style after its text.
+	for ; next < len(styles); next++ { dst = append(dst, styles[next].Seq...) }
+	return append(dst, "\033[0m"...)
+}
+
 // paintPrompt lays out the known prompt text with the same atoms, measured
 // widths, placeholders and wrap rules as command text. The caller is in raw
 // mode. Starting at column one and ending at the layout's cursor establishes
@@ -296,10 +321,26 @@ func (state *TermState) paintPrompt(writer io.Writer, readTerminal func() (Termi
 	region := ProbeRegion{RelativeOrigin: true, OriginCol: 1, PaintedRows: 1, ScreenRows: state.numRows, Columns: columns}
 	atoms := segmentAtomsInto(nil, source)
 	misses := resolveCachedWidths(nil, source, atoms, &state.widthCache, &state.eligibilityCache, columns)
+	// The right prompt's unknown widths are measured with the prompt's.
+	right := state.rightPrompt.Text
+	state.rightPromptAtoms = segmentAtomsInto(state.rightPromptAtoms, right)
+	for _, miss := range resolveCachedWidths(nil, right, state.rightPromptAtoms, &state.widthCache, &state.eligibilityCache, columns) {
+		if len(misses) < maxWidthProbes && !slices.Contains(misses, miss) { misses = append(misses, miss) }
+	}
 	if len(misses) > 0 && state.numRows > 1 {
 		if err := state.measureWidths(writer, readTerminal, &region, &state.widthBatch, misses); err != nil { return err }
 	}
 	finishWidthResolution(source, atoms, &state.widthCache)
+	finishWidthResolution(right, state.rightPromptAtoms, &state.widthCache)
+	// Like a command's row, the right prompt keeps each atom RequiredCells
+	// from the edge, so its width includes the blank cells that takes.
+	var width, blank Cells
+	for i := len(state.rightPromptAtoms)-1; i >= 0; i-- {
+		atom := state.rightPromptAtoms[i]
+		blank = max(blank, atom.RequiredCells-atom.Width-width)
+		width += atom.Width
+	}
+	state.rightPromptWidth = width+blank
 	layout := layoutAtomsInto(nil, atoms, ByteOffset(len(source)), 0, columns)
 	// Each style is written before the first atom at or after its offset.
 	// A background color is turned off for each line break and set again

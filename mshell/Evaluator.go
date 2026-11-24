@@ -529,6 +529,8 @@ type EvalState struct {
 	// interactive prompt (Prompt.go), and CursorShape the CursorShape
 	// member setCursorShape chose, or "".
 	PromptQuote *MShellQuotation
+	// RightPromptQuote is the quote setRightPrompt registered.
+	RightPromptQuote *MShellQuotation
 	CursorShape string
 	// Abbrs are the abbreviations abbrAdd added, oldest first (Abbr.go),
 	// and AbbrWarnings the lines about abbreviations that never expand and
@@ -12102,6 +12104,16 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: 'setPrompt' takes a quotation, found a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
 					state.PromptQuote = quote
+				case "setRightPrompt":
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'setRightPrompt' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					quote, ok := obj.(*MShellQuotation)
+					if !ok {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: 'setRightPrompt' takes a quotation, found a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+					state.RightPromptQuote = quote
 				case "setCursorShape":
 					obj, err := stack.Pop()
 					if err != nil {

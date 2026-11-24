@@ -962,6 +962,14 @@ type TermState struct {
 	promptStyles   []promptStyle // Escape sequences within promptText.
 	// promptProblem is the last error the prompt quote gave, printed once.
 	promptProblem string
+	// rightPrompt is what the setRightPrompt quote returned for this prompt.
+	// It is painted at the right edge of the command's row while the command
+	// is one row and leaves a blank cell before it.
+	rightPrompt      promptRender
+	rightPromptAtoms []DisplayAtom // rightPrompt.Text with widths resolved, set by paintPrompt.
+	rightPromptWidth Cells         // Cells rightPromptAtoms take, with any blank cells kept after them; 0 when there is no right prompt.
+	// rightPromptProblem is the last error the right prompt quote gave, printed once.
+	rightPromptProblem string
 	// abbrProblem is the last error an abbreviation's quote gave, and
 	// abbrMessage the one shown below the command line until the next key
 	// (Abbr.go).
@@ -4128,7 +4136,8 @@ func (state *TermState) printPrompt() error {
 	// The prompt quote runs first, so what it prints comes before the
 	// prompt, which again starts on a line of its own.
 	render, userPrompt := state.userPrompt()
-	if state.evalState.PromptQuote != nil {
+	state.rightPrompt = state.userRightPrompt()
+	if state.evalState.PromptQuote != nil || state.evalState.RightPromptQuote != nil {
 		state.ensurePromptNewline()
 	}
 
@@ -4160,8 +4169,11 @@ func (state *TermState) printPrompt() error {
 		}
 		render = defaultPrompt(cwd, err == nil, len(state.stack))
 	}
+	// The prompt's window title is used when both prompts set one.
 	if render.HasTitle {
 		writeWindowTitle(render.Title)
+	} else if state.rightPrompt.HasTitle {
+		writeWindowTitle(state.rightPrompt.Title)
 	}
 
 	if err = state.enterRawMode(); err != nil {
