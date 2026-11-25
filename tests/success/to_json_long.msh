@@ -1,0 +1,4 @@
+# Every item on its own line. Empty lists and dictionaries stay closed.
+{ "a": 1, "b": [1 2.5 "x, [y]: {z}"], "c": {}, "d": [], "e": { "f": [[] [true]] } } toJsonLong wl
+[] toJsonLong wl
+"only \"a\" string" toJsonLong wl

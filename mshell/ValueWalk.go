@@ -633,6 +633,8 @@ func equalsIter(a, b MShellObject) (bool, error) {
 //  2. A list of short items, several items per line.
 //  3. A table: one item per line, with the fields of each item lined up.
 //  4. One item per line, each item laid out by these same rules.
+//
+// `toJsonLong`, which always writes one item per line, is at the end of the file.
 
 const (
 	fjLineWidth = 120 // Longest line to write, counting the indent.
@@ -1355,4 +1357,77 @@ func fracturedJson(compact string) (string, error) {
 	f := fjWriter{s: compact, nodes: p.nodes, buf: make([]byte, 0, len(compact)*2)}
 	f.value(root, 0, 0, false)
 	return string(f.buf), nil
+}
+
+// longJson lays out compact JSON text with every item of a list or dictionary
+// on its own line, indented fjIndent spaces per level. This is `toJsonLong`.
+// An empty list or dictionary stays as `[]` or `{}`.
+// Text nested more than fjMaxDepth levels is an error, for the same reason as
+// in fracturedJson: the indent makes the output grow with the square of the depth.
+func longJson(compact string) (string, error) {
+	buf := make([]byte, 0, len(compact)*2)
+	depth := 0
+	newline := func() {
+		buf = append(buf, '\n')
+		for n := depth * fjIndent; n > 0; n-- {
+			buf = append(buf, ' ')
+		}
+	}
+	// skipSpace returns the position of the first character at or after i
+	// that is not white space.
+	skipSpace := func(i int) int {
+		for i < len(compact) && (compact[i] == ' ' || compact[i] == '\t' || compact[i] == '\r' || compact[i] == '\n') {
+			i++
+		}
+		return i
+	}
+	for i := 0; i < len(compact); {
+		c := compact[i]
+		switch c {
+		case '"':
+			end := i + 1
+			for end < len(compact) && compact[end] != '"' {
+				if compact[end] == '\\' {
+					end++
+				}
+				end++
+			}
+			end = min(end+1, len(compact))
+			buf = append(buf, compact[i:end]...)
+			i = end
+		case '[', '{':
+			buf = append(buf, c)
+			i = skipSpace(i + 1)
+			if i < len(compact) && compact[i] == c+2 { // ']' and '}' are two after '[' and '{'.
+				buf = append(buf, c+2)
+				i++
+				break
+			}
+			depth++
+			if depth > fjMaxDepth {
+				return "", fmt.Errorf("Cannot lay out JSON nested more than %d levels deep.\n", fjMaxDepth)
+			}
+			newline()
+		case ']', '}':
+			if depth > 0 {
+				depth--
+			}
+			newline()
+			buf = append(buf, c)
+			i++
+		case ',':
+			buf = append(buf, c)
+			newline()
+			i = skipSpace(i + 1)
+		case ':':
+			buf = append(buf, ": "...)
+			i = skipSpace(i + 1)
+		case ' ', '\t', '\r', '\n':
+			i++
+		default:
+			buf = append(buf, c)
+			i++
+		}
+	}
+	return string(buf), nil
 }

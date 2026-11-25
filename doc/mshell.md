@@ -1407,6 +1407,7 @@ end wl # Output: 11
 - `deepCopy`: Copy a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original. A list reached through two places is copied twice; immutable values and quotes are shared. A value that contains itself is an error. `(a -- a)`
 - `toJson`: Serialize any value to a JSON string. Binary is base64 encoded; typed wrappers like path, date, Maybe, and pipe preserve their shape. Types that map directly to JSON types round-trip; extended types (like path or date) do not. `(a -- str)`
 - `toJsonFractured`: Same JSON as `toJson`, laid out over several lines for reading (FracturedJson style): short lists and dicts stay on one line, long lists of short items go several per line, a list of similar dicts or lists becomes a table with the fields lined up, anything else is one item per line. Lines are at most 120 characters where possible, indent is 4 spaces. Fails on a value nested more than 1000 levels deep. `(a -- str)`
+- `toJsonLong`: Same JSON as `toJson`, with every list item and dict entry on its own line, indent 4 spaces; an empty list or dict is `[]` or `{}`. Use for files compared line by line. Fails on a value nested more than 1000 levels deep. `(a -- str)`
 - `sleep`: Sleep for a floating-point number of seconds. `(numeric -- )`
 - `nullDevice`: Cross-platform reference to either `/dev/null` or `NUL`. `( -- path)`
 - `typeof`: Return the type name of the top stack item `(a -- str)`

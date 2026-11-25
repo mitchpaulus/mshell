@@ -275,6 +275,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("numFmt", "(int | float NumFmtOptions -- str)")
 	b.reg("toJson", "(a -- str)")
 	b.reg("toJsonFractured", "(a -- str)")
+	b.reg("toJsonLong", "(a -- str)")
 	b.reg("typeof", "(a -- str)")
 
 	// String below, delimiter on top.

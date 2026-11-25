@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -459,5 +460,60 @@ func BenchmarkFracturedJson(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// The output of longJson is the same value, with one item per line.
+func TestLongJson(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`{"a": 1, "b": [1, {}], "c": "x, [y]: {z} \" \\"}`,
+			"{\n    \"a\": 1,\n    \"b\": [\n        1,\n        {}\n    ],\n    \"c\": \"x, [y]: {z} \\\" \\\\\"\n}"},
+		{`[]`, `[]`},
+		{`[ ]`, `[]`},
+		{`-1.5e3`, `-1.5e3`},
+	}
+	for _, tc := range cases {
+		if got, err := longJson(tc.in); err != nil || got != tc.want {
+			t.Errorf("input %s\ngot:\n%s\nwant:\n%s", tc.in, got, tc.want)
+		}
+	}
+
+	r := rand.New(rand.NewSource(2))
+	for i := 0; i < 20000; i++ {
+		var sb strings.Builder
+		fjRandomJson(r, 4, &sb)
+		compact := sb.String()
+		got, err := longJson(compact)
+		if err != nil {
+			t.Fatalf("unexpected error: %v\n%s", err, compact)
+		}
+		var want, have any
+		if err := json.Unmarshal([]byte(compact), &want); err != nil {
+			t.Fatalf("test input is not JSON: %v\n%s", err, compact)
+		}
+		if err := json.Unmarshal([]byte(got), &have); err != nil {
+			t.Fatalf("output is not JSON: %v\n%s", err, got)
+		}
+		if !reflect.DeepEqual(want, have) {
+			t.Fatalf("value changed.\ninput: %s\noutput:\n%s", compact, got)
+		}
+		// Go's own indenting gives the same text.
+		var std bytes.Buffer
+		if err := json.Indent(&std, []byte(compact), "", "    "); err != nil {
+			t.Fatalf("json.Indent: %v", err)
+		}
+		if got != std.String() {
+			t.Fatalf("differs from json.Indent.\ngot:\n%s\nwant:\n%s", got, std.String())
+		}
+	}
+
+	nested := func(depth int) string {
+		return strings.Repeat("[", depth) + "1" + strings.Repeat("]", depth)
+	}
+	if _, err := longJson(nested(fjMaxDepth)); err != nil {
+		t.Errorf("%d levels: unexpected error: %v", fjMaxDepth, err)
+	}
+	if _, err := longJson(nested(fjMaxDepth + 1)); err == nil {
+		t.Errorf("%d levels: want an error", fjMaxDepth+1)
 	}
 }

@@ -10753,6 +10753,21 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.CheckedFailure(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
 					}
 					stack.Push(MShellString{fractured})
+				case "toJsonLong":
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toJsonLong' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					jsonStr, err := renderOrError(obj1, flavorJson)
+					if err != nil {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+					}
+					long, err := longJson(jsonStr)
+					if err != nil {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(MShellString{long})
 				case "typeof":
 					obj1, err := stack.Pop()
 					if err != nil {
