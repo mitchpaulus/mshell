@@ -1,8 +1,13 @@
 package main
 
 import (
+	"encoding/json"
+	"math/rand"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // deepChain builds a value n levels deep whose containers alternate: a list
@@ -257,5 +262,105 @@ func TestEnumRender(t *testing.T) {
 	str := &MShellEnum{EnumName: "T", Member: "leaf", Payload: []MShellObject{MShellString{Content: "1"}}}
 	if eq, err := leaf(1).Equals(str); err != nil || eq {
 		t.Fatalf("payloads of different kinds: %v, %v", eq, err)
+	}
+}
+
+// fjRandomJson writes compact JSON for a random value nested at most depth levels.
+func fjRandomJson(r *rand.Rand, depth int, sb *strings.Builder) {
+	kind := r.Intn(7)
+	if depth == 0 && kind >= 5 {
+		kind = r.Intn(5)
+	}
+	switch kind {
+	case 0:
+		sb.WriteString(strconv.Itoa(r.Intn(100000) - 500))
+	case 1:
+		sb.WriteString(strconv.FormatFloat(r.Float64()*1000, 'f', r.Intn(4), 64))
+	case 2:
+		sb.WriteString([]string{"true", "false", "null", "1e+30"}[r.Intn(4)])
+	case 3, 4:
+		sb.WriteString(strconv.Quote([]string{"", "a", "é, ü", `q"[{`, "some longer text"}[r.Intn(5)]))
+	case 5:
+		sb.WriteByte('[')
+		// Often make the items alike, so tables are tried.
+		n, seed := r.Intn(14), r.Int63()
+		alike := r.Intn(2) == 0
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			if alike && r.Intn(8) > 0 {
+				fjRandomJson(rand.New(rand.NewSource(seed+int64(r.Intn(3)))), depth-1, sb)
+			} else {
+				fjRandomJson(r, depth-1, sb)
+			}
+		}
+		sb.WriteByte(']')
+	case 6:
+		sb.WriteByte('{')
+		keys := r.Perm(8)[:r.Intn(8)]
+		for i, k := range keys {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(strconv.Quote("key" + strings.Repeat("x", k)))
+			sb.WriteString(": ")
+			fjRandomJson(r, depth-1, sb)
+		}
+		sb.WriteByte('}')
+	}
+}
+
+func TestFracturedJsonKeepsValue(t *testing.T) {
+	r := rand.New(rand.NewSource(1))
+	for i := 0; i < 50000; i++ {
+		var sb strings.Builder
+		fjRandomJson(r, 4, &sb)
+		compact := sb.String()
+		got := fracturedJson(compact)
+		var want, have any
+		if err := json.Unmarshal([]byte(compact), &want); err != nil {
+			t.Fatalf("test input is not JSON: %v\n%s", err, compact)
+		}
+		if err := json.Unmarshal([]byte(got), &have); err != nil {
+			t.Fatalf("output is not JSON: %v\n%s", err, got)
+		}
+		if !reflect.DeepEqual(want, have) {
+			t.Fatalf("value changed.\ninput: %s\noutput:\n%s", compact, got)
+		}
+		for _, line := range strings.Split(got, "\n") {
+			if strings.HasSuffix(line, " ") {
+				t.Fatalf("line ends with a space: %q\n%s", line, got)
+			}
+			if utf8.RuneCountInString(line) > fjLineWidth {
+				t.Fatalf("line longer than %d: %q", fjLineWidth, line)
+			}
+		}
+	}
+}
+
+func TestFracturedJsonLayouts(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`{"a": 1, "b": [1, 2]}`, `{ "a": 1, "b": [1, 2] }`},
+		{`[[[1]]]`, "[\n    [ [1] ]\n]"},
+		{`not json`, `not json`},
+		{`[{"a": 1, "b": 2.5}, {"b": 10}, {"a": 100, "b": 3}` + strings.Repeat(`, {"a": 7, "b": 7}`, 12) + `]`,
+			"[\n    {\"a\":   1, \"b\":  2.5},\n    {          \"b\": 10  },\n    {\"a\": 100, \"b\":  3  }" +
+				strings.Repeat(",\n    {\"a\":   7, \"b\":  7  }", 12) + "\n]"},
+	}
+	for _, tc := range cases {
+		if got := fracturedJson(tc.in); got != tc.want {
+			t.Errorf("input %s\ngot:\n%s\nwant:\n%s", tc.in, got, tc.want)
+		}
+	}
+}
+
+// Each level is indented further, so the output grows with the square of the
+// depth. This depth is enough to show nothing depends on a small Go stack.
+func TestFracturedJsonDeep(t *testing.T) {
+	const depth = 3000
+	in := strings.Repeat("[", depth) + strings.Repeat("]", depth)
+	if got := fracturedJson(in); !strings.HasPrefix(got, "[\n    [\n") {
+		t.Errorf("unexpected start: %q", got[:20])
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Printing, JSON and equality of nested values, each walked with one explicit
@@ -621,4 +622,545 @@ func equalsIter(a, b MShellObject) (bool, error) {
 		f.i++
 		inner = true
 	}
+}
+
+// The rest of this file is `toJsonFractured`: it lays out the text `toJson`
+// gives over several lines, in the style of the FracturedJson library.
+// Each list or dictionary is written the first way that fits, in this order:
+//
+//  1. On one line, if it nests at most fjMaxNesting levels and fits the line.
+//  2. A list of short items, several items per line.
+//  3. A table: one item per line, with the fields of each item lined up.
+//  4. One item per line, each item laid out by these same rules.
+
+const (
+	fjLineWidth = 120 // Longest line to write, counting the indent.
+	fjIndent    = 4   // Spaces per level.
+	// A list or dictionary goes on one line, or is a table row, only if it
+	// holds at most this many levels of lists and dictionaries, counting itself.
+	fjMaxNesting = 2
+	// A list written several items per line needs at least this many per line.
+	fjMinItemsPerLine = 3
+)
+
+// fjNode is one JSON value read back from the text `toJson` gives.
+type fjNode struct {
+	kind    byte      // 's' string, 'n' number, 'l' true/false/null, 'a' array, 'o' object.
+	text    string    // The value as written. For an array or object, only when it is empty.
+	keys    []string  // Object keys, with their quotes.
+	items   []*fjNode // Array items or object values.
+	nesting int       // 0 for a string, number, literal or empty container, else 1 + the largest of its items.
+	width   int       // Characters the value takes on one line.
+}
+
+type fjParser struct {
+	s   string
+	pos int
+}
+
+func (p *fjParser) skipSpace() {
+	for p.pos < len(p.s) && strings.IndexByte(" \t\r\n", p.s[p.pos]) >= 0 {
+		p.pos++
+	}
+}
+
+// str reads a quoted string and returns it with its quotes.
+func (p *fjParser) str() (string, bool) {
+	if p.pos >= len(p.s) || p.s[p.pos] != '"' {
+		return "", false
+	}
+	start := p.pos
+	for p.pos++; p.pos < len(p.s); p.pos++ {
+		switch p.s[p.pos] {
+		case '\\':
+			p.pos++
+		case '"':
+			p.pos++
+			return p.s[start:p.pos], true
+		}
+	}
+	return "", false
+}
+
+func (p *fjParser) value() (*fjNode, bool) {
+	p.skipSpace()
+	if p.pos >= len(p.s) {
+		return nil, false
+	}
+	c := p.s[p.pos]
+	switch c {
+	case '"':
+		text, ok := p.str()
+		if !ok {
+			return nil, false
+		}
+		return &fjNode{kind: 's', text: text, width: utf8.RuneCountInString(text)}, true
+	case '[', '{':
+		n := &fjNode{kind: 'a', text: "[]", width: 2}
+		closer := byte(']')
+		if c == '{' {
+			n.kind, n.text, closer = 'o', "{}", '}'
+		}
+		p.pos++
+		for {
+			p.skipSpace()
+			if p.pos >= len(p.s) {
+				return nil, false
+			}
+			if p.s[p.pos] == closer {
+				p.pos++
+				break
+			}
+			if len(n.items) > 0 {
+				if p.s[p.pos] != ',' {
+					return nil, false
+				}
+				p.pos++
+				p.skipSpace()
+			}
+			if n.kind == 'o' {
+				key, ok := p.str()
+				p.skipSpace()
+				if !ok || p.pos >= len(p.s) || p.s[p.pos] != ':' {
+					return nil, false
+				}
+				p.pos++
+				n.keys = append(n.keys, key)
+				n.width += utf8.RuneCountInString(key) + 2
+			}
+			item, ok := p.value()
+			if !ok {
+				return nil, false
+			}
+			n.items = append(n.items, item)
+			n.width += item.width
+			if item.nesting+1 > n.nesting {
+				n.nesting = item.nesting + 1
+			}
+		}
+		if len(n.items) > 0 {
+			n.width += 2 * (len(n.items) - 1)
+			if n.nesting >= 2 {
+				n.width += 2
+			}
+		}
+		return n, true
+	}
+	start := p.pos
+	for p.pos < len(p.s) && strings.IndexByte(",:]} \t\r\n", p.s[p.pos]) < 0 {
+		p.pos++
+	}
+	if p.pos == start {
+		return nil, false
+	}
+	n := &fjNode{kind: 'l', text: p.s[start:p.pos]}
+	n.width = utf8.RuneCountInString(n.text)
+	if c == '-' || (c >= '0' && c <= '9') {
+		n.kind = 'n'
+	}
+	return n, true
+}
+
+// fjCol says how to write one column of a table, so that the same field of
+// every row starts and ends at the same place.
+type fjCol struct {
+	// 'n': every value is a number, written with the decimal points lined up.
+	// 'a', 'o': every value is an array or object, written with one column per
+	// item or key. 0: values are written as they are, padded on the right.
+	kind     byte
+	width    int
+	intW     int            // 'n': most characters before the decimal point.
+	exponent bool           // 'n': some number has an exponent, so the numbers are right-aligned instead.
+	children []*fjCol       // 'a', 'o': one per item or key.
+	keys     []string       // 'o': the key of each child, in order of first use.
+	index    map[string]int // 'o': key to its place in children.
+	pad      bool           // 'a', 'o': put a space inside the brackets.
+}
+
+// fjIntLen gives how many characters of a number come before its decimal point.
+func fjIntLen(text string, exponent bool) int {
+	if !exponent {
+		if i := strings.IndexByte(text, '.'); i >= 0 {
+			return i
+		}
+	}
+	return len(text)
+}
+
+// fjBuildCol makes the column for the given values. levels is how many levels
+// of arrays and objects may be split into their own columns.
+func fjBuildCol(nodes []*fjNode, levels int) *fjCol {
+	col := &fjCol{}
+	kind := nodes[0].kind
+	for _, n := range nodes {
+		if n.kind != kind {
+			kind = 0
+		}
+		if n.width > col.width {
+			col.width = n.width
+		}
+	}
+	switch kind {
+	case 'n':
+		for _, n := range nodes {
+			if strings.ContainsAny(n.text, "eE") {
+				col.exponent = true
+			}
+		}
+		fracW := 0
+		for _, n := range nodes {
+			intLen := fjIntLen(n.text, col.exponent)
+			col.intW = max(col.intW, intLen)
+			fracW = max(fracW, len(n.text)-intLen)
+		}
+		col.kind = 'n'
+		col.width = col.intW + fracW
+	case 'a', 'o':
+		if levels <= 0 {
+			return col
+		}
+		var groups [][]*fjNode
+		if kind == 'o' {
+			col.index = map[string]int{}
+		}
+		for _, n := range nodes {
+			if n.nesting >= 2 {
+				col.pad = true
+			}
+			for i, item := range n.items {
+				at := i
+				if kind == 'o' {
+					var seen bool
+					if at, seen = col.index[n.keys[i]]; !seen {
+						at = len(col.keys)
+						col.index[n.keys[i]] = at
+						col.keys = append(col.keys, n.keys[i])
+					}
+				}
+				for at >= len(groups) {
+					groups = append(groups, nil)
+				}
+				groups[at] = append(groups[at], item)
+			}
+		}
+		if len(groups) == 0 {
+			return col
+		}
+		col.kind = kind
+		col.width = 2 + 2*(len(groups)-1)
+		if col.pad {
+			col.width += 2
+		}
+		for i, group := range groups {
+			child := fjBuildCol(group, levels-1)
+			col.children = append(col.children, child)
+			col.width += child.width
+			if kind == 'o' {
+				col.width += utf8.RuneCountInString(col.keys[i]) + 2
+			}
+		}
+	}
+	return col
+}
+
+type fjWriter struct {
+	buf []byte
+}
+
+func (f *fjWriter) spaces(n int) {
+	for ; n > 0; n-- {
+		f.buf = append(f.buf, ' ')
+	}
+}
+
+// newline starts a new line indented to the given level. Spaces left at the
+// end of the current line by column padding are removed.
+func (f *fjWriter) newline(level int) {
+	for len(f.buf) > 0 && f.buf[len(f.buf)-1] == ' ' {
+		f.buf = f.buf[:len(f.buf)-1]
+	}
+	f.buf = append(f.buf, '\n')
+	f.spaces(level * fjIndent)
+}
+
+// inline writes a value on one line.
+func (f *fjWriter) inline(n *fjNode) {
+	if len(n.items) == 0 {
+		f.buf = append(f.buf, n.text...)
+		return
+	}
+	f.buf = append(f.buf, n.text[0])
+	if n.nesting >= 2 {
+		f.buf = append(f.buf, ' ')
+	}
+	for i, item := range n.items {
+		if i > 0 {
+			f.buf = append(f.buf, ", "...)
+		}
+		if n.kind == 'o' {
+			f.buf = append(f.buf, n.keys[i]...)
+			f.buf = append(f.buf, ": "...)
+		}
+		f.inline(item)
+	}
+	if n.nesting >= 2 {
+		f.buf = append(f.buf, ' ')
+	}
+	f.buf = append(f.buf, n.text[1])
+}
+
+// Whether a table cell is followed by a comma, or by a space where other
+// rows have their comma, or by nothing.
+const (
+	fjNoComma = iota
+	fjBlankComma
+	fjComma
+)
+
+// cell writes one value of a table column, padded to the column's width.
+// n is nil when the row has no value for this column.
+func (f *fjWriter) cell(col *fjCol, n *fjNode, comma int) {
+	total := col.width
+	if comma != fjNoComma {
+		total++
+	}
+	written := 0
+	if n != nil {
+		switch {
+		case col.kind == 'n':
+			before := col.intW - fjIntLen(n.text, col.exponent)
+			f.spaces(before)
+			f.buf = append(f.buf, n.text...)
+			written = before + len(n.text)
+		case col.kind != 0:
+			f.cellItems(col, n)
+			written = col.width
+		default:
+			f.inline(n)
+			written = n.width
+		}
+		if comma == fjComma {
+			f.buf = append(f.buf, ',')
+			written++
+		}
+	}
+	f.spaces(total - written)
+}
+
+// cellItems writes an array or object with each item in its own column.
+func (f *fjWriter) cellItems(col *fjCol, n *fjNode) {
+	values := n.items
+	last := len(n.items) - 1
+	if col.kind == 'o' {
+		values = make([]*fjNode, len(col.children))
+		last = -1
+		for i, key := range n.keys {
+			at := col.index[key]
+			values[at] = n.items[i]
+			last = max(last, at)
+		}
+	}
+	f.buf = append(f.buf, n.text[0])
+	if col.pad {
+		f.buf = append(f.buf, ' ')
+	}
+	for i, child := range col.children {
+		if i > 0 {
+			f.buf = append(f.buf, ' ')
+		}
+		var v *fjNode
+		if i < len(values) {
+			v = values[i]
+		}
+		if col.kind == 'o' {
+			if v == nil {
+				f.spaces(utf8.RuneCountInString(col.keys[i]) + 2)
+			} else {
+				f.buf = append(f.buf, col.keys[i]...)
+				f.buf = append(f.buf, ": "...)
+			}
+		}
+		comma := fjNoComma
+		if i < len(col.children)-1 {
+			comma = fjBlankComma
+			if i < last {
+				comma = fjComma
+			}
+		}
+		f.cell(child, v, comma)
+	}
+	if col.pad {
+		f.buf = append(f.buf, ' ')
+	}
+	f.buf = append(f.buf, n.text[1])
+}
+
+// value writes a value that starts `used` characters into a line at the given
+// indent level. comma says a comma follows it on its last line.
+func (f *fjWriter) value(n *fjNode, level int, used int, comma bool) {
+	room := fjLineWidth - used
+	if comma {
+		room--
+	}
+	if len(n.items) == 0 || (n.nesting <= fjMaxNesting && n.width <= room) {
+		f.inline(n)
+		return
+	}
+	if f.severalPerLine(n, level) || f.table(n, level) {
+		return
+	}
+	f.buf = append(f.buf, n.text[0])
+	indent := (level + 1) * fjIndent
+	for i, item := range n.items {
+		f.newline(level + 1)
+		itemUsed := indent
+		if n.kind == 'o' {
+			f.buf = append(f.buf, n.keys[i]...)
+			f.buf = append(f.buf, ": "...)
+			itemUsed += utf8.RuneCountInString(n.keys[i]) + 2
+		}
+		more := i < len(n.items)-1
+		f.value(item, level+1, itemUsed, more)
+		if more {
+			f.buf = append(f.buf, ',')
+		}
+	}
+	f.newline(level)
+	f.buf = append(f.buf, n.text[1])
+}
+
+// severalPerLine writes an array of short items with as many items on each
+// line as fit, and reports whether it did. Numbers are padded to one width so
+// they form columns. It does nothing if the array holds an object or deeper
+// nesting, if an item is too long for one line, or if some line would hold
+// fewer than fjMinItemsPerLine items.
+func (f *fjWriter) severalPerLine(n *fjNode, level int) bool {
+	if n.kind != 'a' || n.nesting > fjMaxNesting {
+		return false
+	}
+	for _, item := range n.items {
+		if item.kind == 'o' && len(item.items) > 0 {
+			return false
+		}
+	}
+	col := fjBuildCol(n.items, 0)
+	indent := (level + 1) * fjIndent
+	lineStart := make([]bool, len(n.items))
+	used, onLine := indent, 0
+	for i, item := range n.items {
+		need := item.width
+		if col.kind == 'n' {
+			need = col.width
+		}
+		if i < len(n.items)-1 {
+			need++
+		}
+		if indent+need > fjLineWidth {
+			return false // Too long for a line of its own; it has to be split.
+		}
+		if onLine > 0 && used+1+need > fjLineWidth {
+			if onLine < fjMinItemsPerLine {
+				return false
+			}
+			lineStart[i] = true
+			used, onLine = indent, 0
+		}
+		if onLine > 0 {
+			used++
+		}
+		used += need
+		onLine++
+	}
+	f.buf = append(f.buf, '[')
+	for i, item := range n.items {
+		if i == 0 || lineStart[i] {
+			f.newline(level + 1)
+		} else {
+			f.buf = append(f.buf, ' ')
+		}
+		comma := fjNoComma
+		if i < len(n.items)-1 {
+			comma = fjComma
+		}
+		if col.kind == 'n' {
+			f.cell(col, item, comma)
+		} else {
+			f.inline(item)
+			if comma == fjComma {
+				f.buf = append(f.buf, ',')
+			}
+		}
+	}
+	f.newline(level)
+	f.buf = append(f.buf, ']')
+	return true
+}
+
+// table writes an array or object whose items are all arrays, or all objects,
+// one item per line with the fields lined up, and reports whether it did.
+// It does nothing if the lined up rows do not fit the line.
+func (f *fjWriter) table(n *fjNode, level int) bool {
+	if len(n.items) < 2 {
+		return false
+	}
+	kind := n.items[0].kind
+	if kind != 'a' && kind != 'o' {
+		return false
+	}
+	for _, item := range n.items {
+		if item.kind != kind || item.nesting > fjMaxNesting {
+			return false
+		}
+	}
+	keyW := 0
+	for _, key := range n.keys {
+		keyW = max(keyW, utf8.RuneCountInString(key))
+	}
+	used := (level + 1) * fjIndent
+	if n.kind == 'o' {
+		used += keyW + 2
+	}
+	// Try with the rows' inner arrays and objects split into columns too,
+	// then with only the rows' own fields as columns.
+	for levels := fjMaxNesting; levels >= 1; levels-- {
+		col := fjBuildCol(n.items, levels)
+		if col.kind == 0 {
+			return false
+		}
+		if used+col.width+1 > fjLineWidth {
+			continue
+		}
+		f.buf = append(f.buf, n.text[0])
+		for i, item := range n.items {
+			f.newline(level + 1)
+			if n.kind == 'o' {
+				f.buf = append(f.buf, n.keys[i]...)
+				f.spaces(keyW - utf8.RuneCountInString(n.keys[i]))
+				f.buf = append(f.buf, ": "...)
+			}
+			comma := fjNoComma
+			if i < len(n.items)-1 {
+				comma = fjComma
+			}
+			f.cell(col, item, comma)
+		}
+		f.newline(level)
+		f.buf = append(f.buf, n.text[1])
+		return true
+	}
+	return false
+}
+
+// fracturedJson lays out compact JSON text over several lines.
+// Text that is not JSON is returned as it is.
+func fracturedJson(compact string) string {
+	p := fjParser{s: compact}
+	root, ok := p.value()
+	p.skipSpace()
+	if !ok || p.pos != len(compact) {
+		return compact
+	}
+	f := fjWriter{buf: make([]byte, 0, len(compact)*2)}
+	f.value(root, 0, 0, false)
+	return string(f.buf)
 }

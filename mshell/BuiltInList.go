@@ -234,6 +234,7 @@ var BuiltInList = map[string]struct{}{
 	"toInt": {},
 	"toRune": {},
 	"toJson": {},
+	"toJsonFractured": {},
 	"toOleDate": {},
 	"toPath": {},
 	"toUnixTime": {},
