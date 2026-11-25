@@ -664,7 +664,8 @@ func (r *Relations) below(fr bool, a, b TypeId) bool {
 }
 
 // join is tjoin in Join.v. Where the types cannot be widened inside, the
-// join is the other side when one side is below the other.
+// join is the other side when one side is below the other, and two unions
+// are otherwise joined member by member.
 func (r *Relations) join(fr bool, a, b TypeId) (TypeId, bool) {
 	if a == b {
 		return a, true
@@ -685,7 +686,65 @@ func (r *Relations) join(fr bool, a, b TypeId) (TypeId, bool) {
 	if r.below(fr, b, a) {
 		return a, true
 	}
+	if ar.Node(a).Kind == TKUnion && ar.Node(b).Kind == TKUnion {
+		return r.unionJoin(fr, a, b)
+	}
 	return TidNothing, false
+}
+
+// unionJoin is ujoin in Join.v: two different unions, neither below the
+// other, joined member by member. A member of a is joined with the member
+// of b whose kinds overlap its own, and stays as it is when b has none. The
+// members of b that no member of a overlaps are kept. There is no join when
+// a member overlaps two members of the other union, or when two members of
+// the result overlap.
+func (r *Relations) unionJoin(fr bool, a, b TypeId) (TypeId, bool) {
+	ar := r.arena
+	la := ar.unionMembers[ar.Node(a).Extra]
+	lb := ar.unionMembers[ar.Node(b).Extra]
+	out := make([]TypeId, 0, len(la)+len(lb))
+	for _, l := range la {
+		partner, n := TidNothing, 0
+		for _, m := range lb {
+			if r.kindsOverlap(l, m) {
+				partner = m
+				n++
+			}
+		}
+		if n > 1 {
+			return TidNothing, false
+		}
+		if n == 1 {
+			z, ok := r.join(fr, l, partner)
+			if !ok {
+				return TidNothing, false
+			}
+			l = z
+		}
+		out = append(out, l)
+	}
+	for _, m := range lb {
+		if !slices.ContainsFunc(la, func(l TypeId) bool { return r.kindsOverlap(l, m) }) {
+			out = append(out, m)
+		}
+	}
+	for i, x := range out {
+		for _, y := range out[i+1:] {
+			if x != y && r.kindsOverlap(x, y) {
+				return TidNothing, false
+			}
+		}
+	}
+	return ar.MakeUnion(out), true
+}
+
+// kindsOverlap reports whether a and b have a kind in common: overlap in
+// Join.v. A type whose kinds are not known overlaps every type.
+func (r *Relations) kindsOverlap(a, b TypeId) bool {
+	ka, okA := r.AppendKinds(r.kindBuf[:0], a)
+	kb, okB := r.AppendKinds(ka[len(ka):], b)
+	r.kindBuf = kb[:0]
+	return !okA || !okB || !kindsDisjoint(ka, kb)
 }
 
 // joinCore is tjoin_core in Join.v: the joins that look inside the two

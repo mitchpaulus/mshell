@@ -699,13 +699,6 @@ Fixpoint group_kinds (ps : list fslot) (gs : list (kind * list fslot)) : option 
                 end
   end.
 
-Fixpoint munion (ts : list ty) : ty :=
-  match ts with
-  | [] => TBot
-  | [t] => t
-  | t :: ts' => TUnion t (munion ts')
-  end.
-
 Definition combine_kinds (rs : list fslot) : fslot :=
   (if forallb (fun r => is_dpf (fst r)) rs then FmDp else FmSh, munion (map snd rs)).
 

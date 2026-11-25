@@ -29,6 +29,10 @@ join 30 (shared (enum Shape imm () ())) (shared (enum LoadError imm () ()))	(sha
 join 30 (shared (quote (str) never)) (shared (quote (str) (str)))	(shared (quote (str) (str)))
 join 30 (fresh (quote (int) (int))) (fresh (quote (int) (str)))	none
 join 30 (shared (union int str)) (shared (union int (union str bool)))	(shared (union int (union str bool)))
+# two different unions join member by member (alg_join_two_unions*)
+join 30 (shared (union str bool)) (shared (union str int))	(shared (union str (union bool int)))
+join 30 (fresh (union (list int) str)) (fresh (union (list str) bool))	(fresh (union (list (union int str)) (union str bool)))
+join 30 (shared (union (list int) str)) (shared (union (list str) bool))	none
 # type L = [L] is a list of itself (not an example in Rocq; a yes is a proof by subq_sound)
 sub 30 (mu (list (rv 0))) (list (mu (list (rv 0))))	yes
 sub 30 (list (mu (list (rv 0)))) (mu (list (rv 0)))	yes

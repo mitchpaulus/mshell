@@ -214,6 +214,11 @@ let examples : (string * string) list =
     (join (Sh, TQuote ([ TStr ], None)) (Sh, TQuote ([ TStr ], Some [ TStr ])), sl (Sh, TQuote ([ TStr ], Some [ TStr ])));
     (join (Dp, TQuote ([ TInt ], Some [ TInt ])) (Dp, TQuote ([ TInt ], Some [ TStr ])), "none");
     (join (Sh, TUnion (TInt, TStr)) (Sh, TUnion (TInt, TUnion (TStr, TBool))), sl (Sh, TUnion (TInt, TUnion (TStr, TBool))));
+    ("# two different unions join member by member (alg_join_two_unions*)", "");
+    (join (Sh, TUnion (TStr, TBool)) (Sh, TUnion (TStr, TInt)), sl (Sh, TUnion (TStr, TUnion (TBool, TInt))));
+    (join (Dp, TUnion (TList TInt, TStr)) (Dp, TUnion (TList TStr, TBool)),
+     sl (Dp, TUnion (TList (TUnion (TInt, TStr)), TUnion (TStr, TBool))));
+    (join (Sh, TUnion (TList TInt, TStr)) (Sh, TUnion (TList TStr, TBool)), "none");
     ("# type L = [L] is a list of itself (not an example in Rocq; a yes is a proof by subq_sound)", "");
     (sub l (TList l), "yes");
     (sub (TList l) l, "yes");

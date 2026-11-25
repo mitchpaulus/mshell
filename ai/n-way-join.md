@@ -60,6 +60,16 @@ Which arms take a target is decided against `T0` and `T1`, and which new arms jo
 none of which depend on arm order; the merge in step 2 fails on a conflict in any order.
 What can still depend on order is inside the folded `tjoin`, on unions with members of one kind.
 In Go, unions are canonical (`MakeUnion` sorts them), so member order does not show.
+
+**Correction (2026-11-25).** The last paragraph missed a case, and whether the join succeeded did depend on order.
+An arm that is a union has no single kind, so the arms are not grouped and are folded with `tjoin`.
+`tjoin` had no join for two different unions unless one was below the other.
+With arms `str`, `bool`, `str | null` the fold made `bool | str` and then failed against `str | null`;
+with the union arm first it succeeded.
+`tjoin` now joins two unions member by member (`ujoin` in `Join.v`, `unionJoin` in Go),
+and `alg_joinN_union_any_order` in `Decide.v` computes all six orders.
+Order independence is still not a theorem: the proofs say a join that succeeds is an upper bound of its arms,
+not that a join is found whenever one exists.
 The partly new arms' own types are tried as targets in arm order,
 so when several work the result type can depend on the order; whether the join succeeds does not.
 

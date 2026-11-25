@@ -803,6 +803,23 @@ Example alg_join_union_below :
   = Some (Sh, TUnion TInt (TUnion TStr TBool)).
 Proof. vm_compute. reflexivity. Qed.
 
+(** Two different unions, neither below the other, join member by member:
+    the members of one kind are joined and the others are kept.  The list
+    members widen only when both slots are fresh. *)
+Example alg_join_two_unions :
+  join_slot jl (Sh, TUnion TStr TBool) (Sh, TUnion TStr TInt)
+  = Some (Sh, TUnion TStr (TUnion TBool TInt)).
+Proof. vm_compute. reflexivity. Qed.
+
+Example alg_join_two_unions_fresh :
+  join_slot jl (Dp, TUnion (TList TInt) TStr) (Dp, TUnion (TList TStr) TBool)
+  = Some (Dp, TUnion (TList (TUnion TInt TStr)) (TUnion TStr TBool)).
+Proof. vm_compute. reflexivity. Qed.
+
+Example alg_join_two_unions_shared :
+  join_slot jl (Sh, TUnion (TList TInt) TStr) (Sh, TUnion (TList TStr) TBool) = None.
+Proof. vm_compute. reflexivity. Qed.
+
 (** The order of the arms: [{a: [2]}], [{a: @xs}], [{b: @xs}], with [xs] a
     stored [[int]], join in every order.  Pairwise, the orders that meet
     [{a: [2]}] and [{a: @xs}] first did not: their join is shared, and a
@@ -820,4 +837,18 @@ Example alg_joinN_any_order :
   Forall (fun arms => exists r, joinN jl rt_new arms = Some r)
     [[ex_new; ex_pa; ex_pb]; [ex_new; ex_pb; ex_pa]; [ex_pa; ex_new; ex_pb];
      [ex_pa; ex_pb; ex_new]; [ex_pb; ex_new; ex_pa]; [ex_pb; ex_pa; ex_new]].
+Proof. repeat constructor; eexists; vm_compute; reflexivity. Qed.
+
+(** [["a" true @x]] with [x : str | int] (fields.tsv.msh): a str, a bool
+    and a union join in every order.  A union arm has no single kind, so
+    the arms are folded pairwise, and the fold that met the str and the
+    bool first then had two different unions to join. *)
+Definition ex_u : fslot := (FmDp, TUnion TStr TInt).
+Definition ex_s : fslot := (FmDp, TStr).
+Definition ex_b : fslot := (FmDp, TBool).
+
+Example alg_joinN_union_any_order :
+  Forall (fun arms => exists r, joinN jl rt_new arms = Some r)
+    [[ex_s; ex_b; ex_u]; [ex_s; ex_u; ex_b]; [ex_b; ex_s; ex_u];
+     [ex_b; ex_u; ex_s]; [ex_u; ex_s; ex_b]; [ex_u; ex_b; ex_s]].
 Proof. repeat constructor; eexists; vm_compute; reflexivity. Qed.

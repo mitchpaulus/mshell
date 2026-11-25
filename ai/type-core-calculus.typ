@@ -950,7 +950,16 @@ the core (`if_join`).
   *Clarified:* the join inside is the join of the same freshness. For shared values it is itself a shared
   join, so `@xs just` and `@ys just` with `xs : [int]`, `ys : [str]` stored have no join: the list inside is
   still `xs` (`hole_maybe_join_stuck`). Fresh arms (`[1] just`, `["a"] just`) join to `Maybe[[int | str]]`.
-  Two unions are joined only when equal; a union and a single type join as below.
+  A union and a single type join as below.
+  *Two different unions (changed 2026-11-25).* When neither is below the other they are joined member by
+  member (`ujoin` in `Join.v`): a member of the first is joined with the member of the second whose kinds
+  overlap its own, at the same freshness, and the members with no such partner are kept.
+  `bool | str` and `str | null` give `bool | str | null`.
+  There is no join when a member overlaps two members of the other union (an alias of several kinds), or
+  when two members of the result would share a kind.
+  Before, two unions joined only when one was below the other, so `["a" true @x]` with `x : str | null`
+  had no element type: the str and the bool joined to `bool | str` first, and that met `str | null`.
+  `[@x "a" true]` checked.
 + Two different types of the *same* kind (two list types, two shapes, two instances of one enum):
   - if *both* slots are *fresh*, the join widens inside them: `[int]` and `[str]` give `[int | str]`;
     `{a: int}` and `{a: int, b: int}` give `{a: int, b?: int}`; `[1] box` and `["a"] box` give
@@ -962,7 +971,8 @@ the core (`if_join`).
 + *Where the types cannot be widened inside, the join is the other side if one side is below the other
   (decided 2026-09-30)*: $<=$ when either arm is shared, $subset.sq.eq$ when both are fresh; otherwise
   there is no join. This covers quotes, shared containers of the same kind, enum arguments that are not
-  covariant, and two different unions (`int | str` and `int | str | bool` give the second).
+  covariant, and two different unions (`int | str` and `int | str | bool` give the second;
+  when neither is below the other they are joined member by member, above).
   Quotes are never widened inside, fresh or not: freshness stops at quotes, so retyping a quote is $<=$
   and nothing more. A quote that never returns joins with any quote with the same inputs:
   `(die)` with `def die (str -- never)` and `(drop "default")` give `(str -- str)`. Two quotes neither of

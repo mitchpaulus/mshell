@@ -247,6 +247,62 @@ Definition tjoin_core (j : bool -> ty -> ty -> option ty) (fr : bool) (a b : ty)
       end
   end.
 
+(** Two different unions, neither below the other, are joined member by
+    member.  A member of [a] is joined with the member of [b] whose kinds
+    overlap its own, and stays as it is when [b] has none.  The members of
+    [b] that no member of [a] overlaps are kept.  There is no join when a
+    member overlaps two members of the other union, or when two members of
+    the result overlap. *)
+Fixpoint leaves (t : ty) : list ty :=
+  match t with TUnion a b => leaves a ++ leaves b | _ => [t] end.
+
+(** A member with no kinds known overlaps every type. *)
+Definition overlap (a b : ty) : bool :=
+  match akinds a, akinds b with
+  | Some ka, Some kb => negb (kdisj ka kb)
+  | _, _ => true
+  end.
+
+Fixpoint munion (ts : list ty) : ty :=
+  match ts with
+  | [] => TBot
+  | [t] => t
+  | t :: ts' => TUnion t (munion ts')
+  end.
+
+Fixpoint dedup (ts : list ty) : list ty :=
+  match ts with
+  | [] => []
+  | t :: r => if existsb (ty_eqb t) r then dedup r else t :: dedup r
+  end.
+
+Fixpoint apart (ts : list ty) : bool :=
+  match ts with
+  | [] => true
+  | t :: r => forallb (fun u => negb (overlap t u)) r && apart r
+  end.
+
+Definition ujoin1 (j : bool -> ty -> ty -> option ty) (fr : bool) (lb : list ty) (l : ty) : option ty :=
+  match filter (overlap l) lb with
+  | [] => Some l
+  | [m] => j fr l m
+  | _ => None
+  end.
+
+Definition ujoin_members (j : bool -> ty -> ty -> option ty) (fr : bool) (a b : ty) : option ty :=
+  match omapl (ujoin1 j fr (leaves b)) (leaves a) with
+  | Some la =>
+      let ts := dedup (la ++ filter (fun m => negb (existsb (fun l => overlap l m) (leaves a))) (leaves b)) in
+      if apart ts then Some (munion ts) else None
+  | None => None
+  end.
+
+Definition ujoin (j : bool -> ty -> ty -> option ty) (fr : bool) (a b : ty) : option ty :=
+  match a, b with
+  | TUnion _ _, TUnion _ _ => ujoin_members j fr a b
+  | _, _ => None
+  end.
+
 (** [tjoin n fr a b]: the join of two slot types, [fr] when both slots are
     fresh.  [n] is fuel. *)
 Fixpoint tjoin (n : nat) (fr : bool) (a b : ty) {struct n} : option ty :=
@@ -257,7 +313,7 @@ Fixpoint tjoin (n : nat) (fr : bool) (a b : ty) {struct n} : option ty :=
   if is_mu a || is_mu b then ajoin fr a b else
   match tjoin_core (tjoin n') fr a b with
   | Some c => Some c
-  | None => if le fr a b then Some b else if le fr b a then Some a else None
+  | None => if le fr a b then Some b else if le fr b a then Some a else ujoin (tjoin n') fr a b
   end
   end.
 
@@ -278,6 +334,7 @@ Fixpoint join_stack (s1 s2 : sty) : option sty :=
 End Join.
 
 Arguments ajoin : simpl never.
+Arguments ujoin : simpl never.
 
 (** ** The join is an upper bound *)
 
@@ -451,6 +508,74 @@ Proof.
   destruct fr; simpl in *; destruct Hj; split; [apply rs_enum | apply rs_enum | apply s_enum | apply s_enum]; auto.
 Qed.
 
+(** Two unions joined member by member: every member of each reaches the
+    join directly, so no transitivity of the fresh retype is needed. *)
+Lemma munion_in fr x : forall ts t, In t ts -> jrel fr x t -> jrel fr x (munion ts).
+Proof.
+  induction ts as [|t0 ts IH]; simpl; intros t I H; [contradiction|].
+  destruct ts as [|t1 ts'].
+  - destruct I as [<-|[]]. exact H.
+  - destruct I as [<-|I]; [apply jrel_unionr1; exact H | apply jrel_unionr2; eapply IH; eauto].
+Qed.
+
+Lemma leaves_ub fr c : forall a, (forall l, In l (leaves a) -> jrel fr l c) -> jrel fr a c.
+Proof.
+  induction a; simpl; intros H; try (apply H; left; reflexivity).
+  apply jrel_unionl; [apply IHa1 | apply IHa2]; intros l I; apply H, in_or_app; auto.
+Qed.
+
+Lemma dedup_in t : forall ts, In t ts -> In t (dedup ts).
+Proof.
+  induction ts as [|t0 r IH]; simpl; intros I; [contradiction|].
+  destruct (existsb (ty_eqb t0) r) eqn:Ex.
+  - destruct I as [<-|I]; [|auto]. apply existsb_exists in Ex as (x & Ix & Ex).
+    apply ty_eqb_true in Ex. subst. auto.
+  - destruct I as [<-|I]; [left; reflexivity | right; auto].
+Qed.
+
+Lemma omapl_in {A B} (f : A -> option B) : forall l l', omapl f l = Some l' ->
+  forall x, In x l -> exists y, In y l' /\ f x = Some y.
+Proof.
+  induction l as [|x0 l IH]; simpl; intros l' E x I; [contradiction|].
+  destruct (f x0) as [y0|] eqn:Ex; [|discriminate].
+  destruct (omapl f l) as [ys|] eqn:El; [|discriminate]. inversion E; subst.
+  destruct I as [<-|I]; [exists y0; simpl; auto|].
+  destruct (IH ys eq_refl x I) as (y & Iy & Ey). exists y. simpl. auto.
+Qed.
+
+Lemma ujoin_members_ub j fr a b c : jok j -> ujoin_members j fr a b = Some c -> jrel fr a c /\ jrel fr b c.
+Proof.
+  intros J E. unfold ujoin_members in E.
+  destruct (omapl (ujoin1 j fr (leaves b)) (leaves a)) as [la|] eqn:Eo; [|discriminate].
+  destruct (apart _); [|discriminate]. injection E as <-.
+  split; apply leaves_ub.
+  - intros l Il. destruct (omapl_in _ _ _ Eo l Il) as (y & Iy & Ey).
+    eapply munion_in; [apply dedup_in, in_or_app; left; exact Iy|].
+    unfold ujoin1 in Ey. destruct (filter (overlap l) (leaves b)) as [|m [|m2 r]].
+    + injection Ey as <-. apply jrel_refl.
+    + apply (J _ _ _ _ Ey).
+    + discriminate.
+  - intros m Im. destruct (existsb (fun l => overlap l m) (leaves a)) eqn:Ec.
+    + apply existsb_exists in Ec as (l & Il & Ol).
+      destruct (omapl_in _ _ _ Eo l Il) as (y & Iy & Ey).
+      eapply munion_in; [apply dedup_in, in_or_app; left; exact Iy|].
+      assert (Hf : In m (filter (overlap l) (leaves b))) by (apply filter_In; auto).
+      unfold ujoin1 in Ey. revert Ey Hf.
+      destruct (filter (overlap l) (leaves b)) as [|m1 [|m2 r]]; intros Ey Hf.
+      * contradiction.
+      * destruct Hf as [<-|[]]. apply (J _ _ _ _ Ey).
+      * discriminate.
+    + eapply munion_in; [|apply jrel_refl].
+      apply dedup_in, in_or_app. right. apply filter_In. split; [exact Im | rewrite Ec; reflexivity].
+Qed.
+
+Lemma ujoin_ub j fr a b c : jok j -> ujoin j fr a b = Some c -> jrel fr a c /\ jrel fr b c.
+Proof.
+  intros J E. unfold ujoin in E.
+  destruct a; try discriminate; destruct b; try discriminate.
+  eapply ujoin_members_ub; eauto.
+Qed.
+
 Lemma tjoin_ub : forall n fr a b c, tjoin le n fr a b = Some c -> jrel fr a c /\ jrel fr b c.
 Proof.
   induction n as [|n IH]; intros fr a b c E; simpl in E; [discriminate|].
@@ -462,8 +587,9 @@ Proof.
   { injection E as <-. eapply tjoin_core_ub; eauto. }
   destruct (le fr a b) eqn:L1.
   { injection E as <-. split; [apply le_ok; exact L1 | apply jrel_refl]. }
-  destruct (le fr b a) eqn:L2; [|discriminate].
-  injection E as <-. split; [apply jrel_refl | apply le_ok; exact L2].
+  destruct (le fr b a) eqn:L2.
+  { injection E as <-. split; [apply jrel_refl | apply le_ok; exact L2]. }
+  eapply ujoin_ub; eauto.
 Qed.
 
 Theorem join_slot_ub p q r : join_slot le p q = Some r -> slot_sub p r /\ slot_sub q r.
