@@ -98,6 +98,14 @@ func TestDecodeCsiKey(t *testing.T) {
 		{'u', "1094::119;5", 'w' | KeyModCtrl, true}, // Ctrl and the key where w is, on a Cyrillic layout
 		{'u', "57376", NamedF(13), true},
 		{'u', "13;3", NamedEnter | KeyModAlt, true},
+		{'u', "57399", '0', true},                        // keypad 0
+		{'u', "57404;129", '5', true},                    // keypad 5 with Num Lock on
+		{'u', "57409", '.', true},                        // keypad .
+		{'u', "57413", '+', true},                        // keypad +
+		{'u', "57414;129", NamedEnter, true},             // keypad Enter
+		{'u', "57417;5", NamedLeft | KeyModCtrl, true},   // Ctrl and keypad Left
+		{'u', "57426", NamedDelete, true},                // keypad Delete
+		{'u', "57427", 0, false},                         // keypad 5 with Num Lock off
 		{'u', "97;69", 'a' | KeyModCtrl, true}, // Caps Lock is not a modifier
 		{'R', "3;5", 0, false},                 // a cursor report
 		{'u', "?1", 0, false},                  // a reply to the protocol query
