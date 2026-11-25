@@ -364,3 +364,38 @@ func TestFracturedJsonDeep(t *testing.T) {
 		t.Errorf("unexpected start: %q", got[:20])
 	}
 }
+
+// BenchmarkFracturedJson lays out a table of objects, a long list of numbers,
+// and a list of objects too wide to be a table.
+func BenchmarkFracturedJson(b *testing.B) {
+	var table, numbers, wide strings.Builder
+	for i := 0; i < 20000; i++ {
+		table.WriteString(`, {"hp": ` + strconv.Itoa(i*37) + `, "loc": [` + strconv.Itoa(i) + `, ` + strconv.Itoa(i*10) + `], "name": "enemy` + strconv.Itoa(i) + `"}`)
+	}
+	for i := 0; i < 200000; i++ {
+		numbers.WriteString(", " + strconv.FormatFloat(float64(i%9973)/4, 'g', -1, 64))
+	}
+	for i := 0; i < 3000; i++ {
+		wide.WriteString(", {")
+		for k := 0; k < 30; k++ {
+			wide.WriteString(`"field` + strconv.Itoa(k) + `": ` + strconv.Itoa(i*k) + `, `)
+		}
+		wide.WriteString(`"last": 0}`)
+	}
+	for _, bc := range []struct{ name, in string }{
+		{"small", `{"a": 1, "b": [1, 2, 3], "c": "hello"}`},
+		{"table", "[" + table.String()[2:] + "]"},
+		{"numbers", "[" + numbers.String()[2:] + "]"},
+		{"wideRows", "[" + wide.String()[2:] + "]"},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			b.SetBytes(int64(len(bc.in)))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if out := fracturedJson(bc.in); len(out) < len(bc.in) {
+					b.Fatal("input was not laid out")
+				}
+			}
+		})
+	}
+}
