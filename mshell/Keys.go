@@ -326,7 +326,8 @@ var letterKeys = map[byte]KeyCode{
 
 // kittyFunctionalKey is the key of a kitty keyboard protocol code that is
 // not text: the C0 keys it reports by their legacy numbers, and F13 to F35
-// in its Private Use Area.
+// in its Private Use Area. The codes are in the table at
+// https://sw.kovidgoyal.net/kitty/keyboard-protocol/#functional-key-definitions
 func kittyFunctionalKey(code int) (KeyCode, bool) {
 	switch {
 	case code == 9:
@@ -351,9 +352,12 @@ func kittyFunctionalKey(code int) (KeyCode, bool) {
 }
 
 // kittyKeypadKeys are the keys of the kitty keyboard protocol's keypad
-// codes 57409 to 57427, after the digits. A keypad key is the same key as
-// the one on the main block: the numpad's 5 types 5, its Enter is Enter.
-// The last one is the 5 key with Num Lock off, which has no key to be.
+// codes 57409 (KP_DECIMAL) to 57427 (KP_BEGIN), after the digits 57399
+// (KP_0) to 57408 (KP_9), from the table at
+// https://sw.kovidgoyal.net/kitty/keyboard-protocol/#functional-key-definitions
+// A keypad key is the same key as the one on the main block: the numpad's
+// 5 types 5, its Enter is Enter. The last one, KP_BEGIN, is the 5 key with
+// Num Lock off, which has no key to be.
 var kittyKeypadKeys = [...]KeyCode{
 	'.', '/', '*', '-', '+', NamedEnter, '=', ',',
 	NamedLeft, NamedRight, NamedUp, NamedDown, NamedPageUp, NamedPageDown,
