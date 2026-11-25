@@ -642,6 +642,19 @@ const (
 	fjMaxNesting = 2
 	// A list written several items per line needs at least this many per line.
 	fjMinItemsPerLine = 3
+	// Most levels of lists and dictionaries a value can have, counting the
+	// outermost. A deeper value is an error. Each level is one call deeper in
+	// the parser and the writer, and 4 more spaces at the start of its lines,
+	// so without a limit the output grows with the square of the depth:
+	// 100,000 levels would need about 40 GB.
+	fjMaxDepth = 1000
+	// Most fields a table row can have. A field takes at least 3 characters,
+	// one for its value and two for the comma and space or the brackets, so
+	// more fields than this never fit the line. Rows with more are not
+	// counted field by field: a list of dictionaries that all have different
+	// keys would otherwise get a column for every key before the table is
+	// found to be too wide.
+	fjMaxTableFields = fjLineWidth / 3
 )
 
 // fjNode is one JSON value read back from the text `toJson` gives.
@@ -660,9 +673,11 @@ type fjNode struct {
 }
 
 type fjParser struct {
-	s     string
-	pos   int
-	nodes []fjNode
+	s       string
+	pos     int
+	nodes   []fjNode
+	depth   int  // Arrays and objects the parser is inside of.
+	tooDeep bool // The text nests more than fjMaxDepth levels.
 }
 
 func (p *fjParser) skipSpace() {
@@ -716,6 +731,11 @@ func (p *fjParser) value() (int32, bool) {
 		if c == '{' {
 			kind, closer = 'o', '}'
 		}
+		if p.depth >= fjMaxDepth {
+			p.tooDeep = true
+			return 0, false
+		}
+		p.depth++
 		p.nodes = append(p.nodes, fjNode{})
 		p.pos++
 		width, count, nesting := 2, 0, 0
@@ -767,6 +787,7 @@ func (p *fjParser) value() (int32, bool) {
 				width += 2
 			}
 		}
+		p.depth--
 		p.nodes[at] = fjNode{kind: kind, start: int32(start), end: int32(p.pos), count: int32(count),
 			width: int32(min(width, math.MaxInt32)), nesting: uint8(min(nesting, 255))}
 		return at, true
@@ -806,6 +827,10 @@ type fjCol struct {
 	keys     []string       // 'o': the key of each child, in order of first use.
 	index    map[string]int // 'o': key to its place in children.
 	pad      bool           // 'a', 'o': put a space inside the brackets.
+
+	// Some value has more than fjMaxTableFields items or keys, so the values
+	// cannot be written with one column per item. children is not complete.
+	tooManyFields bool
 
 	// What add has seen so far.
 	firstKind byte // Kind of the first value.
@@ -876,7 +901,11 @@ func (f *fjWriter) add(col *fjCol, at int32, levels int) {
 		col.dotIntW = max(col.dotIntW, dot)
 		col.dotFracW = max(col.dotFracW, len(text)-dot)
 	case 'a', 'o':
-		if levels <= 0 {
+		if levels <= 0 || col.tooManyFields {
+			return
+		}
+		if n.count > fjMaxTableFields {
+			col.tooManyFields = true
 			return
 		}
 		if n.nesting >= 2 {
@@ -888,6 +917,10 @@ func (f *fjWriter) add(col *fjCol, at int32, levels int) {
 			place := i
 			if n.kind == 'o' {
 				place = col.keyAt(f.s[child.keyStart:child.keyEnd], i)
+				if place >= fjMaxTableFields {
+					col.tooManyFields = true
+					return
+				}
 			}
 			for place >= len(col.children) {
 				col.children = append(col.children, f.newCol())
@@ -917,7 +950,15 @@ func (col *fjCol) layout(levels int) {
 			col.width = col.maxLen
 		}
 	case 'a', 'o':
-		if levels <= 0 || len(col.children) == 0 {
+		if levels <= 0 {
+			return
+		}
+		if col.tooManyFields {
+			col.kind = col.firstKind
+			col.width = fjLineWidth + 1 // Too wide for any line.
+			return
+		}
+		if len(col.children) == 0 {
 			return
 		}
 		col.kind = col.firstKind
@@ -1293,9 +1334,10 @@ func (f *fjWriter) table(at int32, level int) bool {
 // fracturedJson lays out compact JSON text over several lines.
 // Text that is not JSON is returned as it is, and so is text too long for
 // its positions to be kept in an int32.
-func fracturedJson(compact string) string {
+// Text nested more than fjMaxDepth levels is an error.
+func fracturedJson(compact string) (string, error) {
 	if len(compact) > math.MaxInt32 {
-		return compact
+		return compact, nil
 	}
 	// Every value but the first comes after a comma or an opening bracket, so
 	// this is room for all of them, and the slice is never copied to grow.
@@ -1304,10 +1346,13 @@ func fracturedJson(compact string) string {
 	p := fjParser{s: compact, nodes: make([]fjNode, 0, room)}
 	root, ok := p.value()
 	p.skipSpace()
+	if p.tooDeep {
+		return "", fmt.Errorf("Cannot lay out JSON nested more than %d levels deep.\n", fjMaxDepth)
+	}
 	if !ok || p.pos != len(compact) {
-		return compact
+		return compact, nil
 	}
 	f := fjWriter{s: compact, nodes: p.nodes, buf: make([]byte, 0, len(compact)*2)}
 	f.value(root, 0, 0, false)
-	return string(f.buf)
+	return string(f.buf), nil
 }

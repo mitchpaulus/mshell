@@ -10748,7 +10748,11 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if err != nil {
 						return state.CheckedFailure(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
 					}
-					stack.Push(MShellString{fracturedJson(jsonStr)})
+					fractured, err := fracturedJson(jsonStr)
+					if err != nil {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(MShellString{fractured})
 				case "typeof":
 					obj1, err := stack.Pop()
 					if err != nil {

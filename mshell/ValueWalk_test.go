@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"strconv"
@@ -317,7 +318,10 @@ func TestFracturedJsonKeepsValue(t *testing.T) {
 		var sb strings.Builder
 		fjRandomJson(r, 4, &sb)
 		compact := sb.String()
-		got := fracturedJson(compact)
+		got, err := fracturedJson(compact)
+		if err != nil {
+			t.Fatalf("unexpected error: %v\n%s", err, compact)
+		}
 		var want, have any
 		if err := json.Unmarshal([]byte(compact), &want); err != nil {
 			t.Fatalf("test input is not JSON: %v\n%s", err, compact)
@@ -349,19 +353,77 @@ func TestFracturedJsonLayouts(t *testing.T) {
 				strings.Repeat(",\n    {\"a\":   7, \"b\":  7  }", 12) + "\n]"},
 	}
 	for _, tc := range cases {
-		if got := fracturedJson(tc.in); got != tc.want {
+		if got, err := fracturedJson(tc.in); err != nil || got != tc.want {
 			t.Errorf("input %s\ngot:\n%s\nwant:\n%s", tc.in, got, tc.want)
 		}
 	}
 }
 
-// Each level is indented further, so the output grows with the square of the
-// depth. This depth is enough to show nothing depends on a small Go stack.
+// A value nested fjMaxDepth levels is laid out, and one level more is an error.
 func TestFracturedJsonDeep(t *testing.T) {
-	const depth = 3000
-	in := strings.Repeat("[", depth) + strings.Repeat("]", depth)
-	if got := fracturedJson(in); !strings.HasPrefix(got, "[\n    [\n") {
+	nested := func(depth int) string {
+		return strings.Repeat("[", depth) + strings.Repeat("]", depth)
+	}
+	got, err := fracturedJson(nested(fjMaxDepth))
+	if err != nil {
+		t.Fatalf("%d levels: unexpected error: %v", fjMaxDepth, err)
+	}
+	if !strings.HasPrefix(got, "[\n    [\n") {
 		t.Errorf("unexpected start: %q", got[:20])
+	}
+	for _, in := range []string{
+		nested(fjMaxDepth + 1),
+		nested(1000000),
+		strings.Repeat(`{"a": `, fjMaxDepth) + "[1]" + strings.Repeat("}", fjMaxDepth),
+	} {
+		if got, err := fracturedJson(in); err == nil {
+			t.Errorf("%d bytes of input: want an error, got %d bytes of output", len(in), len(got))
+		}
+	}
+	// Many values side by side at the limit are not too deep.
+	wide := "[" + strings.Repeat(nested(fjMaxDepth-1)+", ", 3) + nested(fjMaxDepth-1) + "]"
+	if _, err := fracturedJson(wide); err != nil {
+		t.Errorf("side by side: unexpected error: %v", err)
+	}
+}
+
+// A list of dictionaries that all have different keys is written one per
+// line, and gets no more than fjMaxTableFields columns while that is found out.
+func TestFracturedJsonManyFields(t *testing.T) {
+	const rows = 5000
+	var in, want strings.Builder
+	in.WriteString("[")
+	want.WriteString("[")
+	for i := 0; i < rows; i++ {
+		if i > 0 {
+			in.WriteString(", ")
+			want.WriteString(",")
+		}
+		fmt.Fprintf(&in, `{"k%d": 1}`, i)
+		fmt.Fprintf(&want, "\n    {\"k%d\": 1}", i)
+	}
+	in.WriteString("]")
+	want.WriteString("\n]")
+	got, err := fracturedJson(in.String())
+	if err != nil || got != want.String() {
+		t.Fatalf("unexpected output (error %v), starts %q", err, got[:min(len(got), 60)])
+	}
+
+	p := fjParser{s: in.String()}
+	root, ok := p.value()
+	if !ok {
+		t.Fatal("test input did not parse")
+	}
+	f := fjWriter{s: p.s, nodes: p.nodes}
+	var col fjCol
+	item := root + 1
+	for i := 0; i < rows; i++ {
+		f.add(&col, item, fjMaxNesting)
+		item = f.nodes[item].next
+	}
+	if !col.tooManyFields || len(col.children) > fjMaxTableFields || len(col.keys) > fjMaxTableFields+1 {
+		t.Errorf("tooManyFields %v, %d columns, %d keys; want at most %d columns",
+			col.tooManyFields, len(col.children), len(col.keys), fjMaxTableFields)
 	}
 }
 
@@ -392,7 +454,7 @@ func BenchmarkFracturedJson(b *testing.B) {
 			b.SetBytes(int64(len(bc.in)))
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				if out := fracturedJson(bc.in); len(out) < len(bc.in) {
+				if out, _ := fracturedJson(bc.in); len(out) < len(bc.in) {
 					b.Fatal("input was not laid out")
 				}
 			}
