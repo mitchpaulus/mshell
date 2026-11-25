@@ -11,6 +11,7 @@ import (
 	"golang.org/x/term"
 	"slices"
 	"strings"
+	"sync/atomic"
 	// "runtime/pprof"
 	// "runtime/trace"
 	"runtime"
@@ -960,6 +961,11 @@ type TermState struct {
 	numPromptLines int // Number of lines the prompt takes up
 	promptText     SourceText // Text of the prompt on screen, repainted after a resize.
 	promptStyles   []promptStyle // Escape sequences within promptText.
+	// userPromptRender is what the setPrompt quote last returned; the next
+	// prompt is rendered into its memory.
+	userPromptRender promptRender
+	promptAtoms    []DisplayAtom // Memory paintPrompt lays promptText out in, kept for the next prompt.
+	promptRows     []LayoutRow
 	// promptProblem is the last error the prompt quote gave, printed once.
 	promptProblem string
 	// rightPrompt is what the setRightPrompt quote returned for this prompt.
@@ -968,6 +974,7 @@ type TermState struct {
 	rightPrompt      promptRender
 	rightPromptAtoms []DisplayAtom // rightPrompt.Text with widths resolved, set by paintPrompt.
 	rightPromptWidth Cells         // Cells rightPromptAtoms take, with any blank cells kept after them; 0 when there is no right prompt.
+	rightPromptPaint []byte        // The bytes that paint rightPrompt from its first cell, set by paintPrompt.
 	// rightPromptProblem is the last error the right prompt quote gave, printed once.
 	rightPromptProblem string
 	// abbrProblem is the last error an abbreviation's quote gave, and
@@ -4135,9 +4142,16 @@ func (state *TermState) printPrompt() error {
 	state.ensurePromptNewline()
 	// The prompt quote runs first, so what it prints comes before the
 	// prompt, which again starts on a line of its own.
-	render, userPrompt := state.userPrompt()
-	state.rightPrompt = state.userRightPrompt()
+	var render promptRender
+	userPrompt := false
+	state.rightPrompt = promptRender{}
 	if state.evalState.PromptQuote != nil || state.evalState.RightPromptQuote != nil {
+		// One watcher for Ctrl-C serves both quotes.
+		var running atomic.Pointer[evalCancel]
+		stopInterrupts := watchInterrupts(&running)
+		render, userPrompt = state.userPrompt(&running)
+		state.rightPrompt = state.userRightPrompt(&running)
+		stopInterrupts()
 		state.ensurePromptNewline()
 	}
 

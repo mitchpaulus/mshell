@@ -2,7 +2,6 @@ package main
 
 import (
 	"net/url"
-	"strings"
 	"unicode/utf8"
 )
 
@@ -18,24 +17,29 @@ import (
 // messages. The prompt passes false: a newline inside a directory name would
 // otherwise change the prompt's row count.
 func terminalSafeText(text string, keepLayout bool) string {
-	var b strings.Builder
+	var array [256]byte
+	return string(appendTerminalSafeText(array[:0], text, keepLayout))
+}
+
+// appendTerminalSafeText appends what terminalSafeText returns for text.
+func appendTerminalSafeText(dst []byte, text string, keepLayout bool) []byte {
 	for i := 0; i < len(text); {
 		r, size := utf8.DecodeRuneInString(text[i:])
 		switch {
 		case r == utf8.RuneError && size == 1:
-			b.WriteByte('?')
+			dst = append(dst, '?')
 		case keepLayout && (r == '\n' || r == '\t'):
-			b.WriteRune(r)
+			dst = append(dst, byte(r))
 		case r < 0x20 || r == 0x7f:
-			b.WriteString(controlCaretText(byte(r)))
+			dst = append(dst, controlCaretText(byte(r))...)
 		case r >= 0x80 && r <= 0x9f:
-			b.WriteByte('?')
+			dst = append(dst, '?')
 		default:
-			b.WriteString(text[i : i+size])
+			dst = append(dst, text[i:i+size]...)
 		}
 		i += size
 	}
-	return b.String()
+	return dst
 }
 
 // containsTerminalControl reports whether terminalSafeText would change text.
