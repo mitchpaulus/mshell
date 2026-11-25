@@ -289,6 +289,8 @@ const (
 type promptRender struct {
 	Text     SourceText
 	Styles   []promptStyle
+	// all is the one string renderPrompt made: Text, then each style's Seq.
+	all string
 	Title    string
 	HasTitle bool
 }
@@ -331,18 +333,48 @@ func cursorShapeSequence(shape string) string {
 // cursorShapeReset gives the terminal back its default cursor shape.
 const cursorShapeReset = "\033[0 q"
 
-func sgr(params ...int) string {
-	parts := make([]string, len(params))
-	for i, p := range params {
-		parts[i] = strconv.Itoa(p)
+// appendSGR appends the escape sequence that sets the SGR parameters.
+func appendSGR(dst []byte, params ...int) []byte {
+	// With no parameters the sequence would be a reset.
+	if len(params) == 0 {
+		panic("appendSGR: no parameters")
 	}
-	return "\033[" + strings.Join(parts, ";") + "m"
+	dst = append(dst, "\033["...)
+	for i, p := range params {
+		if p < 0 {
+			panic(fmt.Sprintf("appendSGR: parameter %d is negative", p))
+		}
+		if p > 255 {
+			panic(fmt.Sprintf("appendSGR: parameter %d is above 255", p))
+		}
+		if i > 0 {
+			dst = append(dst, ';')
+		}
+		dst = strconv.AppendInt(dst, int64(p), 10)
+	}
+	return append(dst, 'm')
+}
+
+func sgr(params ...int) string {
+	return string(appendSGR(nil, params...))
 }
 
 // renderPrompt turns the list a prompt quote returned into a prompt to
 // paint, or says what is wrong with it. A right prompt is one line, so
 // promptNewline is wrong in it.
 func renderPrompt(obj MShellObject, right bool) (promptRender, error) {
+	return renderPromptReusing(obj, right, promptRender{})
+}
+
+// renderPromptReusing is renderPrompt, given what it returned for the last
+// prompt, which is no longer painted. The prompt is rendered again for
+// every prompt, so this allocates as little as it can. The text and every
+// escape sequence are built in two buffers and then copied into one string,
+// which the text and the styles all point into. The styles are stored in
+// last's memory when they fit, and when the text and sequences are the same
+// as last's, its string is used again and nothing is allocated.
+func renderPromptReusing(obj MShellObject, right bool, last promptRender) (promptRender, error) {
+	reuse := last.Styles
 	name := "prompt"
 	if right {
 		name = "right prompt"
@@ -351,10 +383,22 @@ func renderPrompt(obj MShellObject, right bool) (promptRender, error) {
 	if !ok {
 		return promptRender{}, fmt.Errorf("the %s must return a list of PromptItem values, not a %s", name, obj.TypeName())
 	}
-	var r promptRender
-	var text strings.Builder
-	style := func(seq string, bg bgEffect) {
-		r.Styles = append(r.Styles, promptStyle{Offset: ByteOffset(text.Len()), Seq: seq, Bg: bg})
+	// Each item adds at most one style, but for a hyperlink, which adds two.
+	if cap(reuse) < len(list.Items) {
+		reuse = make([]promptStyle, 0, len(list.Items))
+	}
+	r := promptRender{Styles: reuse[:0]}
+	// A prompt of ordinary size is built without leaving the stack.
+	var textArray [256]byte
+	var seqArray [512]byte
+	var seqEndArray [32]int
+	// text is the prompt's text, seqs every style's escape sequence one
+	// after another, and seqEnds where each style's sequence ends in seqs.
+	text, seqs, seqEnds := textArray[:0], seqArray[:0], seqEndArray[:0]
+	// style adds a style whose escape sequence was just appended to seqs.
+	style := func(bg bgEffect) {
+		r.Styles = append(r.Styles, promptStyle{Offset: ByteOffset(len(text)), Bg: bg})
+		seqEnds = append(seqEnds, len(seqs))
 	}
 	for i, item := range list.Items {
 		e, ok := item.(*MShellEnum)
@@ -370,12 +414,12 @@ func renderPrompt(obj MShellObject, right bool) (promptRender, error) {
 			if err != nil {
 				return promptRender{}, bad("%s", err)
 			}
-			text.WriteString(terminalSafeText(s, false))
+			text = appendTerminalSafeText(text, s, false)
 		case "promptNewline":
 			if right {
 				return promptRender{}, bad("the right prompt is one line")
 			}
-			text.WriteByte('\n')
+			text = append(text, '\n')
 		case "setFgColorRgb", "setBgColorRgb":
 			var rgb [3]int
 			for j := range rgb {
@@ -386,9 +430,11 @@ func renderPrompt(obj MShellObject, right bool) (promptRender, error) {
 				rgb[j] = n
 			}
 			if e.Member == "setFgColorRgb" {
-				style(sgr(38, 2, rgb[0], rgb[1], rgb[2]), bgKeep)
+				seqs = appendSGR(seqs, 38, 2, rgb[0], rgb[1], rgb[2])
+				style(bgKeep)
 			} else {
-				style(sgr(48, 2, rgb[0], rgb[1], rgb[2]), bgSet)
+				seqs = appendSGR(seqs, 48, 2, rgb[0], rgb[1], rgb[2])
+				style(bgSet)
 			}
 		case "setFgColor256", "setBgColor256":
 			n, err := payloadByte(e, 0)
@@ -396,9 +442,11 @@ func renderPrompt(obj MShellObject, right bool) (promptRender, error) {
 				return promptRender{}, bad("%s", err)
 			}
 			if e.Member == "setFgColor256" {
-				style(sgr(38, 5, n), bgKeep)
+				seqs = appendSGR(seqs, 38, 5, n)
+				style(bgKeep)
 			} else {
-				style(sgr(48, 5, n), bgSet)
+				seqs = appendSGR(seqs, 48, 5, n)
+				style(bgSet)
 			}
 		case "setFgColorBase16", "setBgColorBase16":
 			color, ok1 := payloadMember(e, 0, "Base16Color")
@@ -413,14 +461,18 @@ func renderPrompt(obj MShellObject, right bool) (promptRender, error) {
 			}
 			n += offset
 			if e.Member == "setFgColorBase16" {
-				style(sgr(30+n), bgKeep)
+				seqs = appendSGR(seqs, 30+n)
+				style(bgKeep)
 			} else {
-				style(sgr(40+n), bgSet)
+				seqs = appendSGR(seqs, 40+n)
+				style(bgSet)
 			}
 		case "setFgDefault":
-			style(sgr(39), bgKeep)
+			seqs = appendSGR(seqs, 39)
+			style(bgKeep)
 		case "setBgDefault":
-			style(sgr(49), bgClear)
+			seqs = appendSGR(seqs, 49)
+			style(bgClear)
 		case "setTextAttr", "clearTextAttr":
 			attr, ok := payloadMember(e, 0, "TextAttribute")
 			if !ok {
@@ -434,9 +486,11 @@ func renderPrompt(obj MShellObject, right bool) (promptRender, error) {
 			if !ok {
 				return promptRender{}, bad("no escape sequence for %s", attr)
 			}
-			style(sgr(n), bgKeep)
+			seqs = appendSGR(seqs, n)
+			style(bgKeep)
 		case "resetStyle":
-			style(sgr(0), bgClear)
+			seqs = appendSGR(seqs, 0)
+			style(bgClear)
 		case "setWindowTitle":
 			s, err := payloadString(e, 0)
 			if err != nil {
@@ -455,15 +509,67 @@ func renderPrompt(obj MShellObject, right bool) (promptRender, error) {
 			if err := checkHyperlinkURL(url); err != nil {
 				return promptRender{}, bad("%s", err)
 			}
-			style("\033]8;;"+url+"\033\\", bgKeep)
-			text.WriteString(terminalSafeText(label, false))
-			style("\033]8;;\033\\", bgKeep)
+			seqs = append(append(append(seqs, "\033]8;;"...), url...), "\033\\"...)
+			style(bgKeep)
+			text = appendTerminalSafeText(text, label, false)
+			seqs = append(seqs, "\033]8;;\033\\"...)
+			style(bgKeep)
 		default:
 			return promptRender{}, bad("unknown prompt item")
 		}
 	}
-	r.Text = SourceText(text.String())
+	// Comparing a string with bytes does not copy the bytes.
+	if len(last.all) == len(text)+len(seqs) && last.all[:len(text)] == string(text) && last.all[len(text):] == string(seqs) {
+		r.all = last.all
+	} else {
+		var all strings.Builder
+		all.Grow(len(text) + len(seqs))
+		all.Write(text)
+		all.Write(seqs)
+		r.all = all.String()
+	}
+	// style is called once after each sequence appended to seqs. Otherwise
+	// every later style would get another style's sequence.
+	if len(seqEnds) != len(r.Styles) {
+		panic(fmt.Sprintf("renderPrompt: %d sequence ends for %d styles", len(seqEnds), len(r.Styles)))
+	}
+	if len(seqEnds) > 0 && seqEnds[len(seqEnds)-1] != len(seqs) {
+		panic(fmt.Sprintf("renderPrompt: the last style's sequence ends at %d of %d bytes", seqEnds[len(seqEnds)-1], len(seqs)))
+	}
+	if len(seqEnds) == 0 && len(seqs) != 0 {
+		panic(fmt.Sprintf("renderPrompt: %d bytes of sequences and no styles", len(seqs)))
+	}
+	if len(r.all) != len(text)+len(seqs) {
+		panic(fmt.Sprintf("renderPrompt: string of %d bytes for %d of text and %d of sequences", len(r.all), len(text), len(seqs)))
+	}
+	r.Text = SourceText(r.all[:len(text)])
+	allSeqs, start := r.all[len(text):], 0
+	for i, end := range seqEnds {
+		r.Styles[i].Seq = allSeqs[start:end]
+		start = end
+	}
+	checkPromptStyles(r.Styles, len(r.Text))
 	return r, nil
+}
+
+// checkPromptStyles panics unless styles are as renderPrompt makes them for
+// a text of textLen bytes: each has an escape sequence, is at an offset
+// within the text, and is not before the style ahead of it. The loops that
+// paint styles write them in order and would write one out of order late.
+func checkPromptStyles(styles []promptStyle, textLen int) {
+	last := ByteOffset(0)
+	for i, s := range styles {
+		if s.Seq == "" {
+			panic(fmt.Sprintf("prompt style %d has no escape sequence", i))
+		}
+		if s.Offset < last {
+			panic(fmt.Sprintf("prompt style %d is at offset %d, before the style ahead of it at %d", i, s.Offset, last))
+		}
+		if int(s.Offset) > textLen {
+			panic(fmt.Sprintf("prompt style %d is at offset %d, past the text's %d bytes", i, s.Offset, textLen))
+		}
+		last = s.Offset
+	}
 }
 
 func payloadString(e *MShellEnum, i int) (string, error) {
@@ -550,21 +656,25 @@ func (state *TermState) promptInfo() *MShellDict {
 // shown. An error is printed once, not again while the quote keeps failing
 // the same way. The terminal is in its normal mode, so Ctrl-C arrives as an
 // interrupt.
-func (state *TermState) userPrompt() (promptRender, bool) {
-	return state.runPromptQuote(state.evalState.PromptQuote, false)
+func (state *TermState) userPrompt(interrupts *atomic.Pointer[evalCancel]) (promptRender, bool) {
+	render, ok := state.runPromptQuote(state.evalState.PromptQuote, false, state.userPromptRender, interrupts)
+	state.userPromptRender = render
+	return render, ok
 }
 
 // userRightPrompt runs the right prompt quote the init file set, as
 // userPrompt runs the prompt quote. When there is no quote, or it gives
 // nothing to use, there is no right prompt.
-func (state *TermState) userRightPrompt() promptRender {
-	render, _ := state.runPromptQuote(state.evalState.RightPromptQuote, true)
+func (state *TermState) userRightPrompt(interrupts *atomic.Pointer[evalCancel]) promptRender {
+	render, _ := state.runPromptQuote(state.evalState.RightPromptQuote, true, state.rightPrompt, interrupts)
 	return render
 }
 
 // runPromptQuote runs the prompt quote, or the right prompt quote, for
-// userPrompt and userRightPrompt.
-func (state *TermState) runPromptQuote(quote *MShellQuotation, right bool) (promptRender, bool) {
+// userPrompt and userRightPrompt. last is what that quote's last prompt
+// rendered, which is no longer painted; the new prompt takes its memory.
+// While the quote runs, a Ctrl-C seen by the watcher of interrupts stops it.
+func (state *TermState) runPromptQuote(quote *MShellQuotation, right bool, last promptRender, interrupts *atomic.Pointer[evalCancel]) (promptRender, bool) {
 	what, fallback, lastProblem := "The prompt", "Showing the built-in prompt.", &state.promptProblem
 	if right {
 		what, fallback, lastProblem = "The right prompt", "Showing no right prompt.", &state.rightPromptProblem
@@ -574,9 +684,13 @@ func (state *TermState) runPromptQuote(quote *MShellQuotation, right bool) (prom
 	}
 	stack := MShellStack{state.promptInfo()}
 	cancel := newEvalCancel()
-	stopInterrupts := watchInterrupts(cancel)
+	// A Ctrl-C is for the one quote running. The quote before this one
+	// cleared its cancel when it finished.
+	if interrupts.Swap(cancel) != nil {
+		panic("runPromptQuote: another quote's cancel is still stored")
+	}
 	run := state.runUserQuote(quote, &stack, state.context, promptTimeout, cancel)
-	stopInterrupts()
+	interrupts.Store(nil)
 
 	// A quote that finished with its list is shown, even if the time ran
 	// out as it finished.
@@ -586,7 +700,7 @@ func (state *TermState) runPromptQuote(quote *MShellQuotation, right bool) (prom
 		problem = fmt.Sprintf("%s must leave one list on the stack, and left %d values.\n", what, len(stack))
 	} else if problem == "" {
 		var err error
-		if render, err = renderPrompt(stack[0], right); err != nil {
+		if render, err = renderPromptReusing(stack[0], right, last); err != nil {
 			problem = err.Error() + ".\n"
 		}
 	}
@@ -636,19 +750,26 @@ func (ev *EvalState) runUserQuote(quote *MShellQuotation, stack *MShellStack, co
 	return userQuoteRun{result: result, err: err, timedOut: timedOut.Load(), cancelled: cancel.requested.Load(), errOut: errOut.String()}
 }
 
-// watchInterrupts requests cancel on Ctrl-C until the function it
-// returns is called. The terminal must be in its normal mode, so Ctrl-C
-// arrives as an interrupt. Registering for the signal takes tens of
-// microseconds, too long for a key press.
-func watchInterrupts(cancel *evalCancel) func() {
+// watchInterrupts requests the cancel stored in running on each Ctrl-C,
+// until the function it returns is called. The terminal must be in its
+// normal mode, so Ctrl-C arrives as an interrupt. Registering for the
+// signal takes tens of microseconds, too long for a key press, so the
+// quotes run for one prompt share one watcher: each stores its own cancel
+// in running as it starts, and a Ctrl-C stops only the one then running.
+func watchInterrupts(running *atomic.Pointer[evalCancel]) func() {
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
 	finished := make(chan struct{})
 	go func() {
-		select {
-		case <-interrupts:
-			cancel.request()
-		case <-finished:
+		for {
+			select {
+			case <-interrupts:
+				if cancel := running.Load(); cancel != nil {
+					cancel.request()
+				}
+			case <-finished:
+				return
+			}
 		}
 	}()
 	return func() {

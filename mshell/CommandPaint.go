@@ -172,7 +172,7 @@ func (state *TermState) appendCommandPaint(dst []byte, region ProbeRegion) ([]by
 		region.commandStartCol()+layout.Rows[0].Width+1+width <= region.Columns {
 		dst = append(dst, "\033[0m"...)
 		dst = appendProbeCursorControl(dst, int(region.Columns-width)+1, 'G')
-		dst = state.appendRightPrompt(dst)
+		dst = append(dst, state.rightPromptPaint...)
 	}
 	// Each trailer row is truncated to atoms that fit one row, so painting it
 	// can never wrap. CRLF first cancels any pending wrap from the row above.
@@ -293,17 +293,17 @@ func (state *TermState) prepareMeasuredCommandDisplay(writer io.Writer, readTerm
 	})
 }
 
-// appendRightPrompt writes the right prompt's text and styles from the
-// cursor, and turns its styles off after it.
-func (state *TermState) appendRightPrompt(dst []byte) []byte {
-	source, styles := state.rightPrompt.Text, state.rightPrompt.Styles
+// appendRightPrompt appends the right prompt's text and styles, as they are
+// written from the cursor, and the sequence that turns its styles off.
+func appendRightPrompt(dst []byte, right promptRender, atoms []DisplayAtom) []byte {
+	checkPromptStyles(right.Styles, len(right.Text))
 	next := 0
-	for _, atom := range state.rightPromptAtoms {
-		for ; next < len(styles) && styles[next].Offset <= atom.SourceStart; next++ { dst = append(dst, styles[next].Seq...) }
-		dst = append(dst, atom.displayText(source)...)
+	for _, atom := range atoms {
+		for ; next < len(right.Styles) && right.Styles[next].Offset <= atom.SourceStart; next++ { dst = append(dst, right.Styles[next].Seq...) }
+		dst = append(dst, atom.displayText(right.Text)...)
 	}
 	// A hyperlink is ended by the style after its text.
-	for ; next < len(styles); next++ { dst = append(dst, styles[next].Seq...) }
+	for ; next < len(right.Styles); next++ { dst = append(dst, right.Styles[next].Seq...) }
 	return append(dst, "\033[0m"...)
 }
 
@@ -316,10 +316,13 @@ func (state *TermState) paintPrompt(writer io.Writer, readTerminal func() (Termi
 	if columns < 4 || columns > Cells(maxTerminalCoordinate) || state.numRows < 1 || state.numRows > int(maxTerminalCoordinate) {
 		return fmt.Errorf("prompt: unsupported terminal geometry")
 	}
-	if err := writeProbeOutput(writer, []byte("\r\033[0m")); err != nil { return err }
+	// The prompt is painted for every line, into memory kept from the last one.
+	state.renderBuffer = append(state.renderBuffer[:0], "\r\033[0m"...)
+	if err := writeProbeOutput(writer, state.renderBuffer); err != nil { return err }
 	state.promptText = source
 	region := ProbeRegion{RelativeOrigin: true, OriginCol: 1, PaintedRows: 1, ScreenRows: state.numRows, Columns: columns}
-	atoms := segmentAtomsInto(nil, source)
+	state.promptAtoms = segmentAtomsInto(state.promptAtoms, source)
+	atoms := state.promptAtoms
 	misses := resolveCachedWidths(nil, source, atoms, &state.widthCache, &state.eligibilityCache, columns)
 	// The right prompt's unknown widths are measured with the prompt's.
 	right := state.rightPrompt.Text
@@ -341,12 +344,16 @@ func (state *TermState) paintPrompt(writer io.Writer, readTerminal func() (Termi
 		width += atom.Width
 	}
 	state.rightPromptWidth = width+blank
-	layout := layoutAtomsInto(nil, atoms, ByteOffset(len(source)), 0, columns)
+	// The right prompt is painted again for each key, so its bytes are built once here.
+	state.rightPromptPaint = appendRightPrompt(state.rightPromptPaint[:0], state.rightPrompt, state.rightPromptAtoms)
+	layout := layoutAtomsInto(state.promptRows, atoms, ByteOffset(len(source)), 0, columns)
+	state.promptRows = layout.Rows
 	// Each style is written before the first atom at or after its offset.
 	// A background color is turned off for each line break and set again
 	// after it; otherwise a terminal that scrolls fills the new row with it.
-	var output []byte
+	output := state.renderBuffer[:0]
 	styles := state.promptStyles
+	checkPromptStyles(styles, len(source))
 	next, bg := 0, ""
 	writeStyles := func(upTo ByteOffset) {
 		for ; next < len(styles) && styles[next].Offset <= upTo; next++ {
@@ -383,6 +390,7 @@ func (state *TermState) paintPrompt(writer io.Writer, readTerminal func() (Termi
 		col = 0
 	}
 	output = append(output, "\033[0m"...)
+	state.renderBuffer = output
 	if err := writeProbeOutput(writer, output); err != nil { return err }
 	state.numPromptLines = row+1
 	origin := 0

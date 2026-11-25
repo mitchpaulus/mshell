@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"io"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -270,4 +272,143 @@ func TestRightPromptRepaintedAfterResize(t *testing.T) {
 	if got := wide.rowText(0); got != ":: ab" + strings.Repeat(" ", 20) + "12:30" {
 		t.Fatalf("row %q", got)
 	}
+}
+
+// A prompt rendered into the last prompt's memory is the same as one
+// rendered fresh, whether or not it changed.
+func TestRenderPromptReusingMatchesFresh(t *testing.T) {
+	hyperlinks := promptList(
+		promptItem("promptHyperlink", MShellString{"https://x.test/a"}, MShellString{"a"}),
+		promptItem("promptHyperlink", MShellString{"https://x.test/b"}, MShellString{"b"}),
+	)
+	var last promptRender
+	for i, list := range []*MShellList{benchRightPromptList(" 1.2s"), benchRightPromptList(" 1.2s"), benchRightPromptList(" 3.4s"), hyperlinks, promptList(), hyperlinks} {
+		want, err := renderPrompt(list, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if last, err = renderPromptReusing(list, true, last); err != nil {
+			t.Fatal(err)
+		}
+		if last.Text != want.Text || !slices.Equal(last.Styles, want.Styles) {
+			t.Fatalf("prompt %d: text %q styles %q, want %q %q", i, last.Text, last.Styles, want.Text, want.Styles)
+		}
+	}
+}
+
+// benchRightPromptList is a right prompt like a user's: colored text, an
+// attribute, a wide character and a reset. duration is its last text.
+func benchRightPromptList(duration string) *MShellList {
+	return promptList(
+		promptItem("setFgColorRgb", MShellInt{120}, MShellInt{200}, MShellInt{40}),
+		promptItem("promptText", MShellString{"main "}),
+		promptItem("setFgColor256", MShellInt{244}),
+		promptItem("setTextAttr", enumValue("TextAttribute", "attrBold")),
+		promptItem("promptText", MShellString{"世 12:30:45"}),
+		promptItem("setFgColorBase16", enumValue("Base16Color", "baseRed"), enumValue("BaseBrightness", "baseBright")),
+		promptItem("promptText", MShellString{duration}),
+		promptItem("resetStyle"),
+	)
+}
+
+func BenchmarkRightPrompt(b *testing.B) {
+	list := benchRightPromptList(" 1.2s")
+	read := func() (TerminalToken, error) { b.Fatal("known widths requested input"); return nil, io.EOF }
+	b.Run("Render", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := renderPrompt(list, true); err != nil { b.Fatal(err) }
+		}
+	})
+	right, err := renderPrompt(list, true)
+	if err != nil { b.Fatal(err) }
+	// Each prompt after the first renders into the styles of the one before.
+	b.Run("RenderUnchanged", func(b *testing.B) {
+		var last promptRender
+		b.ReportAllocs()
+		for b.Loop() {
+			if last, err = renderPromptReusing(list, true, last); err != nil { b.Fatal(err) }
+		}
+	})
+	// The text differs from the last prompt's, as a clock's does.
+	b.Run("RenderChanged", func(b *testing.B) {
+		lists := [2]*MShellList{list, benchRightPromptList(" 3.4s")}
+		var last promptRender
+		i := 0
+		b.ReportAllocs()
+		for b.Loop() {
+			if last, err = renderPromptReusing(lists[i&1], true, last); err != nil { b.Fatal(err) }
+			i++
+		}
+	})
+	for _, tt := range []struct { name string; right promptRender }{{"None", promptRender{}}, {"Styled", right}} {
+		b.Run("PaintPrompt/"+tt.name, func(b *testing.B) {
+			state := &TermState{numRows: 50, numCols: 120, rightPrompt: tt.right}
+			state.widthCache.remember("世", 2)
+			if err := state.paintPrompt(io.Discard, read, ":: "); err != nil { b.Fatal(err) }
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := state.paintPrompt(io.Discard, read, ":: "); err != nil { b.Fatal(err) }
+			}
+		})
+		b.Run("Keystroke/"+tt.name, func(b *testing.B) {
+			state := &TermState{numRows: 50, numCols: 120, rightPrompt: tt.right, currentCommand: "echo hello", index: 10}
+			state.widthCache.remember("世", 2)
+			if err := state.paintPrompt(io.Discard, read, ":: "); err != nil { b.Fatal(err) }
+			if ready, err := state.refreshCommandDisplay(io.Discard, read, &state.commandRegion); !ready || err != nil { b.Fatal(err) }
+			b.ReportAllocs()
+			for b.Loop() {
+				if ready, err := state.refreshCommandDisplay(io.Discard, read, &state.commandRegion); !ready || err != nil { b.Fatal(err) }
+			}
+			b.ReportMetric(float64(len(state.renderBuffer)), "paint-bytes/op")
+		})
+	}
+}
+
+// BenchmarkPromptQuotes runs a prompt quote and the documented right prompt
+// quote and renders what they return, as each prompt does. PerQuote starts
+// a Ctrl-C watcher for each quote, and Shared one for both.
+func BenchmarkPromptQuotes(b *testing.B) {
+	state := keyPathState(b, `
+def myPrompt (PromptInfo -- new [PromptItem])
+    info!
+    [baseGreen baseNormal setFgColorBase16 $"({@info :stackDepth?})> " promptText resetStyle]
+end
+def myRightPrompt (PromptInfo -- new [PromptItem])
+    info!
+    [attrFaint setTextAttr $"{@info :lastDurationMs?} ms" promptText resetStyle]
+end
+(myPrompt) setPrompt
+(myRightPrompt) setRightPrompt
+`, 0)
+	var running atomic.Pointer[evalCancel]
+	if r, ok := state.userPrompt(&running); !ok || r.Text != "(0)> " { b.Fatalf("prompt %q", r.Text) }
+	if r := state.userRightPrompt(&running); r.Text != "0 ms" { b.Fatalf("right prompt %q", r.Text) }
+	b.Run("WatcherPerQuote", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			stop := watchInterrupts(&running)
+			state.userPrompt(&running)
+			stop()
+			stop = watchInterrupts(&running)
+			state.rightPrompt = state.userRightPrompt(&running)
+			stop()
+		}
+	})
+	b.Run("SharedWatcher", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			stop := watchInterrupts(&running)
+			state.userPrompt(&running)
+			state.rightPrompt = state.userRightPrompt(&running)
+			stop()
+		}
+	})
+	b.Run("NoWatcher", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			state.userPrompt(&running)
+			state.rightPrompt = state.userRightPrompt(&running)
+		}
+	})
 }
