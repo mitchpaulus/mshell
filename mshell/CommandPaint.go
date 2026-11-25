@@ -296,6 +296,7 @@ func (state *TermState) prepareMeasuredCommandDisplay(writer io.Writer, readTerm
 // appendRightPrompt appends the right prompt's text and styles, as they are
 // written from the cursor, and the sequence that turns its styles off.
 func appendRightPrompt(dst []byte, right promptRender, atoms []DisplayAtom) []byte {
+	checkPromptStyles(right.Styles, len(right.Text))
 	next := 0
 	for _, atom := range atoms {
 		for ; next < len(right.Styles) && right.Styles[next].Offset <= atom.SourceStart; next++ { dst = append(dst, right.Styles[next].Seq...) }
@@ -352,6 +353,7 @@ func (state *TermState) paintPrompt(writer io.Writer, readTerminal func() (Termi
 	// after it; otherwise a terminal that scrolls fills the new row with it.
 	output := state.renderBuffer[:0]
 	styles := state.promptStyles
+	checkPromptStyles(styles, len(source))
 	next, bg := 0, ""
 	writeStyles := func(upTo ByteOffset) {
 		for ; next < len(styles) && styles[next].Offset <= upTo; next++ {

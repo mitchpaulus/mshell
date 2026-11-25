@@ -335,8 +335,18 @@ const cursorShapeReset = "\033[0 q"
 
 // appendSGR appends the escape sequence that sets the SGR parameters.
 func appendSGR(dst []byte, params ...int) []byte {
+	// With no parameters the sequence would be a reset.
+	if len(params) == 0 {
+		panic("appendSGR: no parameters")
+	}
 	dst = append(dst, "\033["...)
 	for i, p := range params {
+		if p < 0 {
+			panic(fmt.Sprintf("appendSGR: parameter %d is negative", p))
+		}
+		if p > 255 {
+			panic(fmt.Sprintf("appendSGR: parameter %d is above 255", p))
+		}
 		if i > 0 {
 			dst = append(dst, ';')
 		}
@@ -518,13 +528,48 @@ func renderPromptReusing(obj MShellObject, right bool, last promptRender) (promp
 		all.Write(seqs)
 		r.all = all.String()
 	}
+	// style is called once after each sequence appended to seqs. Otherwise
+	// every later style would get another style's sequence.
+	if len(seqEnds) != len(r.Styles) {
+		panic(fmt.Sprintf("renderPrompt: %d sequence ends for %d styles", len(seqEnds), len(r.Styles)))
+	}
+	if len(seqEnds) > 0 && seqEnds[len(seqEnds)-1] != len(seqs) {
+		panic(fmt.Sprintf("renderPrompt: the last style's sequence ends at %d of %d bytes", seqEnds[len(seqEnds)-1], len(seqs)))
+	}
+	if len(seqEnds) == 0 && len(seqs) != 0 {
+		panic(fmt.Sprintf("renderPrompt: %d bytes of sequences and no styles", len(seqs)))
+	}
+	if len(r.all) != len(text)+len(seqs) {
+		panic(fmt.Sprintf("renderPrompt: string of %d bytes for %d of text and %d of sequences", len(r.all), len(text), len(seqs)))
+	}
 	r.Text = SourceText(r.all[:len(text)])
 	allSeqs, start := r.all[len(text):], 0
 	for i, end := range seqEnds {
 		r.Styles[i].Seq = allSeqs[start:end]
 		start = end
 	}
+	checkPromptStyles(r.Styles, len(r.Text))
 	return r, nil
+}
+
+// checkPromptStyles panics unless styles are as renderPrompt makes them for
+// a text of textLen bytes: each has an escape sequence, is at an offset
+// within the text, and is not before the style ahead of it. The loops that
+// paint styles write them in order and would write one out of order late.
+func checkPromptStyles(styles []promptStyle, textLen int) {
+	last := ByteOffset(0)
+	for i, s := range styles {
+		if s.Seq == "" {
+			panic(fmt.Sprintf("prompt style %d has no escape sequence", i))
+		}
+		if s.Offset < last {
+			panic(fmt.Sprintf("prompt style %d is at offset %d, before the style ahead of it at %d", i, s.Offset, last))
+		}
+		if int(s.Offset) > textLen {
+			panic(fmt.Sprintf("prompt style %d is at offset %d, past the text's %d bytes", i, s.Offset, textLen))
+		}
+		last = s.Offset
+	}
 }
 
 func payloadString(e *MShellEnum, i int) (string, error) {
@@ -639,8 +684,13 @@ func (state *TermState) runPromptQuote(quote *MShellQuotation, right bool, last 
 	}
 	stack := MShellStack{state.promptInfo()}
 	cancel := newEvalCancel()
-	interrupts.Store(cancel)
+	// A Ctrl-C is for the one quote running. The quote before this one
+	// cleared its cancel when it finished.
+	if interrupts.Swap(cancel) != nil {
+		panic("runPromptQuote: another quote's cancel is still stored")
+	}
 	run := state.runUserQuote(quote, &stack, state.context, promptTimeout, cancel)
+	interrupts.Store(nil)
 
 	// A quote that finished with its list is shown, even if the time ran
 	// out as it finished.

@@ -4144,12 +4144,18 @@ func (state *TermState) printPrompt() error {
 	// prompt, which again starts on a line of its own.
 	var render promptRender
 	userPrompt := false
-	state.rightPrompt = promptRender{}
-	if state.evalState.PromptQuote != nil || state.evalState.RightPromptQuote != nil {
+	// The quotes render into the memory of the last prompt's styles, which
+	// are not painted again.
+	state.promptStyles = nil
+	if state.evalState.PromptQuote == nil && state.evalState.RightPromptQuote == nil {
+		state.rightPrompt = promptRender{}
+	} else {
 		// One watcher for Ctrl-C serves both quotes.
 		var running atomic.Pointer[evalCancel]
 		stopInterrupts := watchInterrupts(&running)
 		render, userPrompt = state.userPrompt(&running)
+		// userRightPrompt renders into the last right prompt's memory, so
+		// state.rightPrompt still holds it here.
 		state.rightPrompt = state.userRightPrompt(&running)
 		stopInterrupts()
 		state.ensurePromptNewline()
