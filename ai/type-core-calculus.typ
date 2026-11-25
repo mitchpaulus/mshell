@@ -952,14 +952,11 @@ the core (`if_join`).
   still `xs` (`hole_maybe_join_stuck`). Fresh arms (`[1] just`, `["a"] just`) join to `Maybe[[int | str]]`.
   A union and a single type join as below.
   *Two different unions (changed 2026-11-25).* When neither is below the other they are joined member by
-  member (`ujoin` in `Join.v`): a member of the first is joined with the member of the second whose kinds
-  overlap its own, at the same freshness, and the members with no such partner are kept.
+  member: the members of one kind are joined, at the same freshness, and the others are kept.
   `bool | str` and `str | null` give `bool | str | null`.
-  There is no join when a member overlaps two members of the other union (an alias of several kinds), or
-  when two members of the result would share a kind.
   Before, two unions joined only when one was below the other, so `["a" true @x]` with `x : str | null`
   had no element type: the str and the bool joined to `bool | str` first, and that met `str | null`.
-  `[@x "a" true]` checked.
+  `[@x "a" true]` checked. This is now a case of the join of all the types at once, below.
 + Two different types of the *same* kind (two list types, two shapes, two instances of one enum):
   - if *both* slots are *fresh*, the join widens inside them: `[int]` and `[str]` give `[int | str]`;
     `{a: int}` and `{a: int, b: int}` give `{a: int, b?: int}`; `[1] box` and `["a"] box` give
@@ -1026,6 +1023,38 @@ the core (`if_join`).
   and joined in. Each arm reaches the join by subsumption, repeated.
   *Mechanized:* `fmergeN`, `joinG`, `joinN`, `joinN_stack_ub`, `arm_joinN`, `if_joinN` in `PartialJoin.v`;
   `if_joinN_alg`, `arm_joinN_alg` and the example `alg_joinN_any_order` in `Decide.v`.
++ *The types are joined all at once too (2026-11-25).* The item above joined the arms' _slots_ at once, but
+  still folded the join of two _types_ over them wherever a step needed the join of several types.
+  That join is not a least upper bound, so the fold was not associative: two types of one kind that cannot
+  be widened inside (stored lists and dicts, quotes, aliases) join only when one is below the other, so `a`
+  and `b` may have no join while both are below a third arm `c`. `a`, `c`, `b` joined and `a`, `b`, `c` did not.
+  A random test found about 1 set of arms in 300 whose join depended on order.
+  The join of types now takes any number of them (`tjoinN`), and the join of two is that of a list of two:
+  - $bot$ and repeated types are dropped;
+  - if one of the types is above all the others, it is the join;
+  - otherwise the members of the types (a union's members, or the type itself) are grouped: two members are
+    in one group when their kinds overlap, directly or through other members (an alias may have several
+    kinds). Each group is joined and the join is the union of those;
+  - a group of one member is that member. A group of lists, of dicts, or of instances of one enum is widened
+    inside, its parts joined all at once (lists and dicts only when fresh). Otherwise, or if that fails, the
+    join is the member all the others are below. An alias is never widened inside, but the rest of its group
+    may be, and that join is the group's when the alias is below it.
+  A label of several fresh dicts is unknown if unknown in one, absent if absent in all, present if present in
+  all, deletable if deletable or absent in all, and otherwise optional; its types are joined at once.
+  For the marks, three steps were added so that nothing a fold accepted in some order is lost:
+  new arms that do not take the target are joined with each other as new values before they are committed
+  (two new `Box[int]` and `Box[str]` widen to `Box[int | str]`, which neither is below once committed);
+  failing that, the target is given the members of kinds it lacks and the new arms' join takes that
+  (a new `int | [str]` beside a stored `[str | null]` gives `int | [str | null]`);
+  and last, every arm is committed and the types joined as stored values.
+  The Go join picks, where several types fit, the one with the smallest id, so the result is the same type
+  for every order.
+  *Mechanized:* `tjoinN`, `max_of`, `components`, `structural`, `join_comp`, `join_rest`, `tjoinN_ub` in `Join.v`;
+  `mjoinN`, `commit_new`, `join_new_first`, `commit_all` in `PartialJoin.v`; `alg_join_all_any_order` in `Decide.v`.
+  *Not proved:* that the join is the same for every order of the arms, or that it exists whenever an upper
+  bound does. `TestJoinOrderIndependentRandom` joins random arms in every order (none of a million sets
+  depends on order), and `TestJoinAllAgreesWithOracle` compares the Go join with the extracted `tjoinN`.
+  About 10 sets in a million have no join at once but join two at a time in some order.
 
 The arms must still leave the same number of stack items (as today). Arms that diverge are ignored
 (@sec-diverge).

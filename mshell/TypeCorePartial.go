@@ -345,10 +345,11 @@ func (c *coreChecker) recordPart(d coreSlot, name NameId, m coreMark) uint16 {
 // position, so the result does not depend on their order the way a
 // pairwise fold does. joinN tries, in order: every arm new (the fresh
 // join); some arm partly new and none stored (one mark for all, fmergeN,
-// then the types joined under it, mjoin); and shared (a target the new
-// and partly new arms take where they can, with the rest committed and
-// joined in). Each step mirrors the function of the same name in
-// PartialJoin.v.
+// then the types joined under it, mjoinN); shared (a target the new and
+// partly new arms take where they can, with the rest committed and joined
+// in); and every arm committed. Each step mirrors the function of the same
+// name in PartialJoin.v. Every join of types takes all of them at once
+// (Relations.JoinAll): none is folded over the arms two at a time.
 //
 // Only a partly new result keeps the parts its join recorded: a step that
 // fails, or gives just a type, drops the parts it made (dropParts), so
@@ -478,7 +479,7 @@ func (c *coreChecker) joinKinds(arms []nArm) (coreMark, TypeId, bool) {
 }
 
 // joinG joins arms of one kind, or arms not grouped by kind: every arm
-// new, then partly new, then shared.
+// new, then partly new, then shared, then every arm committed.
 func (c *coreChecker) joinG(arms []nArm) (coreMark, TypeId, bool) {
 	allNew := true
 	for _, a := range arms {
@@ -495,6 +496,12 @@ func (c *coreChecker) joinG(arms []nArm) (coreMark, TypeId, bool) {
 		return m, t, true
 	}
 	if t, ok := c.shjoin(arms); ok {
+		return markShared, t, true
+	}
+	// commit_all: every arm committed and the types joined as stored
+	// values. Another arm may be above stored arms that have no join of
+	// their own (unknown contents, say).
+	if t, ok := c.foldJoin(markShared, arms); ok {
 		return markShared, t, true
 	}
 	return 0, 0, false
@@ -540,16 +547,14 @@ func (c *coreChecker) joinPairs(slots []coreSlot) (coreSlot, bool) {
 	return j, true
 }
 
-// foldJoin is foldj (mjoin m) over the arms' types.
+// foldJoin is mjoinN m over the arms' types: all of them joined at once.
 func (c *coreChecker) foldJoin(m coreMark, arms []nArm) (TypeId, bool) {
-	t := arms[0].t
-	for _, a := range arms[1:] {
-		var ok bool
-		if t, ok = c.mjoin(m, t, a.t); !ok {
-			return 0, false
-		}
+	var buf [8]TypeId
+	ts := buf[:0]
+	for _, a := range arms {
+		ts = append(ts, a.t)
 	}
-	return t, true
+	return c.mjoinN(m, ts)
 }
 
 // pjoinN is the partly new step: some arm partly new and none stored.
@@ -646,26 +651,73 @@ func (c *coreChecker) shjoin(arms []nArm) (TypeId, bool) {
 func (c *coreChecker) layer(arms []nArm, t0 TypeId, partialsReach bool, newReach []bool) (TypeId, bool) {
 	t1 := t0
 	var ok bool
+	var buf [8]TypeId
 	if !partialsReach {
+		committed := append(buf[:0], t0)
 		for _, a := range arms {
 			if a.m.partial() {
 				if fits, _ := c.markBelow(a.m, a.t, t0); !fits {
-					if t1, ok = c.mjoin(markShared, t1, a.t); !ok {
-						return 0, false
-					}
+					committed = append(committed, a.t)
 				}
 			}
 		}
+		if t1, ok = c.mjoinN(markShared, committed); !ok {
+			return 0, false
+		}
 	}
-	t := t1
+	// commit_new: the new arms that do not take t1 are joined with each
+	// other as new values first, and that join is committed; or else each
+	// is committed on its own.
+	var newsBuf, allBuf [8]TypeId
+	news, all := newsBuf[:0], allBuf[:0]
 	for i, a := range arms {
-		if a.m == markNew && (newReach == nil || !newReach[i]) && !c.rel.Retype(a.t, t1) {
-			if t, ok = c.mjoin(markShared, t, a.t); !ok {
-				return 0, false
+		if a.m == markNew && (newReach == nil || !newReach[i]) {
+			all = append(all, a.t)
+			if !c.rel.Retype(a.t, t1) {
+				news = append(news, a.t)
 			}
 		}
 	}
-	return t, true
+	if len(news) == 0 {
+		return t1, true
+	}
+	if nt, ok := c.rel.JoinAll(true, news); ok {
+		if t, ok := c.rel.JoinAll(false, append(buf[:0], t1, nt)); ok {
+			return t, true
+		}
+	}
+	if t, ok := c.rel.JoinAll(false, append(append(buf[:0], t1), news...)); ok {
+		return t, true
+	}
+	// join_new_first: all the new arms joined as new values first. That
+	// join takes t1 if it can. If not it is committed and joined in. If
+	// that has no join either, t1 is given the members of kinds it lacks,
+	// and the join of the new arms takes that: a new `int | [str]` beside
+	// a stored `[str | null]` gives `int | [str | null]`.
+	nt, ok := c.rel.JoinAll(true, all)
+	if !ok {
+		return 0, false
+	}
+	if c.rel.Retype(nt, t1) {
+		return t1, true
+	}
+	if t, ok := c.rel.JoinAll(false, append(buf[:0], t1, nt)); ok {
+		return t, true
+	}
+	wider := append(buf[:0], t1)
+	members := []TypeId{nt}
+	if n := c.arena.Node(nt); n.Kind == TKUnion {
+		members = c.arena.unionMembers[n.Extra]
+	}
+	for _, m := range members {
+		if !c.rel.kindsOverlap(m, t1) {
+			wider = append(wider, m)
+		}
+	}
+	if t := c.arena.MakeUnion(wider); c.rel.Retype(nt, t) {
+		return t, true
+	}
+	return 0, false
 }
 
 // asListMark is aslist: a new list is a partly new one whose elements are
@@ -823,41 +875,55 @@ func (c *coreChecker) newMark(p corePart) (coreMark, bool) {
 	return markOfPart(part), true
 }
 
-// mjoin joins two types under one mark: Relations.JoinSlot at a stored or
-// new position, and position by position inside a partly new one, so
-// each type is below the result by msub.
-func (c *coreChecker) mjoin(m coreMark, a, b TypeId) (TypeId, bool) {
+// mjoinN joins the arms' types under one mark, all at once:
+// Relations.JoinAll at a stored or new position, and position by position
+// inside a partly new one, so each type is below the result by msub.
+func (c *coreChecker) mjoinN(m coreMark, ts []TypeId) (TypeId, bool) {
 	if !m.partial() {
-		fr := m == markNew
-		s, ok := c.rel.JoinSlot(Slot{Type: a, Fresh: fr}, Slot{Type: b, Fresh: fr})
-		return s.Type, ok
+		return c.rel.JoinAll(m == markNew, ts)
 	}
-	p := c.partOf(m)
+	p := *c.partOf(m)
 	ar := c.arena
-	an, bn := ar.Node(a), ar.Node(b)
 	if p.list {
-		if an.Kind != TKList || bn.Kind != TKList {
-			return 0, false
+		elems := make([]TypeId, len(ts))
+		for i, t := range ts {
+			n := ar.Node(t)
+			if n.Kind != TKList {
+				return 0, false
+			}
+			elems[i] = TypeId(n.A)
 		}
-		e, ok := c.mjoin(p.elem, TypeId(an.A), TypeId(bn.A))
+		e, ok := c.mjoinN(p.elem, elems)
 		if !ok {
 			return 0, false
 		}
 		return ar.MakeList(e), true
 	}
-	if an.Kind != TKRecord || bn.Kind != TKRecord {
-		return 0, false
+	recs := make([]RecordType, len(ts))
+	var kb [16]NameId
+	keys := addLabels(kb[:0], p.labels)
+	for i, t := range ts {
+		n := ar.Node(t)
+		if n.Kind != TKRecord {
+			return 0, false
+		}
+		recs[i] = ar.records[n.Extra]
+		keys = addFields(keys, recs[i].Fields)
 	}
-	x, y := ar.records[an.Extra], ar.records[bn.Extra]
-	rest, ok := c.mfield(p.rest, x.Rest, y.Rest)
+	at := make([]RecordField, len(recs))
+	for i, x := range recs {
+		at[i] = x.Rest
+	}
+	rest, ok := c.mfieldN(p.rest, at)
 	if !ok {
 		return 0, false
 	}
-	var kb [16]NameId
-	keys := addFields(addFields(addLabels(kb[:0], p.labels), x.Fields), y.Fields)
 	fields := make([]RecordField, 0, len(keys))
 	for _, k := range keys {
-		f, ok := c.mfield(p.labelMark(k), x.FieldAt(k), y.FieldAt(k))
+		for i, x := range recs {
+			at[i] = x.FieldAt(k)
+		}
+		f, ok := c.mfieldN(p.labelMark(k), at)
 		if !ok {
 			return 0, false
 		}
@@ -867,15 +933,16 @@ func (c *coreChecker) mjoin(m coreMark, a, b TypeId) (TypeId, bool) {
 	return ar.MakeRecord(fields, rest), true
 }
 
-// mfield joins one label under its mark: Relations.fieldJoin's table, but
-// with the values joined by mjoin, and a label holding a partly new value
-// is not made open. A label present in one arm only is joined with itself,
-// since a partly new value is not always msub of itself.
-func (c *coreChecker) mfield(m coreMark, f, g RecordField) (RecordField, bool) {
-	status, x, y, join := fieldJoinShape(f, g)
-	if !join {
+// mfieldN joins one label under its mark: Relations.fieldJoin's table, but
+// with the values joined by mjoinN, and a label holding a partly new value
+// is not made open. A label present in one arm only is still joined, with
+// itself, since a partly new value is not always msub of itself.
+func (c *coreChecker) mfieldN(m coreMark, fs []RecordField) (RecordField, bool) {
+	var buf [8]TypeId
+	status, types := fieldJoinStatus(fs, buf[:0])
+	if len(types) == 0 {
 		return RecordField{Status: status}, !(m.partial() && status == FieldOpen)
 	}
-	t, ok := c.mjoin(m, x, y)
+	t, ok := c.mjoinN(m, types)
 	return RecordField{Status: status, Type: t}, ok
 }

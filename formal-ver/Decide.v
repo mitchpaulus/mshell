@@ -808,7 +808,7 @@ Proof. vm_compute. reflexivity. Qed.
     members widen only when both slots are fresh. *)
 Example alg_join_two_unions :
   join_slot jl (Sh, TUnion TStr TBool) (Sh, TUnion TStr TInt)
-  = Some (Sh, TUnion TStr (TUnion TBool TInt)).
+  = Some (Sh, TUnion TBool (TUnion TStr TInt)).
 Proof. vm_compute. reflexivity. Qed.
 
 Example alg_join_two_unions_fresh :
@@ -852,3 +852,20 @@ Example alg_joinN_union_any_order :
     [[ex_s; ex_b; ex_u]; [ex_s; ex_u; ex_b]; [ex_b; ex_s; ex_u];
      [ex_b; ex_u; ex_s]; [ex_u; ex_s; ex_b]; [ex_u; ex_b; ex_s]].
 Proof. repeat constructor; eexists; vm_compute; reflexivity. Qed.
+
+(** Three stored dicts: [{a: int}] and [{b: int}] have no join, and both
+    are below the open [{}].  Joined two at a time, the orders that met the
+    first two first had no join.  All at once, the join is the arm the
+    others are below, in every order. *)
+Definition ex_ra : ty := TRec [("a"%string, FReq TInt)] FAbs.
+Definition ex_rb : ty := TRec [("b"%string, FReq TInt)] FAbs.
+Definition ex_ro : ty := TRec [] FOpen.
+
+Example alg_join_two_no_join : tjoinN jl 30 false [ex_ra; ex_rb] = None.
+Proof. vm_compute. reflexivity. Qed.
+
+Example alg_join_all_any_order :
+  Forall (fun ts => tjoinN jl 30 false ts = Some ex_ro)
+    [[ex_ra; ex_rb; ex_ro]; [ex_ra; ex_ro; ex_rb]; [ex_rb; ex_ra; ex_ro];
+     [ex_rb; ex_ro; ex_ra]; [ex_ro; ex_ra; ex_rb]; [ex_ro; ex_rb; ex_ra]].
+Proof. repeat constructor; vm_compute; reflexivity. Qed.

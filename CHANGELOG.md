@@ -276,9 +276,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Type checker: a list or branch that mixes a union value with values of other types no longer depends on their order.
+- Type checker: whether the elements of a list or the branches of an `if` or `match` have a common type no longer depends on their order.
   `["a" true @x]` with `x` a `str | null` was rejected with "the elements of this list have no common type",
-  while `[@x "a" true]` was accepted. Two different unions now join to one union of their members.
+  while `[@x "a" true]` was accepted. All the elements or branches are now joined at once, not two at a time.
 - Tab quotes an argument that would mean something else typed bare:
   `2.0` (the number 2), `@preview/x` (a variable), `<intro>` (a redirect), `true`, or the name of a built-in or definition.
   A file name is put in backticks, a completion definition's value in single quotes.

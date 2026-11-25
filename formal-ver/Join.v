@@ -1,30 +1,42 @@
 (** * Branch joins.
 
-    When the arms of an [if] leave different types in one slot, a checker
-    computes their join.  [join_slot] is the design's join, written as a
-    function, and [join_slot_ub] proves it is an upper bound of both arms
-    under slot subsumption, so an [if] whose arms are joined this way
-    checks in the core.
+    When the arms of an [if] or [match], or the elements of a list, leave
+    different types in one slot, a checker computes their join.  [tjoinN]
+    is the design's join of any number of types, written as a function,
+    and [tjoinN_ub] proves it is above every one of them.  [join_slot] is
+    the join of two slots, and [join_slot_ub] proves it an upper bound of
+    both arms under slot subsumption, so an [if] whose arms are joined this
+    way checks in the core.
+
+    The join takes all the types at once.  A join of two folded over the
+    arms depended on their order, because it is not a least upper bound:
+    where two types cannot be widened inside, the only join of two is the
+    one the other is below, so [a] and [b] could have no join while both
+    were below a third arm [c].
 
     Choices the proof pins down:
-    - the result is fresh only when both arms are fresh;
+    - the result is fresh only when every arm is fresh;
+    - if one of the types is above all the others, it is the join ([<=],
+      or the fresh retype when the slots are fresh).  So a quote that never
+      returns joins with any quote with the same inputs;
+    - otherwise the members of the types are grouped by kind, each group is
+      joined, and the join is the union of those.  Two instances of
+      different enums have different kinds;
     - widening *inside* a list, shape or fresh-covariant enum argument
-      happens only when both arms are fresh; inside a covariant enum
+      happens only when the arms are fresh; inside a covariant enum
       argument of shared values (a [Maybe], say) the inner join is itself a
       shared join;
-    - two instances of different enums have different kinds, and join to
-      their union, like any two types of different kinds;
-    - when the types cannot be widened inside (quotes, shared containers,
-      invariant and contravariant arguments, two unions), the join is the
-      other side if one side is below the other ([<=], or the fresh retype
-      when both slots are fresh), and otherwise there is none.  So a quote
-      that never returns joins with any quote with the same inputs;
-    - joining into a union joins the member of the same kind;
-    - a recursive type is never widened inside ([ajoin]): the join takes
-      the other side when one is below the other ([<=], or the fresh retype
-      when both slots are fresh), or makes a union when their kinds do not
-      overlap, and otherwise fails.  Widening inside two different recursive
+    - members of one kind that cannot be widened inside (quotes, shared
+      containers, invariant and contravariant arguments) join only to the
+      one all the others are below;
+    - a recursive type is never widened inside.  The other members of its
+      group may be, and that join is the group's if the recursive type is
+      below it ([join_rest]).  Widening inside two different recursive
       types would need a new recursive type for the result.
+
+    The proofs say a join is above its arms.  They do not say that a join
+    is found whenever one exists, nor that it is the same for every order
+    of the arms; the Go tests check the second on random arms.
 
     The join is given the checker's decision procedure for [<=] and fresh
     retyping ([le]); the proofs assume only that it is right when it says
@@ -158,105 +170,35 @@ Fixpoint ukind (k : kind) (t : ty) : bool :=
   | _ => match kind_of_ty t with Some k' => kind_eqb k k' | None => false end
   end.
 
-(** Labels of two fresh shapes, joined: present in both stays present;
-    otherwise it becomes optional; deletable stays deletable; unknown wins. *)
-Definition fjoin (j : bool -> ty -> ty -> option ty) (f g : fstat) : option fstat :=
-  match f, g with
-  | FOpen, _ | _, FOpen => Some FOpen
-  | FAbs, FAbs => Some FAbs
-  | FReq x, FReq y => option_map FReq (j true x y)
-  | FDict x, FDict y => option_map FDict (j true x y)
-  | FAbs, FDict y | FDict y, FAbs => Some (FDict y)
-  | FAbs, (FReq y | FOpt y) | (FReq y | FOpt y), FAbs => Some (FOpt y)
-  | FReq x, (FOpt y | FDict y) | FOpt x, (FReq y | FOpt y | FDict y) | FDict x, (FReq y | FOpt y) =>
-      option_map FOpt (j true x y)
-  end.
-
-Definition rjoin (j : bool -> ty -> ty -> option ty) fs1 r1 fs2 r2 : option ty :=
-  match omapl (fun k => option_map (fun f => (k, f)) (fjoin j (field_at k fs1 r1) (field_at k fs2 r2)))
-              (map fst fs1 ++ map fst fs2), fjoin j r1 r2 with
-  | Some fs, Some r => Some (TRec fs r)
-  | _, _ => None
-  end.
-
-(** Enum arguments: a fresh-covariant argument of fresh values widens; a
-    covariant one joins as shared values; any other must be equal. *)
-Fixpoint ejoin (j : bool -> ty -> ty -> option ty) (fr : bool) (ps : list eparam) (xs ys : list ty)
-  : option (list ty) :=
-  match ps, xs, ys with
-  | [], [], [] => Some []
-  | p :: ps', x :: xs', y :: ys' =>
-      let r := if fr && p_fresh p then j true x y
-               else match p_var p with
-                    | VCo => j false x y
-                    | _ => if ty_eqb x y then Some x else None
-                    end in
-      match r, ejoin j fr ps' xs' ys' with Some z, Some zs => Some (z :: zs) | _, _ => None end
-  | _, _, _ => None
-  end.
-
 (** Below: [<=] for shared slots, the fresh retype when both are fresh. *)
 Definition jrel (fr : bool) (x y : ty) : Prop := if fr then rsub x y else sub x y.
 
-Section Join.
-(** The checker's decision procedure for [jrel]. *)
-Variable le : bool -> ty -> ty -> bool.
+(** ** One join for any number of types
 
-(** A recursive type on either side: never widened inside.  The other side
-    if one is below the other; a union if their kinds do not overlap. *)
-Definition ajoin (fr : bool) (a b : ty) : option ty :=
-  if ty_eqb a TBot then Some b else if ty_eqb b TBot then Some a else
-  if le fr a b then Some b else if le fr b a then Some a else
-  match akinds a, akinds b with
-  | Some ka, Some kb => if kdisj ka kb then Some (TUnion a b) else None
-  | _, _ => None
-  end.
+    The join takes all the types at once ([tjoinN]), and the join of two is
+    the join of a list of two.  A join of two folded over the arms depended
+    on their order: where two types cannot be widened inside, the only join
+    of two is the one the other is below, so [a] and [b] could have no join
+    while both were below a third arm [c].
 
-(** One level of the join: the cases that look inside the two types, with
-    [j] for the joins of their parts.  It gives [None] where a type cannot
-    be widened inside, and [tjoin] then tries whether one side is below the
-    other. *)
-Definition tjoin_core (j : bool -> ty -> ty -> option ty) (fr : bool) (a b : ty) : option ty :=
-  match a, b with
-  | TBot, _ => Some b
-  | _, TBot => Some a
-  | TUnion _ _, TUnion _ _ => None
-  | TUnion a1 a2, _ =>
-      match kind_of_ty b with
-      | Some k => if ukind k a1 then option_map (fun z => TUnion z a2) (j fr a1 b)
-                  else if ukind k a2 then option_map (fun z => TUnion a1 z) (j fr a2 b)
-                  else Some (TUnion a b)
-      | None => None
-      end
-  | _, TUnion b1 b2 =>
-      match kind_of_ty a with
-      | Some k => if ukind k b1 then option_map (fun z => TUnion z b2) (j fr a b1)
-                  else if ukind k b2 then option_map (fun z => TUnion b1 z) (j fr a b2)
-                  else Some (TUnion b a)
-      | None => None
-      end
-  | TList x, TList y => if fr then option_map TList (j true x y) else None
-  | TRec fs1 r1, TRec fs2 r2 => if fr then rjoin j fs1 r1 fs2 r2 else None
-  | TEnum E xs, TEnum E' ys =>
-      if ename_eqb E E' then option_map (TEnum E) (ejoin j fr (en_params E) xs ys)
-      else Some (TUnion a b)
-  | _, _ =>
-      match kind_of_ty a, kind_of_ty b with
-      | Some ka, Some kb => if kind_eqb ka kb then None else Some (TUnion a b)
-      | _, _ => None
-      end
-  end.
+    - [⊥] and repeated types are dropped.
+    - If one of the types is above all the others, it is the join.
+    - Otherwise the members of the types (a union's members, or the type
+      itself) are put in groups: two members are in one group when their
+      kinds overlap, directly or through other members.  Each group is
+      joined, and the join is the union of those.
+    - A group of one member is that member.  A group of lists, of dicts or
+      of instances of one enum is widened inside, the parts joined all at
+      once; lists and dicts only when the slots are fresh.  Otherwise, or
+      when that fails, the join is the member all the others are below, and
+      else there is none. *)
 
-(** Two different unions, neither below the other, are joined member by
-    member.  A member of [a] is joined with the member of [b] whose kinds
-    overlap its own, and stays as it is when [b] has none.  The members of
-    [b] that no member of [a] overlaps are kept.  There is no join when a
-    member overlaps two members of the other union, or when two members of
-    the result overlap. *)
+(** The members of a union. *)
 Fixpoint leaves (t : ty) : list ty :=
   match t with TUnion a b => leaves a ++ leaves b | _ => [t] end.
 
-(** A member with no kinds known overlaps every type. *)
+(** Do two types have a kind in common?  A type with no kinds known
+    overlaps every type. *)
 Definition overlap (a b : ty) : bool :=
   match akinds a, akinds b with
   | Some ka, Some kb => negb (kdisj ka kb)
@@ -276,46 +218,158 @@ Fixpoint dedup (ts : list ty) : list ty :=
   | t :: r => if existsb (ty_eqb t) r then dedup r else t :: dedup r
   end.
 
-Fixpoint apart (ts : list ty) : bool :=
-  match ts with
-  | [] => true
-  | t :: r => forallb (fun u => negb (overlap t u)) r && apart r
+Definition is_bot (t : ty) : bool := match t with TBot => true | _ => false end.
+
+Definition clean (ts : list ty) : list ty := dedup (filter (fun t => negb (is_bot t)) ts).
+
+(** The first of the types that all the others are below. *)
+Definition max_of (le : ty -> ty -> bool) (ts : list ty) : option ty :=
+  find (fun c => forallb (fun t => ty_eqb t c || le t c) ts) ts.
+
+(** The groups: [t] joins every group it overlaps into one. *)
+Definition add_comp (t : ty) (cs : list (list ty)) : list (list ty) :=
+  let (hit, miss) := partition (existsb (overlap t)) cs in (t :: concat hit) :: miss.
+
+Definition components (ts : list ty) : list (list ty) := fold_right add_comp [] ts.
+
+(** One label of several fresh shapes: unknown if it is unknown in one;
+    absent if absent in all; present if present in all; deletable if
+    deletable or absent in all; otherwise optional.  The types it has are
+    joined all at once. *)
+Definition ftys (fs : list fstat) : list ty :=
+  flat_map (fun f => match f with FReq t | FOpt t | FDict t => [t] | FAbs | FOpen => [] end) fs.
+
+Definition is_open (f : fstat) : bool := match f with FOpen => true | _ => false end.
+Definition is_req (f : fstat) : bool := match f with FReq _ => true | _ => false end.
+Definition is_dict_abs (f : fstat) : bool := match f with FDict _ | FAbs => true | _ => false end.
+
+Definition fstatus (fs : list fstat) (z : ty) : fstat :=
+  if forallb is_req fs then FReq z else if forallb is_dict_abs fs then FDict z else FOpt z.
+
+Definition fjoinN (j : list ty -> option ty) (fs : list fstat) : option fstat :=
+  if existsb is_open fs then Some FOpen else
+  match ftys fs with
+  | [] => Some FAbs
+  | ts => option_map (fstatus fs) (j ts)
   end.
 
-Definition ujoin1 (j : bool -> ty -> ty -> option ty) (fr : bool) (lb : list ty) (l : ty) : option ty :=
-  match filter (overlap l) lb with
-  | [] => Some l
-  | [m] => j fr l m
-  | _ => None
-  end.
-
-Definition ujoin_members (j : bool -> ty -> ty -> option ty) (fr : bool) (a b : ty) : option ty :=
-  match omapl (ujoin1 j fr (leaves b)) (leaves a) with
-  | Some la =>
-      let ts := dedup (la ++ filter (fun m => negb (existsb (fun l => overlap l m) (leaves a))) (leaves b)) in
-      if apart ts then Some (munion ts) else None
-  | None => None
-  end.
-
-Definition ujoin (j : bool -> ty -> ty -> option ty) (fr : bool) (a b : ty) : option ty :=
-  match a, b with
-  | TUnion _ _, TUnion _ _ => ujoin_members j fr a b
+Definition rjoinN (j : list ty -> option ty) (rs : list (list (label * fstat) * fstat)) : option ty :=
+  match omapl (fun k => option_map (fun f => (k, f)) (fjoinN j (map (fun r => field_at k (fst r) (snd r)) rs)))
+              (flat_map (fun r => map fst (fst r)) rs), fjoinN j (map snd rs) with
+  | Some fs, Some r => Some (TRec fs r)
   | _, _ => None
   end.
 
-(** [tjoin n fr a b]: the join of two slot types, [fr] when both slots are
-    fresh.  [n] is fuel. *)
-Fixpoint tjoin (n : nat) (fr : bool) (a b : ty) {struct n} : option ty :=
+(** Enum arguments: a fresh-covariant argument of fresh values widens; a
+    covariant one joins as shared values; any other must be the same in
+    all. *)
+Definition all_eq (ts : list ty) : option ty :=
+  match ts with
+  | [] => None
+  | x :: r => if forallb (ty_eqb x) r then Some x else None
+  end.
+
+Definition uncons (xs : list ty) : option (ty * list ty) :=
+  match xs with x :: r => Some (x, r) | [] => None end.
+
+Definition ecol (j : bool -> list ty -> option ty) (fr : bool) (p : eparam) (col : list ty) : option ty :=
+  if fr && p_fresh p then j true col
+  else match p_var p with VCo => j false col | _ => all_eq col end.
+
+Fixpoint ejoinN (j : bool -> list ty -> option ty) (fr : bool) (ps : list eparam) (xss : list (list ty))
+  : option (list ty) :=
+  match ps with
+  | [] => if forallb (fun xs => match xs with [] => true | _ => false end) xss then Some [] else None
+  | p :: ps' =>
+      match omapl uncons xss with
+      | Some hts =>
+          match ecol j fr p (map fst hts), ejoinN j fr ps' (map snd hts) with
+          | Some z, Some zs => Some (z :: zs)
+          | _, _ => None
+          end
+      | None => None
+      end
+  end.
+
+Definition as_list (t : ty) : option ty := match t with TList x => Some x | _ => None end.
+Definition as_rec (t : ty) : option (list (label * fstat) * fstat) :=
+  match t with TRec fs r => Some (fs, r) | _ => None end.
+Definition as_enum (E : ename) (t : ty) : option (list ty) :=
+  match t with TEnum E' xs => if ename_eqb E E' then Some xs else None | _ => None end.
+
+(** A group widened inside: every member a list, a dict, or an instance of
+    one enum. *)
+Definition structural (j : bool -> list ty -> option ty) (fr : bool) (c : list ty) : option ty :=
+  match c with
+  | TList _ :: _ =>
+      if fr then match omapl as_list c with Some xs => option_map TList (j true xs) | None => None end
+      else None
+  | TRec _ _ :: _ =>
+      if fr then match omapl as_rec c with Some rs => rjoinN (j true) rs | None => None end
+      else None
+  | TEnum E _ :: _ =>
+      match omapl (as_enum E) c with
+      | Some xss => option_map (TEnum E) (ejoinN j fr (en_params E) xss)
+      | None => None
+      end
+  | _ => None
+  end.
+
+Section Join.
+(** The checker's decision procedure for [jrel]. *)
+Variable le : bool -> ty -> ty -> bool.
+
+(** A recursive type is never widened inside, but the other members of
+    its group may be: when no member is above the rest, the others are
+    joined, and that is the join if every recursive type is below it. *)
+Definition join_rest (j : bool -> list ty -> option ty) (fr : bool) (c : list ty) : option ty :=
+  match filter is_mu c, filter (fun t => negb (is_mu t)) c with
+  | a :: als, o :: others =>
+      match j fr (o :: others) with
+      | Some r => if forallb (fun x => le fr x r) (a :: als) then Some r else None
+      | None => None
+      end
+  | _, _ => None
+  end.
+
+Definition join_comp (j : bool -> list ty -> option ty) (fr : bool) (c : list ty) : option ty :=
+  match c with
+  | [t] => Some t
+  | _ => match structural j fr c with
+         | Some r => Some r
+         | None => match max_of (le fr) c with
+                   | Some m => Some m
+                   | None => join_rest j fr c
+                   end
+         end
+  end.
+
+(** Two or more different types, none [⊥]. *)
+Definition join_many (j : bool -> list ty -> option ty) (fr : bool) (ts : list ty) : option ty :=
+  match max_of (le fr) ts with
+  | Some c => Some c
+  | None =>
+      match omapl (join_comp j fr) (components (dedup (flat_map leaves ts))) with
+      | Some rs => Some (munion rs)
+      | None => None
+      end
+  end.
+
+(** [tjoinN n fr ts]: the join of the types [ts] of slots that are all
+    fresh ([fr]) or not.  [n] is fuel. *)
+Fixpoint tjoinN (n : nat) (fr : bool) (ts : list ty) {struct n} : option ty :=
   match n with
   | 0 => None
   | S n' =>
-  if ty_eqb a b then Some a else
-  if is_mu a || is_mu b then ajoin fr a b else
-  match tjoin_core (tjoin n') fr a b with
-  | Some c => Some c
-  | None => if le fr a b then Some b else if le fr b a then Some a else ujoin (tjoin n') fr a b
-  end
+      match clean ts with
+      | [] => Some TBot
+      | [t] => Some t
+      | ts' => join_many (tjoinN n') fr ts'
+      end
   end.
+
+(** The join of two slot types. *)
+Definition tjoin (n : nat) (fr : bool) (a b : ty) : option ty := tjoinN n fr [a; b].
 
 Definition join_slot (p q : slot) : option slot :=
   let fr := match fst p, fst q with Dp, Dp => true | _, _ => false end in
@@ -333,8 +387,6 @@ Fixpoint join_stack (s1 s2 : sty) : option sty :=
   end.
 End Join.
 
-Arguments ajoin : simpl never.
-Arguments ujoin : simpl never.
 
 (** ** The join is an upper bound *)
 
@@ -356,23 +408,13 @@ Proof. destruct fr; simpl; intros; [apply rs_unionl | apply s_unionl]; auto. Qed
 Lemma jrel_maybe fr x y : jrel fr x y -> jrel fr (TMaybe x) (TMaybe y).
 Proof. destruct fr; simpl; intros; [apply rs_maybe | apply s_maybe]; auto. Qed.
 
-Definition jok (j : bool -> ty -> ty -> option ty) : Prop :=
-  forall fr x y z, j fr x y = Some z -> jrel fr x z /\ jrel fr y z.
+Definition jokN (j : bool -> list ty -> option ty) : Prop :=
+  forall fr ts z, j fr ts = Some z -> Forall (fun t => jrel fr t z) ts.
 
-Lemma fjoin_ub j f g h : jok j -> fjoin j f g = Some h -> frsub f h /\ frsub g h.
+Lemma field_at_notin k fs (r : fstat) : ~ In k (map fst fs) -> field_at k fs r = r.
 Proof.
-  intros J E. destruct f, g; simpl in E; try (inversion E; subst; split; constructor; fail);
-    try (destruct (j true t t0) as [z|] eqn:Ej; simpl in E; inversion E; subst;
-         destruct (J _ _ _ _ Ej) as [H1 H2]; simpl in H1, H2);
-    try (inversion E; subst).
-  all: try (split; constructor; auto; fail).
-  all: try (split; [eapply frs_opt | eapply frs_opt]; eauto; fail).
-  all: try (split; [eapply frs_dict | eapply frs_dict]; eauto; fail).
-  all: try (split; [apply frs_abs_opt | eapply frs_opt; [|apply rs_sub, s_refl]]; eauto; fail).
-  all: try (split; [eapply frs_opt; [|apply rs_sub, s_refl] | apply frs_abs_opt]; eauto; fail).
-  all: try (split; [apply frs_abs_dict | eapply frs_dict; [|apply rs_sub, s_refl]]; eauto; fail).
-  all: try (split; [eapply frs_dict; [|apply rs_sub, s_refl] | apply frs_abs_dict]; eauto; fail).
-  all: split; constructor.
+  intros H. unfold field_at. induction fs as [|[k' f] fs IH]; simpl in *; auto.
+  destruct (String.eqb_spec k k'); [subst; exfalso; apply H; left; reflexivity | apply IH; tauto].
 Qed.
 
 Lemma omapl_lookup (F : string -> option fstat) : forall keys fs,
@@ -387,129 +429,18 @@ Proof.
     intros k v H. simpl in H. destruct (String.eqb_spec k k0); [subst; inversion H; subst; auto | auto].
 Qed.
 
-Lemma field_at_notin k fs (r : fstat) : ~ In k (map fst fs) -> field_at k fs r = r.
+Lemma omapl_in {A B} (f : A -> option B) : forall l l', omapl f l = Some l' ->
+  forall x, In x l -> exists y, In y l' /\ f x = Some y.
 Proof.
-  intros H. unfold field_at. induction fs as [|[k' f] fs IH]; simpl in *; auto.
-  destruct (String.eqb_spec k k'); [subst; exfalso; apply H; left; reflexivity | apply IH; tauto].
+  induction l as [|x0 l IH]; simpl; intros l' E x I; [contradiction|].
+  destruct (f x0) as [y0|] eqn:Ex; [|discriminate].
+  destruct (omapl f l) as [ys|] eqn:El; [|discriminate]. inversion E; subst.
+  destruct I as [<-|I]; [exists y0; simpl; auto|].
+  destruct (IH ys eq_refl x I) as (y & Iy & Ey). exists y. simpl. auto.
 Qed.
 
-Lemma rjoin_ub j fs1 r1 fs2 r2 c : jok j -> rjoin j fs1 r1 fs2 r2 = Some c ->
-  rsub (TRec fs1 r1) c /\ rsub (TRec fs2 r2) c.
-Proof.
-  intros J E. unfold rjoin in E.
-  destruct (omapl _ _) as [fs|] eqn:Eo; [|discriminate].
-  destruct (fjoin j r1 r2) as [r|] eqn:Er; [|discriminate]. inversion E; subst.
-  apply omapl_lookup in Eo as [Hk Hl].
-  assert (Hf : forall k, fjoin j (field_at k fs1 r1) (field_at k fs2 r2) = Some (field_at k fs r)).
-  { intros k. unfold field_at at 3. destruct (lookup k fs) as [v|] eqn:Ev.
-    - apply Hl in Ev. exact Ev.
-    - apply lookup_none_iff in Ev. rewrite Hk in Ev.
-      rewrite !field_at_notin; auto; intro Hc; apply Ev; apply in_or_app; auto. }
-  split; apply rs_rec; intros k; destruct (fjoin_ub j _ _ _ J (Hf k)); auto.
-Qed.
-
-Lemma ejoin_ub j fr : jok j -> forall ps xs ys zs, ejoin j fr ps xs ys = Some zs ->
-  if fr then vrsubs ps xs zs /\ vrsubs ps ys zs else vsubs ps xs zs /\ vsubs ps ys zs.
-Proof.
-  intros J. induction ps as [|p ps IH]; intros [|x xs] [|y ys] zs E; simpl in E; try discriminate.
-  - inversion E; subst. destruct fr; split; constructor.
-  - match type of E with context [match ?r with _ => _ end] =>
-      destruct r as [z|] eqn:Ez; [|discriminate] end.
-    destruct (ejoin j fr ps xs ys) as [zs'|] eqn:Ezs; [|discriminate]. inversion E; subst.
-    specialize (IH _ _ _ Ezs).
-    destruct fr, (p_fresh p) eqn:Fp; simpl in Ez.
-    + destruct (J _ _ _ _ Ez) as [H1 H2]; simpl in H1, H2. destruct IH.
-      split; apply vrs_fresh; auto.
-    + destruct IH. destruct (p_var p) eqn:Vp.
-      * destruct (J _ _ _ _ Ez) as [H1 H2]; simpl in H1, H2.
-        split; apply vrs_sub; auto; rewrite Vp; exact H1 || exact H2.
-      * destruct (ty_eqb x y) eqn:Exy; inversion Ez; subst. apply ty_eqb_true in Exy; subst.
-        split; apply vrs_sub; auto; rewrite Vp; apply s_refl.
-      * destruct (ty_eqb x y) eqn:Exy; inversion Ez; subst. apply ty_eqb_true in Exy; subst.
-        split; apply vrs_sub; auto; rewrite Vp; apply teq_refl.
-    + destruct IH. destruct (p_var p) eqn:Vp.
-      * destruct (J _ _ _ _ Ez) as [H1 H2]; simpl in H1, H2. split; apply vs_co; auto.
-      * destruct (ty_eqb x y) eqn:Exy; inversion Ez; subst. apply ty_eqb_true in Exy; subst.
-        split; apply vs_contra; auto; apply s_refl.
-      * destruct (ty_eqb x y) eqn:Exy; inversion Ez; subst. apply ty_eqb_true in Exy; subst.
-        split; apply vs_inv; auto; apply s_refl.
-    + destruct IH. destruct (p_var p) eqn:Vp.
-      * destruct (J _ _ _ _ Ez) as [H1 H2]; simpl in H1, H2. split; apply vs_co; auto.
-      * destruct (ty_eqb x y) eqn:Exy; inversion Ez; subst. apply ty_eqb_true in Exy; subst.
-        split; apply vs_contra; auto; apply s_refl.
-      * destruct (ty_eqb x y) eqn:Exy; inversion Ez; subst. apply ty_eqb_true in Exy; subst.
-        split; apply vs_inv; auto; apply s_refl.
-Qed.
-
-Ltac jfin := first
-  [ split; [apply jrel_unionr1, jrel_refl | apply jrel_unionr2, jrel_refl]
-  | split; [apply jrel_unionr2, jrel_refl | apply jrel_unionr1, jrel_refl]
-  | split; [apply jrel_bot | apply jrel_refl]
-  | split; [apply jrel_refl | apply jrel_bot] ].
-
-(** The weakest decision procedure: it never says yes.  Joins that meet no
-    recursive type do not consult it. *)
-Definition le_none : bool -> ty -> ty -> bool := fun _ _ _ => false.
-
-Lemma le_none_ok fr a b : le_none fr a b = true -> jrel fr a b.
-Proof. discriminate. Qed.
-
-Section UB.
-Variable le : bool -> ty -> ty -> bool.
-(** The decision procedure is right when it says yes. *)
-Hypothesis le_ok : forall fr a b, le fr a b = true -> jrel fr a b.
-
-Lemma ajoin_ub fr a b c : ajoin le fr a b = Some c -> jrel fr a c /\ jrel fr b c.
-Proof.
-  unfold ajoin. intros E.
-  destruct (ty_eqb a TBot) eqn:Ea.
-  { apply ty_eqb_true in Ea; subst. injection E as <-. split; [apply jrel_bot | apply jrel_refl]. }
-  destruct (ty_eqb b TBot) eqn:Eb.
-  { apply ty_eqb_true in Eb; subst. injection E as <-. split; [apply jrel_refl | apply jrel_bot]. }
-  destruct (le fr a b) eqn:L1.
-  { injection E as <-. split; [apply le_ok; exact L1 | apply jrel_refl]. }
-  destruct (le fr b a) eqn:L2.
-  { injection E as <-. split; [apply jrel_refl | apply le_ok; exact L2]. }
-  destruct (akinds a), (akinds b); try discriminate.
-  destruct (kdisj _ _); [|discriminate]. injection E as <-.
-  split; [apply jrel_unionr1 | apply jrel_unionr2]; apply jrel_refl.
-Qed.
-
-Lemma tjoin_core_ub j fr a b c : jok j -> tjoin_core j fr a b = Some c -> jrel fr a c /\ jrel fr b c.
-Proof.
-  intros J E. unfold tjoin_core in E.
-  destruct a, b; try discriminate;
-    try (injection E as <-; jfin; fail).
-  (* the remaining cases: unions, Maybe, lists, shapes, enums *)
-  all: repeat match goal with
-         | E : (if ?x then _ else _) = Some _ |- _ => destruct x eqn:?
-         | E : option_map _ ?x = Some _ |- _ =>
-             let Ex := fresh "Ex" in destruct x eqn:Ex; simpl in E; [injection E as <- | discriminate]
-         | E : (match ?x with Some _ => _ | None => _ end) = Some _ |- _ => destruct x eqn:?
-         | E : Some _ = Some _ |- _ => injection E as <-
-         | E : None = Some _ |- _ => discriminate
-         end.
-  all: try jfin.
-  all: try (match goal with Ex : _ = Some _ |- _ => destruct (J _ _ _ _ Ex) as [H1 H2] end).
-  all: try (split; [apply jrel_unionl; [apply jrel_unionr1; auto | apply jrel_unionr2, jrel_refl]
-                   | apply jrel_unionr1; auto]; fail).
-  all: try (split; [apply jrel_unionl; [apply jrel_unionr1, jrel_refl | apply jrel_unionr2; auto]
-                   | apply jrel_unionr2; auto]; fail).
-  all: try (split; [apply jrel_unionr1; auto
-                   | apply jrel_unionl; [apply jrel_unionr1; auto | apply jrel_unionr2, jrel_refl]]; fail).
-  all: try (split; [apply jrel_unionr2; auto
-                   | apply jrel_unionl; [apply jrel_unionr1, jrel_refl | apply jrel_unionr2; auto]]; fail).
-  all: try (split; apply jrel_maybe; auto; fail).
-  all: try (simpl in *; split; apply rs_list; auto; fail).
-  all: try (eapply rjoin_ub; eauto; fail).
-  (* enums *)
-  match goal with H : ename_eqb _ _ = true |- _ => apply ename_eqb_true in H; subst end.
-  match goal with Ex : ejoin _ _ _ _ _ = Some _ |- _ => pose proof (ejoin_ub _ fr J _ _ _ _ Ex) as Hj end.
-  destruct fr; simpl in *; destruct Hj; split; [apply rs_enum | apply rs_enum | apply s_enum | apply s_enum]; auto.
-Qed.
-
-(** Two unions joined member by member: every member of each reaches the
-    join directly, so no transitivity of the fresh retype is needed. *)
+(** Every member of a union reaches the join directly, so no transitivity
+    of the fresh retype is needed. *)
 Lemma munion_in fr x : forall ts t, In t ts -> jrel fr x t -> jrel fr x (munion ts).
 Proof.
   induction ts as [|t0 ts IH]; simpl; intros t I H; [contradiction|].
@@ -533,63 +464,221 @@ Proof.
   - destruct I as [<-|I]; [left; reflexivity | right; auto].
 Qed.
 
-Lemma omapl_in {A B} (f : A -> option B) : forall l l', omapl f l = Some l' ->
-  forall x, In x l -> exists y, In y l' /\ f x = Some y.
+Lemma components_in t : forall ts, In t ts -> exists c, In c (components ts) /\ In t c.
 Proof.
-  induction l as [|x0 l IH]; simpl; intros l' E x I; [contradiction|].
-  destruct (f x0) as [y0|] eqn:Ex; [|discriminate].
-  destruct (omapl f l) as [ys|] eqn:El; [|discriminate]. inversion E; subst.
-  destruct I as [<-|I]; [exists y0; simpl; auto|].
-  destruct (IH ys eq_refl x I) as (y & Iy & Ey). exists y. simpl. auto.
+  induction ts as [|a ts IH]; simpl; intros I; [contradiction|].
+  unfold add_comp. destruct (partition (existsb (overlap a)) (components ts)) as [hit miss] eqn:Ep.
+  destruct I as [<-|I].
+  - exists (a :: concat hit). simpl. auto.
+  - destruct (IH I) as (c & Ic & It).
+    apply (elements_in_partition _ _ Ep) in Ic as [Ic|Ic].
+    + exists (a :: concat hit). split; [left; reflexivity|]. right. apply in_concat. eauto.
+    + exists c. split; [right; exact Ic | exact It].
 Qed.
 
-Lemma ujoin_members_ub j fr a b c : jok j -> ujoin_members j fr a b = Some c -> jrel fr a c /\ jrel fr b c.
+Lemma max_of_ub (le0 : ty -> ty -> bool) (R : ty -> ty -> Prop) ts c :
+  (forall a b, le0 a b = true -> R a b) -> (forall a, R a a) ->
+  max_of le0 ts = Some c -> Forall (fun t => R t c) ts.
 Proof.
-  intros J E. unfold ujoin_members in E.
-  destruct (omapl (ujoin1 j fr (leaves b)) (leaves a)) as [la|] eqn:Eo; [|discriminate].
-  destruct (apart _); [|discriminate]. injection E as <-.
-  split; apply leaves_ub.
-  - intros l Il. destruct (omapl_in _ _ _ Eo l Il) as (y & Iy & Ey).
-    eapply munion_in; [apply dedup_in, in_or_app; left; exact Iy|].
-    unfold ujoin1 in Ey. destruct (filter (overlap l) (leaves b)) as [|m [|m2 r]].
-    + injection Ey as <-. apply jrel_refl.
-    + apply (J _ _ _ _ Ey).
-    + discriminate.
-  - intros m Im. destruct (existsb (fun l => overlap l m) (leaves a)) eqn:Ec.
-    + apply existsb_exists in Ec as (l & Il & Ol).
-      destruct (omapl_in _ _ _ Eo l Il) as (y & Iy & Ey).
-      eapply munion_in; [apply dedup_in, in_or_app; left; exact Iy|].
-      assert (Hf : In m (filter (overlap l) (leaves b))) by (apply filter_In; auto).
-      unfold ujoin1 in Ey. revert Ey Hf.
-      destruct (filter (overlap l) (leaves b)) as [|m1 [|m2 r]]; intros Ey Hf.
-      * contradiction.
-      * destruct Hf as [<-|[]]. apply (J _ _ _ _ Ey).
-      * discriminate.
-    + eapply munion_in; [|apply jrel_refl].
-      apply dedup_in, in_or_app. right. apply filter_In. split; [exact Im | rewrite Ec; reflexivity].
+  intros L Rf E. apply find_some in E as [_ E]. rewrite forallb_forall in E.
+  apply Forall_forall. intros t I. specialize (E t I). apply orb_true_iff in E as [E|E].
+  - apply ty_eqb_true in E. subst. apply Rf.
+  - apply L, E.
 Qed.
 
-Lemma ujoin_ub j fr a b c : jok j -> ujoin j fr a b = Some c -> jrel fr a c /\ jrel fr b c.
+Lemma ftys_in t : forall fs f, In f fs -> (f = FReq t \/ f = FOpt t \/ f = FDict t) -> In t (ftys fs).
 Proof.
-  intros J E. unfold ujoin in E.
-  destruct a; try discriminate; destruct b; try discriminate.
-  eapply ujoin_members_ub; eauto.
+  intros fs f I H. unfold ftys. apply in_flat_map. exists f. split; [exact I|].
+  destruct H as [->|[->| ->]]; left; reflexivity.
+Qed.
+
+Lemma fjoinN_ub (R : ty -> ty -> Prop) j fs h :
+  (forall ts z, j ts = Some z -> Forall (fun x => R x z) ts) ->
+  fjoinN j fs = Some h -> Forall (fun f => frsubR R f h) fs.
+Proof.
+  intros J E. unfold fjoinN in E. apply Forall_forall. intros f I.
+  destruct (existsb is_open fs) eqn:Op.
+  { inversion E; subst. apply frs_open. }
+  assert (No : is_open f = false).
+  { destruct (is_open f) eqn:O; [|reflexivity].
+    assert (X : existsb is_open fs = true) by (apply existsb_exists; eauto). congruence. }
+  destruct (ftys fs) as [|t0 tl] eqn:Et.
+  { inversion E; subst. destruct f as [t|t|t| |]; try discriminate; try apply frs_abs;
+      exfalso; assert (X : In t (ftys fs)) by (eapply ftys_in; eauto); rewrite Et in X; exact X. }
+  destruct (j (t0 :: tl)) as [z|] eqn:Ej; simpl in E; [|discriminate]. inversion E; subst. clear E.
+  pose proof (J _ _ Ej) as F. rewrite <- Et in F. rewrite Forall_forall in F.
+  unfold fstatus.
+  destruct (forallb is_req fs) eqn:A.
+  { rewrite forallb_forall in A. specialize (A f I). destruct f; try discriminate.
+    apply frs_req. apply F. eapply ftys_in; eauto. }
+  destruct (forallb is_dict_abs fs) eqn:B.
+  { rewrite forallb_forall in B. specialize (B f I). destruct f as [t|t|t| |]; try discriminate.
+    - eapply frs_dict; [right; right; reflexivity|]. apply F. eapply ftys_in; eauto.
+    - apply frs_abs_dict. }
+  destruct f as [t|t|t| |]; try discriminate.
+  - eapply frs_opt; [left; reflexivity|]. apply F. eapply ftys_in; eauto.
+  - eapply frs_opt; [right; left; reflexivity|]. apply F. eapply ftys_in; eauto.
+  - eapply frs_opt; [right; right; reflexivity|]. apply F. eapply ftys_in; eauto.
+  - apply frs_abs_opt.
+Qed.
+
+Lemma rjoinN_ub j rs c :
+  (forall ts z, j ts = Some z -> Forall (fun x => rsub x z) ts) ->
+  rjoinN j rs = Some c -> forall fs1 r1, In (fs1, r1) rs -> rsub (TRec fs1 r1) c.
+Proof.
+  intros J E fs1 r1 I. unfold rjoinN in E.
+  destruct (omapl _ _) as [fs|] eqn:Eo; [|discriminate].
+  destruct (fjoinN j (map snd rs)) as [r|] eqn:Er; [|discriminate]. inversion E; subst.
+  apply omapl_lookup in Eo as [Hk Hl].
+  assert (Hf : forall k, fjoinN j (map (fun r => field_at k (fst r) (snd r)) rs) = Some (field_at k fs r)).
+  { intros k. unfold field_at at 2. destruct (lookup k fs) as [v|] eqn:Ev.
+    - apply Hl in Ev. exact Ev.
+    - apply lookup_none_iff in Ev. rewrite Hk in Ev.
+      replace (map (fun r0 => field_at k (fst r0) (snd r0)) rs) with (map snd rs); [exact Er|].
+      apply map_ext_in. intros [fs0 r0] I0. simpl. symmetry. apply field_at_notin.
+      intro Hc. apply Ev. apply in_flat_map. exists (fs0, r0). auto. }
+  apply rs_rec. intros k. pose proof (fjoinN_ub rsub j _ _ J (Hf k)) as F.
+  rewrite Forall_forall in F. apply (F (field_at k fs1 r1)).
+  apply in_map_iff. exists (fs1, r1). auto.
+Qed.
+
+Lemma all_eq_in ts z : all_eq ts = Some z -> forall x, In x ts -> x = z.
+Proof.
+  destruct ts as [|x0 r]; simpl; [discriminate|].
+  destruct (forallb (ty_eqb x0) r) eqn:F; [|discriminate]. intros E x I. inversion E; subst.
+  destruct I as [<-|I]; [reflexivity|]. rewrite forallb_forall in F. symmetry. apply ty_eqb_true, F, I.
+Qed.
+
+Lemma ejoinN_ub j fr : jokN j -> forall ps xss zs, ejoinN j fr ps xss = Some zs ->
+  forall xs, In xs xss -> if fr then vrsubs ps xs zs else vsubs ps xs zs.
+Proof.
+  intros J. induction ps as [|p ps IH]; intros xss zs E xs I; simpl in E.
+  - destruct (forallb _ xss) eqn:F; [|discriminate]. inversion E; subst.
+    rewrite forallb_forall in F. specialize (F xs I). destruct xs; [|discriminate].
+    destruct fr; constructor.
+  - destruct (omapl uncons xss) as [hts|] eqn:Eo; [|discriminate].
+    destruct (ecol j fr p (map fst hts)) as [z|] eqn:Ez; [|discriminate].
+    destruct (ejoinN j fr ps (map snd hts)) as [zs'|] eqn:Ezs; [|discriminate]. inversion E; subst.
+    destruct (omapl_in _ _ _ Eo xs I) as ([x r] & Ih & Eu).
+    destruct xs as [|x' r']; simpl in Eu; [discriminate|]. inversion Eu; subst.
+    assert (Ir : In r (map snd hts)) by (apply in_map_iff; exists (x, r); auto).
+    assert (Ix : In x (map fst hts)) by (apply in_map_iff; exists (x, r); auto).
+    specialize (IH _ _ Ezs r Ir). unfold ecol in Ez.
+    destruct fr, (p_fresh p) eqn:Fp; simpl in Ez.
+    + pose proof (J _ _ _ Ez) as F. rewrite Forall_forall in F. apply vrs_fresh; auto. exact (F x Ix).
+    + destruct (p_var p) eqn:Vp.
+      * pose proof (J _ _ _ Ez) as F. rewrite Forall_forall in F.
+        apply vrs_sub; auto. rewrite Vp. exact (F x Ix).
+      * rewrite (all_eq_in _ _ Ez x Ix). apply vrs_sub; auto. rewrite Vp. apply s_refl.
+      * rewrite (all_eq_in _ _ Ez x Ix). apply vrs_sub; auto. rewrite Vp. apply teq_refl.
+    + destruct (p_var p) eqn:Vp.
+      * pose proof (J _ _ _ Ez) as F. rewrite Forall_forall in F. apply vs_co; auto. exact (F x Ix).
+      * rewrite (all_eq_in _ _ Ez x Ix). apply vs_contra; auto. apply s_refl.
+      * rewrite (all_eq_in _ _ Ez x Ix). apply vs_inv; auto; apply s_refl.
+    + destruct (p_var p) eqn:Vp.
+      * pose proof (J _ _ _ Ez) as F. rewrite Forall_forall in F. apply vs_co; auto. exact (F x Ix).
+      * rewrite (all_eq_in _ _ Ez x Ix). apply vs_contra; auto. apply s_refl.
+      * rewrite (all_eq_in _ _ Ez x Ix). apply vs_inv; auto; apply s_refl.
+Qed.
+
+Lemma structural_ub j fr c r : jokN j -> structural j fr c = Some r -> Forall (fun t => jrel fr t r) c.
+Proof.
+  intros J E. apply Forall_forall. intros t I. unfold structural in E.
+  destruct c as [|h c']; [discriminate|].
+  destruct h as [| | | | | | x0 | fs0 r0 | u0 v0 | i0 o0 | E0 g0 | p0 | w0 | t0 | n0]; try discriminate.
+  - destruct fr; [|discriminate].
+    destruct (omapl as_list _) as [xs|] eqn:Eo; [|discriminate].
+    destruct (j true xs) as [z|] eqn:Ej; simpl in E; [|discriminate]. inversion E; subst.
+    destruct (omapl_in _ _ _ Eo t I) as (x & Ix & Ex). destruct t; try discriminate. inversion Ex; subst.
+    pose proof (J _ _ _ Ej) as F. rewrite Forall_forall in F. simpl. apply rs_list. exact (F x Ix).
+  - destruct fr; [|discriminate].
+    destruct (omapl as_rec _) as [rs|] eqn:Eo; [|discriminate].
+    destruct (omapl_in _ _ _ Eo t I) as ([fs1 r1] & Ix & Ex). destruct t; try discriminate. inversion Ex; subst.
+    simpl. eapply rjoinN_ub; [| exact E | exact Ix]. intros ts z Ez. exact (J true ts z Ez).
+  - destruct (omapl (as_enum E0) _) as [xss|] eqn:Eo; [|discriminate].
+    destruct (ejoinN j fr (en_params E0) xss) as [zs|] eqn:Ej; simpl in E; [|discriminate]. inversion E; subst.
+    destruct (omapl_in _ _ _ Eo t I) as (xs & Ix & Ex).
+    destruct t as [| | | | | | x1 | fs1 r1 | u1 v1 | i1 o1 | E1 g1 | p1 | w1 | t1 | n1]; try discriminate.
+    simpl in Ex. destruct (ename_eqb E0 E1) eqn:En; [|discriminate]. inversion Ex; subst.
+    apply ename_eqb_true in En. subst.
+    pose proof (ejoinN_ub j fr J _ _ _ Ej xs Ix) as H.
+    destruct fr; simpl in *; [apply rs_enum | apply s_enum]; exact H.
+Qed.
+
+(** The weakest decision procedure: it never says yes.  Joins that meet no
+    recursive type do not consult it. *)
+Definition le_none : bool -> ty -> ty -> bool := fun _ _ _ => false.
+
+Lemma le_none_ok fr a b : le_none fr a b = true -> jrel fr a b.
+Proof. discriminate. Qed.
+
+Section UB.
+Variable le : bool -> ty -> ty -> bool.
+(** The decision procedure is right when it says yes. *)
+Hypothesis le_ok : forall fr a b, le fr a b = true -> jrel fr a b.
+
+Lemma join_rest_ub j fr c r : jokN j -> join_rest le j fr c = Some r -> Forall (fun t => jrel fr t r) c.
+Proof.
+  intros J E. unfold join_rest in E.
+  destruct (filter is_mu c) as [|a als] eqn:Ea; [discriminate|].
+  destruct (filter (fun t => negb (is_mu t)) c) as [|o others] eqn:Eo; [discriminate|].
+  destruct (j fr (o :: others)) as [r0|] eqn:Ej; [|discriminate].
+  destruct (forallb (fun x => le fr x r0) (a :: als)) eqn:Al; [|discriminate]. inversion E; subst.
+  pose proof (J _ _ _ Ej) as F. rewrite Forall_forall in F. rewrite forallb_forall in Al.
+  apply Forall_forall. intros t I. destruct (is_mu t) eqn:Mt.
+  - apply le_ok, Al. rewrite <- Ea. apply filter_In. auto.
+  - apply F. rewrite <- Eo. apply filter_In. rewrite Mt. auto.
+Qed.
+
+Lemma join_comp_ub j fr c r : jokN j -> join_comp le j fr c = Some r -> Forall (fun t => jrel fr t r) c.
+Proof.
+  intros J E. unfold join_comp in E.
+  assert (G : match structural j fr c with
+              | Some r0 => Some r0
+              | None => match max_of (le fr) c with Some m => Some m | None => join_rest le j fr c end
+              end = Some r -> Forall (fun t => jrel fr t r) c).
+  { destruct (structural j fr c) as [r0|] eqn:Es; intros E'.
+    - inversion E'; subst. eapply structural_ub; eauto.
+    - destruct (max_of (le fr) c) as [m|] eqn:Em.
+      + inversion E'; subst. eapply max_of_ub; [apply le_ok | apply jrel_refl | exact Em].
+      + eapply join_rest_ub; eauto. }
+  destruct c as [|t [|t' c']]; auto.
+  inversion E; subst. constructor; [apply jrel_refl | constructor].
+Qed.
+
+Lemma join_many_ub j fr ts c : jokN j -> join_many le j fr ts = Some c -> Forall (fun t => jrel fr t c) ts.
+Proof.
+  intros J E. unfold join_many in E.
+  destruct (max_of (le fr) ts) as [m|] eqn:Em.
+  { inversion E; subst. eapply max_of_ub; [apply le_ok | apply jrel_refl | exact Em]. }
+  destruct (omapl _ _) as [rs|] eqn:Eo; [|discriminate]. inversion E; subst.
+  apply Forall_forall. intros t I. apply leaves_ub. intros l Il.
+  assert (Ia : In l (dedup (flat_map leaves ts))) by (apply dedup_in, in_flat_map; eauto).
+  destruct (components_in _ _ Ia) as (c0 & Ic & Ilc).
+  destruct (omapl_in _ _ _ Eo c0 Ic) as (r & Ir & Er).
+  pose proof (join_comp_ub _ _ _ _ J Er) as F. rewrite Forall_forall in F.
+  eapply munion_in; [exact Ir | exact (F l Ilc)].
+Qed.
+
+Theorem tjoinN_ub : forall n fr ts c, tjoinN le n fr ts = Some c -> Forall (fun t => jrel fr t c) ts.
+Proof.
+  induction n as [|n IH]; intros fr ts c E; simpl in E; [discriminate|].
+  assert (J : jokN (tjoinN le n)) by (intros ? ? ? H; eapply IH; eauto).
+  apply Forall_forall. intros t I.
+  destruct (is_bot t) eqn:Bt.
+  { destruct t; try discriminate. apply jrel_bot. }
+  assert (Ic : In t (clean ts)).
+  { unfold clean. apply dedup_in, filter_In. split; [exact I | rewrite Bt; reflexivity]. }
+  destruct (clean ts) as [|t0 [|t1 l]] eqn:Ec.
+  - contradiction.
+  - inversion E; subst. destruct Ic as [<-|[]]. apply jrel_refl.
+  - pose proof (join_many_ub _ _ _ _ J E) as F. rewrite Forall_forall in F. exact (F t Ic).
 Qed.
 
 Lemma tjoin_ub : forall n fr a b c, tjoin le n fr a b = Some c -> jrel fr a c /\ jrel fr b c.
 Proof.
-  induction n as [|n IH]; intros fr a b c E; simpl in E; [discriminate|].
-  destruct (ty_eqb a b) eqn:Eq.
-  { apply ty_eqb_true in Eq. subst. inversion E; subst. split; apply jrel_refl. }
-  destruct (is_mu a || is_mu b) eqn:Mu; [eapply ajoin_ub; exact E|].
-  assert (J : jok (tjoin le n)) by (intros ? ? ? ? H; eapply IH; eauto).
-  destruct (tjoin_core (tjoin le n) fr a b) as [c'|] eqn:Ec.
-  { injection E as <-. eapply tjoin_core_ub; eauto. }
-  destruct (le fr a b) eqn:L1.
-  { injection E as <-. split; [apply le_ok; exact L1 | apply jrel_refl]. }
-  destruct (le fr b a) eqn:L2.
-  { injection E as <-. split; [apply jrel_refl | apply le_ok; exact L2]. }
-  eapply ujoin_ub; eauto.
+  intros n fr a b c E. pose proof (tjoinN_ub _ _ _ _ E) as F.
+  inversion F as [|? ? Ha F']; subst. inversion F' as [|? ? Hb ?]; subst. auto.
 Qed.
 
 Theorem join_slot_ub p q r : join_slot le p q = Some r -> slot_sub p r /\ slot_sub q r.

@@ -169,7 +169,12 @@ let answer (line : string) : string option =
         (match join_slot (le_alg nocache nocache (int_of n)) (slot_of p) (slot_of q) with
          | None -> "none"
          | Some r -> string_of_slot r)
-  | _ -> raise (Parse "expected: sub N A B | rsub N A B | join N SLOT SLOT")
+  | Atom "joinall" :: Atom n :: Atom fr :: ts when fr = "shared" || fr = "fresh" ->
+      Some
+        (match tjoinN (le_alg nocache nocache (int_of n)) (int_of n) (fr = "fresh") (List.map ty_of ts) with
+         | None -> "none"
+         | Some t -> string_of_ty t)
+  | _ -> raise (Parse "expected: sub N A B | rsub N A B | join N SLOT SLOT | joinall N shared|fresh T ...")
 
 (* ---- The example corpus: the examples of Decide.v and Recursive.v ---- *)
 
@@ -180,6 +185,7 @@ let examples : (string * string) list =
   let sub a b = Printf.sprintf "sub %d %s %s" fuel (s a) (s b) in
   let rsub a b = Printf.sprintf "rsub %d %s %s" fuel (s a) (s b) in
   let join p q = Printf.sprintf "join %d %s %s" fuel (sl p) (sl q) in
+  let joinall fr ts = Printf.sprintf "joinall %d %s %s" fuel fr (String.concat " " (List.map s ts)) in
   [
     ("# Json equals the same union in another order (alg_json_teq)", "");
     (sub json json2, "yes");
@@ -215,10 +221,17 @@ let examples : (string * string) list =
     (join (Dp, TQuote ([ TInt ], Some [ TInt ])) (Dp, TQuote ([ TInt ], Some [ TStr ])), "none");
     (join (Sh, TUnion (TInt, TStr)) (Sh, TUnion (TInt, TUnion (TStr, TBool))), sl (Sh, TUnion (TInt, TUnion (TStr, TBool))));
     ("# two different unions join member by member (alg_join_two_unions*)", "");
-    (join (Sh, TUnion (TStr, TBool)) (Sh, TUnion (TStr, TInt)), sl (Sh, TUnion (TStr, TUnion (TBool, TInt))));
+    (join (Sh, TUnion (TStr, TBool)) (Sh, TUnion (TStr, TInt)), sl (Sh, TUnion (TBool, TUnion (TStr, TInt))));
     (join (Dp, TUnion (TList TInt, TStr)) (Dp, TUnion (TList TStr, TBool)),
      sl (Dp, TUnion (TList (TUnion (TInt, TStr)), TUnion (TStr, TBool))));
     (join (Sh, TUnion (TList TInt, TStr)) (Sh, TUnion (TList TStr, TBool)), "none");
+    ("# all the arms at once: two stored dicts with no join, both below a third (alg_join_all_any_order)", "");
+    (let ra = TRec ([ ("a", FReq TInt) ], FAbs) and rb = TRec ([ ("b", FReq TInt) ], FAbs) and ro = TRec ([], FOpen) in
+     (joinall "shared" [ ra; rb ], "none"));
+    (let ra = TRec ([ ("a", FReq TInt) ], FAbs) and rb = TRec ([ ("b", FReq TInt) ], FAbs) and ro = TRec ([], FOpen) in
+     (joinall "shared" [ ra; rb; ro ], s ro));
+    (let ra = TRec ([ ("a", FReq TInt) ], FAbs) and rb = TRec ([ ("b", FReq TInt) ], FAbs) and ro = TRec ([], FOpen) in
+     (joinall "shared" [ ro; rb; ra ], s ro));
     ("# type L = [L] is a list of itself (not an example in Rocq; a yes is a proof by subq_sound)", "");
     (sub l (TList l), "yes");
     (sub (TList l) l, "yes");

@@ -28,6 +28,7 @@ get no answer. A line that does not parse gets `error: ...`.
 | `sub N A B` | `yes` or `no`: does `subq` decide `A <= B` with fuel `N` |
 | `rsub N A B` | `yes` or `no`: does `rsubq` decide that a fresh `A` may be retyped to `B` |
 | `join N P Q` | the join of two stack slots (`join_slot` with the procedures above), or `none` |
+| `joinall N shared\|fresh T ...` | the join of all the types at once (`tjoinN`), for slots that are all shared or all fresh, or `none` |
 
 A slot is `(shared T)` or `(fresh T)`.
 The cache is empty in every query.
@@ -82,4 +83,4 @@ and `payload_rsub` (plan stage 2) do.
   answers are theorems; the Go checker's are not.
 - **Go no, oracle yes**: the Go port is less complete than the proved procedure. Not unsound, but
   a program the design accepts would be rejected, so it is a bug in the port.
-- **Joins**: the Go join must give the same slot, or `none` exactly when the oracle does.
+- **Joins**: the Go join must give `none` exactly when the oracle does, and otherwise an equal slot: the same type, or two types each below the other (`<=`, or fresh retyping for a fresh slot). Where several of the types fit, the model takes the first and Go the one with the smallest id.

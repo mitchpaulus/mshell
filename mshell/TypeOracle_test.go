@@ -571,10 +571,24 @@ func (o *oracleTypes) printSlot(s Slot) string {
 }
 
 // answer runs one oracle query line with the Go relations. A sub or rsub
-// query gives "yes" or "no"; a join gives the slot, or ok false for none.
+// query gives "yes" or "no"; a join gives the slot, or ok false for none. A
+// joinall gives a slot too: the join of all its types, fresh or shared as
+// the query says.
 func (o *oracleTypes) answer(r *Relations, line string) (yes bool, slot Slot, ok bool, isJoin bool, err error) {
 	xs, err := parseSexps(line)
 	if err != nil {
+		return
+	}
+	if len(xs) >= 3 && !xs[0].isList && xs[0].atom == "joinall" {
+		isJoin = true
+		slot.Fresh = xs[2].atom == "fresh"
+		ts := make([]TypeId, len(xs)-3)
+		for i, x := range xs[3:] {
+			if ts[i], err = o.fromSexp(x, nil); err != nil {
+				return
+			}
+		}
+		slot.Type, ok = r.JoinAll(slot.Fresh, ts)
 		return
 	}
 	if len(xs) != 4 || xs[0].isList {
@@ -614,7 +628,10 @@ func (o *oracleTypes) answer(r *Relations, line string) (yes bool, slot Slot, ok
 
 // agrees reports whether the Go answer to line agrees with the oracle's
 // answer text. A join is compared as a type, parsed in the same context as
-// the question, so its aliases are the question's.
+// the question, so its aliases are the question's. The two joins must be
+// equal up to <= both ways (fresh retyping for fresh slots): where several
+// of the types fit (an alias and its body, say), the model takes the first
+// and Go the one with the smallest TypeId.
 func (o *oracleTypes) agrees(r *Relations, line, oracleAns string) (bool, string, error) {
 	yes, slot, ok, isJoin, err := o.answer(r, line)
 	if err != nil {
@@ -627,8 +644,11 @@ func (o *oracleTypes) agrees(r *Relations, line, oracleAns string) (bool, string
 		}
 		return goAns == oracleAns, goAns, nil
 	}
+	all := strings.HasPrefix(line, "joinall ")
 	goAns := "none"
-	if ok {
+	if ok && all {
+		goAns = o.print(slot.Type)
+	} else if ok {
 		goAns = o.printSlot(slot)
 	}
 	if oracleAns == "none" || !ok {
@@ -638,9 +658,23 @@ func (o *oracleTypes) agrees(r *Relations, line, oracleAns string) (bool, string
 	if err != nil || len(xs) != 1 {
 		return false, goAns, fmt.Errorf("bad oracle answer %q", oracleAns)
 	}
-	want, err := o.parseSlot(xs[0])
+	// A joinall answers with the type alone.
+	want := Slot{Fresh: slot.Fresh}
+	if all {
+		want.Type, err = o.fromSexp(xs[0], nil)
+	} else {
+		want, err = o.parseSlot(xs[0])
+	}
 	if err != nil {
 		return false, goAns, err
 	}
-	return want == slot, goAns, nil
+	if want == slot {
+		return true, goAns, nil
+	}
+	// Equal for the slots they are: fresh retyping for fresh ones.
+	below := r.Sub
+	if slot.Fresh {
+		below = r.Retype
+	}
+	return want.Fresh == slot.Fresh && below(want.Type, slot.Type) && below(slot.Type, want.Type), goAns, nil
 }

@@ -7,5 +7,5 @@ From MshellCore Require Import Syntax Join Decide Recursive.
 
 Extraction Language OCaml.
 Extraction "decide.ml"
-  subq subq_set rsubq rsubq_set le_alg join_slot nocache EMaybe
+  subq subq_set rsubq rsubq_set le_alg join_slot tjoinN nocache EMaybe
   Json Json2 Person PersonLit TA TBB QA QB V RA RB RC L.

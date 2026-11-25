@@ -30,9 +30,13 @@ join 30 (shared (quote (str) never)) (shared (quote (str) (str)))	(shared (quote
 join 30 (fresh (quote (int) (int))) (fresh (quote (int) (str)))	none
 join 30 (shared (union int str)) (shared (union int (union str bool)))	(shared (union int (union str bool)))
 # two different unions join member by member (alg_join_two_unions*)
-join 30 (shared (union str bool)) (shared (union str int))	(shared (union str (union bool int)))
+join 30 (shared (union str bool)) (shared (union str int))	(shared (union bool (union str int)))
 join 30 (fresh (union (list int) str)) (fresh (union (list str) bool))	(fresh (union (list (union int str)) (union str bool)))
 join 30 (shared (union (list int) str)) (shared (union (list str) bool))	none
+# all the arms at once: two stored dicts with no join, both below a third (alg_join_all_any_order)
+joinall 30 shared (rec ((a (req int))) abs) (rec ((b (req int))) abs)	none
+joinall 30 shared (rec ((a (req int))) abs) (rec ((b (req int))) abs) (rec () open)	(rec () open)
+joinall 30 shared (rec () open) (rec ((b (req int))) abs) (rec ((a (req int))) abs)	(rec () open)
 # type L = [L] is a list of itself (not an example in Rocq; a yes is a proof by subq_sound)
 sub 30 (mu (list (rv 0))) (list (mu (list (rv 0))))	yes
 sub 30 (list (mu (list (rv 0)))) (mu (list (rv 0)))	yes

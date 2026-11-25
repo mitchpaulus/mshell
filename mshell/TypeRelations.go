@@ -663,79 +663,273 @@ func (r *Relations) below(fr bool, a, b TypeId) bool {
 	return r.Sub(a, b)
 }
 
-// join is tjoin in Join.v. Where the types cannot be widened inside, the
-// join is the other side when one side is below the other, and two unions
-// are otherwise joined member by member.
+// JoinAll is the type of a slot that holds the value of any one of slots of
+// types ts, all of them fresh (fr) or not: tjoinN in Join.v. The types are
+// joined all at once, so the join does not depend on their order.
+func (r *Relations) JoinAll(fr bool, ts []TypeId) (TypeId, bool) {
+	r.begin()
+	defer r.end()
+	return r.joinAll(fr, ts)
+}
+
+// join is tjoin in Join.v: the join of two types is joinAll of the two.
 func (r *Relations) join(fr bool, a, b TypeId) (TypeId, bool) {
 	if a == b {
 		return a, true
 	}
-	ar := r.arena
-	if a == TidNothing || b == TidNothing {
-		return TidNothing, false
-	}
-	if ar.Node(a).Kind == TKAlias || ar.Node(b).Kind == TKAlias {
-		return r.aliasJoin(fr, a, b)
-	}
-	if z, ok := r.joinCore(fr, a, b); ok {
-		return z, true
-	}
-	if r.below(fr, a, b) {
-		return b, true
-	}
-	if r.below(fr, b, a) {
-		return a, true
-	}
-	if ar.Node(a).Kind == TKUnion && ar.Node(b).Kind == TKUnion {
-		return r.unionJoin(fr, a, b)
-	}
-	return TidNothing, false
+	pair := [2]TypeId{a, b}
+	return r.joinAll(fr, pair[:])
 }
 
-// unionJoin is ujoin in Join.v: two different unions, neither below the
-// other, joined member by member. A member of a is joined with the member
-// of b whose kinds overlap its own, and stays as it is when b has none. The
-// members of b that no member of a overlaps are kept. There is no join when
-// a member overlaps two members of the other union, or when two members of
-// the result overlap.
-func (r *Relations) unionJoin(fr bool, a, b TypeId) (TypeId, bool) {
+// joinAll is tjoinN in Join.v.
+//   - Bottom and repeated types are dropped.
+//   - If one of the types is above all the others, it is the join.
+//   - Otherwise the members of the types (a union's members, or the type
+//     itself) are put in groups: two members are in one group when their
+//     kinds overlap, directly or through other members. Each group is
+//     joined (joinGroup), and the join is the union of those.
+//
+// Where the model takes the first type that fits, this takes the one with
+// the smallest TypeId, so the result is the same for every order of ts.
+func (r *Relations) joinAll(fr bool, ts []TypeId) (TypeId, bool) {
 	ar := r.arena
-	la := ar.unionMembers[ar.Node(a).Extra]
-	lb := ar.unionMembers[ar.Node(b).Extra]
-	out := make([]TypeId, 0, len(la)+len(lb))
-	for _, l := range la {
-		partner, n := TidNothing, 0
-		for _, m := range lb {
-			if r.kindsOverlap(l, m) {
-				partner = m
-				n++
-			}
-		}
-		if n > 1 {
+	var armBuf [8]TypeId
+	arms := armBuf[:0]
+	for _, t := range ts {
+		if t == TidNothing {
 			return TidNothing, false
 		}
-		if n == 1 {
-			z, ok := r.join(fr, l, partner)
-			if !ok {
-				return TidNothing, false
-			}
-			l = z
-		}
-		out = append(out, l)
-	}
-	for _, m := range lb {
-		if !slices.ContainsFunc(la, func(l TypeId) bool { return r.kindsOverlap(l, m) }) {
-			out = append(out, m)
+		if t != TidBottom && !slices.Contains(arms, t) {
+			arms = append(arms, t)
 		}
 	}
-	for i, x := range out {
-		for _, y := range out[i+1:] {
-			if x != y && r.kindsOverlap(x, y) {
-				return TidNothing, false
+	switch len(arms) {
+	case 0:
+		return TidBottom, true
+	case 1:
+		return arms[0], true
+	}
+	if m, ok := r.maxOf(fr, arms); ok {
+		return m, true
+	}
+	var atomBuf [16]TypeId
+	atoms := atomBuf[:0]
+	for _, t := range arms {
+		if n := ar.Node(t); n.Kind == TKUnion {
+			for _, m := range ar.unionMembers[n.Extra] {
+				if !slices.Contains(atoms, m) {
+					atoms = append(atoms, m)
+				}
+			}
+		} else if !slices.Contains(atoms, t) {
+			atoms = append(atoms, t)
+		}
+	}
+	// group[i] is the group of atoms[i]: the smallest index of an atom it
+	// overlaps, directly or through others.
+	var groupBuf [16]int
+	group := groupBuf[:0]
+	for i := range atoms {
+		group = append(group, i)
+	}
+	for i := range atoms {
+		for j := i + 1; j < len(atoms); j++ {
+			if group[i] != group[j] && r.kindsOverlap(atoms[i], atoms[j]) {
+				from, to := max(group[i], group[j]), min(group[i], group[j])
+				for k := range group {
+					if group[k] == from {
+						group[k] = to
+					}
+				}
 			}
 		}
+	}
+	var outBuf [8]TypeId
+	out := outBuf[:0]
+	var compBuf [8]TypeId
+	for g := range atoms {
+		comp := compBuf[:0]
+		for i, a := range atoms {
+			if group[i] == g {
+				comp = append(comp, a)
+			}
+		}
+		if len(comp) == 0 {
+			continue
+		}
+		z, ok := r.joinGroup(fr, comp)
+		if !ok {
+			return TidNothing, false
+		}
+		out = append(out, z)
 	}
 	return ar.MakeUnion(out), true
+}
+
+// maxOf is max_of in Join.v: the one of ts that all the others are below.
+// When several are, they are below each other, and it is the one with the
+// smallest TypeId.
+func (r *Relations) maxOf(fr bool, ts []TypeId) (TypeId, bool) {
+	best, found := TidNothing, false
+	for _, c := range ts {
+		if found && c > best {
+			continue
+		}
+		above := true
+		for _, t := range ts {
+			if t != c && !r.below(fr, t, c) {
+				above = false
+				break
+			}
+		}
+		if above {
+			best, found = c, true
+		}
+	}
+	return best, found
+}
+
+// joinGroup is join_comp in Join.v: the join of members whose kinds
+// overlap. One member is itself. Lists, dicts, grids, commands or instances
+// of one enum are widened inside (joinInside). Otherwise, or when that
+// fails, the join is the member all the others are below. An alias is
+// never widened inside, but the other members may be: failing the above,
+// the others are joined, and that is the join if every alias is below it.
+func (r *Relations) joinGroup(fr bool, comp []TypeId) (TypeId, bool) {
+	if len(comp) == 1 {
+		return comp[0], true
+	}
+	if z, ok := r.joinInside(fr, comp); ok {
+		return z, true
+	}
+	if m, ok := r.maxOf(fr, comp); ok {
+		return m, true
+	}
+	// join_rest: the members that are not aliases are joined, and that is
+	// the join if every alias is below it.
+	var otherBuf [8]TypeId
+	others := otherBuf[:0]
+	for _, t := range comp {
+		if r.arena.Node(t).Kind != TKAlias {
+			others = append(others, t)
+		}
+	}
+	if len(others) == 0 || len(others) == len(comp) {
+		return TidNothing, false
+	}
+	z, ok := r.joinAll(fr, others)
+	if !ok {
+		return TidNothing, false
+	}
+	for _, t := range comp {
+		if r.arena.Node(t).Kind == TKAlias && !r.below(fr, t, z) {
+			return TidNothing, false
+		}
+	}
+	return z, true
+}
+
+// joinInside is structural in Join.v: the parts of the members joined all
+// at once. Lists, dicts and grids widen only when the slots are fresh.
+func (r *Relations) joinInside(fr bool, comp []TypeId) (TypeId, bool) {
+	ar := r.arena
+	kind := ar.Node(comp[0]).Kind
+	same, command := true, kind == TKCommand
+	for _, t := range comp[1:] {
+		k := ar.Node(t).Kind
+		same = same && k == kind
+		command = command || k == TKCommand
+	}
+	if command {
+		// Commands over the same arguments join stream by stream; a list
+		// is a command with no redirects. A pipe and a list are different
+		// runtime objects.
+		argv, out, errs := commandOf(ar, comp[0])
+		pipe := out & CommandPipe
+		for _, t := range comp[1:] {
+			if k := ar.Node(t).Kind; k != TKList && k != TKCommand {
+				return TidNothing, false
+			}
+			y, yo, ye := commandOf(ar, t)
+			if y != argv || yo&CommandPipe != pipe {
+				return TidNothing, false
+			}
+			if yo != out {
+				out = CommandDestVaried | pipe
+			}
+			if ye != errs {
+				errs = CommandDestVaried
+			}
+		}
+		if k := ar.Node(comp[0]).Kind; k != TKList && k != TKCommand {
+			return TidNothing, false
+		}
+		return ar.MakeCommand(argv, out, errs), true
+	}
+	if !same {
+		return TidNothing, false
+	}
+	switch kind {
+	case TKList:
+		if !fr {
+			return TidNothing, false
+		}
+		var elemBuf [8]TypeId
+		elems := elemBuf[:0]
+		for _, t := range comp {
+			elems = append(elems, TypeId(ar.Node(t).A))
+		}
+		z, ok := r.joinAll(true, elems)
+		if !ok {
+			return TidNothing, false
+		}
+		return ar.MakeList(z), true
+	case TKRecord:
+		if !fr {
+			return TidNothing, false
+		}
+		var recBuf [8]RecordType
+		recs := recBuf[:0]
+		for _, t := range comp {
+			recs = append(recs, ar.records[ar.Node(t).Extra])
+		}
+		return r.recordJoin(recs)
+	case TKGrid, TKGridView, TKGridRow:
+		// New grids widen column by column, as new dicts do.
+		if !fr {
+			return TidNothing, false
+		}
+		recs := make([]RecordType, len(comp))
+		for i, t := range comp {
+			schema := ar.Node(t).A
+			if schema == 0 {
+				return TidNothing, false
+			}
+			recs[i] = ar.records[ar.Node(TypeId(schema)).Extra]
+		}
+		z, ok := r.recordJoin(recs)
+		if !ok {
+			return TidNothing, false
+		}
+		return ar.MakeGridOf(kind, z), true
+	case TKEnum:
+		decl := ar.Node(comp[0]).A
+		var argsBuf [8][]TypeId
+		argss := argsBuf[:0]
+		for _, t := range comp {
+			n := ar.Node(t)
+			if n.A != decl {
+				return TidNothing, false
+			}
+			argss = append(argss, ar.enumArgs[n.Extra])
+		}
+		args, ok := r.enumJoin(fr, ar.enumDecls[decl].Params, argss)
+		if !ok {
+			return TidNothing, false
+		}
+		return ar.MakeEnum(decl, args), true
+	}
+	return TidNothing, false
 }
 
 // kindsOverlap reports whether a and b have a kind in common: overlap in
@@ -747,224 +941,119 @@ func (r *Relations) kindsOverlap(a, b TypeId) bool {
 	return !okA || !okB || !kindsDisjoint(ka, kb)
 }
 
-// joinCore is tjoin_core in Join.v: the joins that look inside the two
-// types. It fails where they cannot be widened inside.
-func (r *Relations) joinCore(fr bool, a, b TypeId) (TypeId, bool) {
-	ar := r.arena
-	an, bn := ar.Node(a), ar.Node(b)
-	if a == TidBottom {
-		return b, true
-	}
-	if b == TidBottom {
-		return a, true
-	}
-	if an.Kind == TKUnion && bn.Kind == TKUnion {
-		return TidNothing, false
-	}
-	if an.Kind == TKUnion {
-		return r.joinIntoUnion(fr, a, b, true)
-	}
-	if bn.Kind == TKUnion {
-		return r.joinIntoUnion(fr, b, a, false)
-	}
-	if (an.Kind == TKCommand || bn.Kind == TKCommand) &&
-		(an.Kind == TKList || an.Kind == TKCommand) && (bn.Kind == TKList || bn.Kind == TKCommand) {
-		// Two commands over the same arguments join stream by stream.
-		x, xo, xe := commandOf(ar, a)
-		y, yo, ye := commandOf(ar, b)
-		// A pipe and a list are different runtime objects.
-		pipe := xo & CommandPipe
-		if x != y || pipe != yo&CommandPipe {
-			return TidNothing, false
-		}
-		if xo != yo {
-			xo = CommandDestVaried | pipe
-		}
-		if xe != ye {
-			xe = CommandDestVaried
-		}
-		return ar.MakeCommand(x, xo, xe), true
-	}
-	switch {
-	case an.Kind == TKList && bn.Kind == TKList:
-		if !fr {
-			return TidNothing, false
-		}
-		z, ok := r.join(true, TypeId(an.A), TypeId(bn.A))
-		if !ok {
-			return TidNothing, false
-		}
-		return ar.MakeList(z), true
-	case an.Kind == TKRecord && bn.Kind == TKRecord:
-		if !fr {
-			return TidNothing, false
-		}
-		return r.recordJoin(ar.records[an.Extra], ar.records[bn.Extra])
-	case an.Kind == bn.Kind && (an.Kind == TKGrid || an.Kind == TKGridView || an.Kind == TKGridRow):
-		// Two new grids widen column by column, as two new records do.
-		if !fr || an.A == 0 || bn.A == 0 {
-			return TidNothing, false
-		}
-		x, y := ar.Node(TypeId(an.A)), ar.Node(TypeId(bn.A))
-		z, ok := r.recordJoin(ar.records[x.Extra], ar.records[y.Extra])
-		if !ok {
-			return TidNothing, false
-		}
-		return ar.MakeGridOf(an.Kind, z), true
-	case an.Kind == TKEnum && bn.Kind == TKEnum:
-		if an.A != bn.A {
-			// Two different enums are two kinds.
-			return ar.MakeUnion([]TypeId{a, b}), true
-		}
-		args, ok := r.enumJoin(fr, ar.enumDecls[an.A].Params, ar.enumArgs[an.Extra], ar.enumArgs[bn.Extra])
-		if !ok {
-			return TidNothing, false
-		}
-		return ar.MakeEnum(an.A, args), true
-	}
-	ka, okA := r.kindOf(a)
-	kb, okB := r.kindOf(b)
-	if !okA || !okB || ka == kb {
-		return TidNothing, false
-	}
-	return ar.MakeUnion([]TypeId{a, b}), true
-}
-
-// joinIntoUnion joins t into the union u: the member of t's kind is joined
-// with t, or t is added when u has no member of that kind. unionFirst keeps
-// the order of the arguments for the member join.
-func (r *Relations) joinIntoUnion(fr bool, u, t TypeId, unionFirst bool) (TypeId, bool) {
-	k, ok := r.kindOf(t)
-	if !ok {
-		return TidNothing, false
-	}
-	members := slices.Clone(r.arena.unionMembers[r.arena.Node(u).Extra])
-	for i, m := range members {
-		if !r.hasKind(k, m) {
-			continue
-		}
-		var z TypeId
-		if unionFirst {
-			z, ok = r.join(fr, m, t)
-		} else {
-			z, ok = r.join(fr, t, m)
-		}
-		if !ok {
-			return TidNothing, false
-		}
-		members[i] = z
-		return r.arena.MakeUnion(members), true
-	}
-	return r.arena.MakeUnion(append(members, t)), true
-}
-
-// aliasJoin is ajoin in Join.v: an alias is never widened inside. The join
-// is the other side when one side is below the other, the union when their
-// kinds do not overlap, and otherwise there is none.
-func (r *Relations) aliasJoin(fr bool, a, b TypeId) (TypeId, bool) {
-	if a == TidBottom {
-		return b, true
-	}
-	if b == TidBottom {
-		return a, true
-	}
-	if r.below(fr, a, b) {
-		return b, true
-	}
-	if r.below(fr, b, a) {
-		return a, true
-	}
-	ka, okA := r.AppendKinds(r.kindBuf[:0], a)
-	kb, okB := r.AppendKinds(ka[len(ka):], b)
-	r.kindBuf = kb[:0]
-	if okA && okB && kindsDisjoint(ka, kb) {
-		return r.arena.MakeUnion([]TypeId{a, b}), true
-	}
-	return TidNothing, false
-}
-
-// recordJoin joins two fresh dict-kinded types label by label: rjoin.
-func (r *Relations) recordJoin(x, y RecordType) (TypeId, bool) {
-	var fields []RecordField
-	seen := make(map[NameId]bool)
-	for _, fs := range [][]RecordField{x.Fields, y.Fields} {
-		for _, f := range fs {
-			if seen[f.Name] {
-				continue
+// recordJoin joins fresh dict-kinded types label by label: rjoinN.
+func (r *Relations) recordJoin(recs []RecordType) (TypeId, bool) {
+	var nameBuf [16]NameId
+	names := nameBuf[:0]
+	for _, x := range recs {
+		for _, f := range x.Fields {
+			if !slices.Contains(names, f.Name) {
+				names = append(names, f.Name)
 			}
-			seen[f.Name] = true
-			j, ok := r.fieldJoin(x.FieldAt(f.Name), y.FieldAt(f.Name))
-			if !ok {
-				return TidNothing, false
-			}
-			j.Name = f.Name
-			fields = append(fields, j)
 		}
 	}
-	rest, ok := r.fieldJoin(x.Rest, y.Rest)
+	var atBuf [8]RecordField
+	at := atBuf[:0]
+	for range recs {
+		at = append(at, RecordField{})
+	}
+	var fieldBuf [16]RecordField
+	fields := fieldBuf[:0]
+	for _, name := range names {
+		for i, x := range recs {
+			at[i] = x.FieldAt(name)
+		}
+		j, ok := r.fieldJoin(at)
+		if !ok {
+			return TidNothing, false
+		}
+		j.Name = name
+		fields = append(fields, j)
+	}
+	for i, x := range recs {
+		at[i] = x.Rest
+	}
+	rest, ok := r.fieldJoin(at)
 	if !ok {
 		return TidNothing, false
 	}
 	return r.arena.MakeRecord(fields, rest), true
 }
 
-// fieldJoin joins one label of two fresh records: fjoin in Join.v. Present
-// in both stays present; otherwise it becomes optional; deletable stays
-// deletable; unknown wins.
-func (r *Relations) fieldJoin(f, g RecordField) (RecordField, bool) {
-	status, x, y, join := fieldJoinShape(f, g)
-	if !join {
+// fieldJoin joins one label of fresh records: fjoinN in Join.v.
+func (r *Relations) fieldJoin(fs []RecordField) (RecordField, bool) {
+	var buf [8]TypeId
+	status, types := fieldJoinStatus(fs, buf[:0])
+	if len(types) == 0 {
 		return RecordField{Status: status}, true
 	}
-	z, ok := r.join(true, x, y)
+	z, ok := r.joinAll(true, types)
 	return RecordField{Status: status, Type: z}, ok
 }
 
-// fieldJoinShape is fieldJoin's table: the joined status and, when join is
-// set, the two types whose join is the value there. A label on one side
-// only gives its own type twice, which join gives back.
-func fieldJoinShape(f, g RecordField) (status FieldStatus, x, y TypeId, join bool) {
-	switch {
-	case f.Status == FieldOpen || g.Status == FieldOpen:
-		return FieldOpen, 0, 0, false
-	case f.Status == FieldAbsent && g.Status == FieldAbsent:
-		return FieldAbsent, 0, 0, false
-	case f.Status == FieldRequired && g.Status == FieldRequired:
-		return FieldRequired, f.Type, g.Type, true
-	case f.Status == FieldDeletable && g.Status == FieldDeletable:
-		return FieldDeletable, f.Type, g.Type, true
-	case f.Status == FieldAbsent && g.Status == FieldDeletable:
-		return FieldDeletable, g.Type, g.Type, true
-	case f.Status == FieldDeletable && g.Status == FieldAbsent:
-		return FieldDeletable, f.Type, f.Type, true
-	case f.Status == FieldAbsent:
-		return FieldOptional, g.Type, g.Type, true
-	case g.Status == FieldAbsent:
-		return FieldOptional, f.Type, f.Type, true
+// fieldJoinStatus is fjoinN's table: the status of a label that has the
+// statuses of fs in the arms, and the types to join for it (none when the
+// label is unknown or absent), appended to buf[:0]. Unknown in one arm is
+// unknown; absent in all is absent; present in all is present; deletable or
+// absent in all is deletable; otherwise it is optional.
+func fieldJoinStatus(fs []RecordField, buf []TypeId) (FieldStatus, []TypeId) {
+	types := buf[:0]
+	required, deletable := true, true
+	for _, f := range fs {
+		switch f.Status {
+		case FieldOpen:
+			return FieldOpen, nil
+		case FieldAbsent:
+			required = false
+			continue
+		case FieldRequired:
+			deletable = false
+		case FieldDeletable:
+			required = false
+		default:
+			required, deletable = false, false
+		}
+		types = append(types, f.Type)
 	}
-	return FieldOptional, f.Type, g.Type, true
+	switch {
+	case len(types) == 0:
+		return FieldAbsent, nil
+	case required:
+		return FieldRequired, types
+	case deletable:
+		return FieldDeletable, types
+	}
+	return FieldOptional, types
 }
 
-// enumJoin joins enum arguments: ejoin in Join.v. A fresh-covariant
+// enumJoin joins enum arguments: ejoinN in Join.v. A fresh-covariant
 // argument of fresh values widens; a covariant one joins as shared values;
-// any other must be equal.
-func (r *Relations) enumJoin(fr bool, params []EnumParam, xs, ys []TypeId) ([]TypeId, bool) {
-	if len(xs) != len(params) || len(ys) != len(params) {
-		return nil, false
+// any other must be the same in all.
+func (r *Relations) enumJoin(fr bool, params []EnumParam, argss [][]TypeId) ([]TypeId, bool) {
+	for _, xs := range argss {
+		if len(xs) != len(params) {
+			return nil, false
+		}
 	}
 	out := make([]TypeId, len(params))
+	var colBuf [8]TypeId
 	for i, p := range params {
+		col := colBuf[:0]
+		for _, xs := range argss {
+			col = append(col, xs[i])
+		}
 		var z TypeId
 		ok := true
 		switch {
 		case fr && p.Fresh:
-			z, ok = r.join(true, xs[i], ys[i])
+			z, ok = r.joinAll(true, col)
 		case p.Variance == VarCo:
-			z, ok = r.join(false, xs[i], ys[i])
-		case xs[i] == ys[i]:
-			z = xs[i]
+			z, ok = r.joinAll(false, col)
 		default:
-			ok = false
+			z = col[0]
+			for _, x := range col[1:] {
+				ok = ok && x == z
+			}
 		}
 		if !ok {
 			return nil, false

@@ -889,12 +889,16 @@ func TestCoreFinishedChoiceFits(t *testing.T) {
 
 // TestJoinOrderIndependent: whether the arms of a match join does not
 // depend on their order (ai/n-way-join.md). The pool mixes new, stored and
-// partly new dicts and lists with values of other kinds.
+// partly new dicts and lists with values of other kinds, and stored values
+// whose type is a union (`u` an `int | str`, `v` a `[int] | str`): an arm
+// that is a union has no single kind, so it is not grouped with the others
+// by kind. TestJoinOrderIndependentRandom does the same for random types,
+// without partly new values.
 func TestJoinOrderIndependent(t *testing.T) {
 	base := NewCoreBase(nil, nil)
 	pool := []string{"{a: 1}", "{b: 1}", "@s", "@t", "{a: @xs}", "{b: @xs}", "{a: [2]}",
-		"[1]", `["a"]`, "@xs", "[@xs]", "1", "none", "5 just"}
-	pre := "[1] xs! {a: 1} s! {a: 1} as {a?: int, b?: int} t! "
+		"[1]", `["a"]`, "@xs", "[@xs]", "1", "none", "5 just", "@u", "@v"}
+	pre := `[1] xs! {a: 1} s! {a: 1} as {a?: int, b?: int} t! true if 1 else "a" end u! true if @xs else "a" end v! `
 	check := func(arms []string) bool {
 		var b strings.Builder
 		b.WriteString(pre + "3 match ")
@@ -942,11 +946,12 @@ func TestJoinOrderIndependent(t *testing.T) {
 			accepted++
 		}
 	}
-	if accepted < 200 {
-		t.Errorf("only %d of 364 three-arm combinations check", accepted)
+	t.Logf("%d of %d three-arm combinations check", accepted, len(combos(pool, 3)))
+	if accepted < 300 {
+		t.Errorf("only %d of 560 three-arm combinations check", accepted)
 	}
 	// Four arms from part of the pool.
-	small := []string{"{a: 1}", "@t", "{a: @xs}", "{b: @xs}", "{a: [2]}", "[1]", "@xs"}
+	small := []string{"{a: 1}", "@t", "{a: @xs}", "{b: @xs}", "{a: [2]}", "[1]", "@xs", "@u", "@v"}
 	for _, combo := range combos(small, 4) {
 		try(combo)
 	}
