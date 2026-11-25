@@ -645,15 +645,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-<<<<<<< HEAD
 - A command whose first token is a lexer error, such as a lone quote, no longer crashes the interactive shell. It reports the parse error and prompts again.
 - Interactive movement, word deletion, typing, and completion replacement respect grapheme boundaries, keeping combining accents and joined emoji intact.
   Unicode aliases and multiline completion prefixes use the correct source positions; cycling completions preserves adjacent text even when it joins the inserted grapheme.
-=======
 - Unix command history is now private by default, with existing owned storage permissions repaired on load/save.
   Unsafe history objects are rejected and permission errors are reported.
->>>>>>> main
-
 - The type checker gave `index` and `lastIndexOf` a result type of `int`, but both
   return `Maybe[int]` at runtime (`none` when the substring is not found). The
   signature is now `(str str -- Maybe[int])`
