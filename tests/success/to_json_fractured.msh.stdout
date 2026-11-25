@@ -1,0 +1,30 @@
+{ "a": 1, "b": [1, 2, 3] }
+[]
+[
+     0,    2.5,  5,    7.5, 10,   12.5, 15,   17.5, 20,   22.5, 25,   27.5, 30,   32.5, 35,   37.5, 40,   42.5, 45,
+    47.5, 50,   52.5, 55,   57.5, 60,   62.5, 65,   67.5, 70,   72.5, 75,   77.5, 80,   82.5, 85,   87.5, 90,   92.5,
+    95,   97.5
+]
+{
+    "colors": {
+        "A much longer name than the rest": ["lightgreen", "yellow",    "black", "white", "orange", "pink", "brown"],
+        "Erik"                            : ["red",        "purple"                                                ],
+        "Katherine"                       : ["blue",       "lightblue", "black"                                    ],
+        "Logan"                           : ["yellow",     "blue",      "black", "red"                             ]
+    },
+    "enemies": [
+        { "hp":   0, "loc": [ 0,   0], "name": "enemy0"  },
+        { "hp":  37, "loc": [ 1,  10], "name": "enemy1"  },
+        { "hp":  74, "loc": [ 2,  20], "name": "enemy2"  },
+        { "hp": 111, "loc": [ 3,  30], "name": "enemy3"  },
+        { "hp": 148, "loc": [ 4,  40], "name": "enemy4"  },
+        { "hp": 185, "loc": [ 5,  50], "name": "enemy5"  },
+        { "hp": 222, "loc": [ 6,  60], "name": "enemy6"  },
+        { "hp": 259, "loc": [ 7,  70], "name": "enemy7"  },
+        { "hp": 296, "loc": [ 8,  80], "name": "enemy8"  },
+        { "hp": 333, "loc": [ 9,  90], "name": "enemy9"  },
+        { "hp": 370, "loc": [10, 100], "name": "enemy10" },
+        { "hp": 407, "loc": [11, 110], "name": "enemy11" }
+    ],
+    "note": "a \"quoted\" string, with [brackets] and {braces}"
+}

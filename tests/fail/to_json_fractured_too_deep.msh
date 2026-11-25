@@ -1,0 +1,5 @@
+# 1000 levels of lists is the most `toJsonFractured` lays out.
+[] as Json v! 999 seq (drop [@v] as Json v!) each
+@v toJsonFractured len 0 > str wle
+[@v] toJsonFractured wl
+"Should not get here" wle

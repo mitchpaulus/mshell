@@ -1,8 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"math/rand"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // deepChain builds a value n levels deep whose containers alternate: a list
@@ -257,5 +264,256 @@ func TestEnumRender(t *testing.T) {
 	str := &MShellEnum{EnumName: "T", Member: "leaf", Payload: []MShellObject{MShellString{Content: "1"}}}
 	if eq, err := leaf(1).Equals(str); err != nil || eq {
 		t.Fatalf("payloads of different kinds: %v, %v", eq, err)
+	}
+}
+
+// fjRandomJson writes compact JSON for a random value nested at most depth levels.
+func fjRandomJson(r *rand.Rand, depth int, sb *strings.Builder) {
+	kind := r.Intn(7)
+	if depth == 0 && kind >= 5 {
+		kind = r.Intn(5)
+	}
+	switch kind {
+	case 0:
+		sb.WriteString(strconv.Itoa(r.Intn(100000) - 500))
+	case 1:
+		sb.WriteString(strconv.FormatFloat(r.Float64()*1000, 'f', r.Intn(4), 64))
+	case 2:
+		sb.WriteString([]string{"true", "false", "null", "1e+30"}[r.Intn(4)])
+	case 3, 4:
+		sb.WriteString(strconv.Quote([]string{"", "a", "é, ü", `q"[{`, "some longer text"}[r.Intn(5)]))
+	case 5:
+		sb.WriteByte('[')
+		// Often make the items alike, so tables are tried.
+		n, seed := r.Intn(14), r.Int63()
+		alike := r.Intn(2) == 0
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			if alike && r.Intn(8) > 0 {
+				fjRandomJson(rand.New(rand.NewSource(seed+int64(r.Intn(3)))), depth-1, sb)
+			} else {
+				fjRandomJson(r, depth-1, sb)
+			}
+		}
+		sb.WriteByte(']')
+	case 6:
+		sb.WriteByte('{')
+		keys := r.Perm(8)[:r.Intn(8)]
+		for i, k := range keys {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(strconv.Quote("key" + strings.Repeat("x", k)))
+			sb.WriteString(": ")
+			fjRandomJson(r, depth-1, sb)
+		}
+		sb.WriteByte('}')
+	}
+}
+
+func TestFracturedJsonKeepsValue(t *testing.T) {
+	r := rand.New(rand.NewSource(1))
+	for i := 0; i < 50000; i++ {
+		var sb strings.Builder
+		fjRandomJson(r, 4, &sb)
+		compact := sb.String()
+		got, err := fracturedJson(compact)
+		if err != nil {
+			t.Fatalf("unexpected error: %v\n%s", err, compact)
+		}
+		var want, have any
+		if err := json.Unmarshal([]byte(compact), &want); err != nil {
+			t.Fatalf("test input is not JSON: %v\n%s", err, compact)
+		}
+		if err := json.Unmarshal([]byte(got), &have); err != nil {
+			t.Fatalf("output is not JSON: %v\n%s", err, got)
+		}
+		if !reflect.DeepEqual(want, have) {
+			t.Fatalf("value changed.\ninput: %s\noutput:\n%s", compact, got)
+		}
+		for _, line := range strings.Split(got, "\n") {
+			if strings.HasSuffix(line, " ") {
+				t.Fatalf("line ends with a space: %q\n%s", line, got)
+			}
+			if utf8.RuneCountInString(line) > fjLineWidth {
+				t.Fatalf("line longer than %d: %q", fjLineWidth, line)
+			}
+		}
+	}
+}
+
+func TestFracturedJsonLayouts(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`{"a": 1, "b": [1, 2]}`, `{ "a": 1, "b": [1, 2] }`},
+		{`[[[1]]]`, "[\n    [ [1] ]\n]"},
+		{`not json`, `not json`},
+		{`[{"a": 1, "b": 2.5}, {"b": 10}, {"a": 100, "b": 3}` + strings.Repeat(`, {"a": 7, "b": 7}`, 12) + `]`,
+			"[\n    {\"a\":   1, \"b\":  2.5},\n    {          \"b\": 10  },\n    {\"a\": 100, \"b\":  3  }" +
+				strings.Repeat(",\n    {\"a\":   7, \"b\":  7  }", 12) + "\n]"},
+	}
+	for _, tc := range cases {
+		if got, err := fracturedJson(tc.in); err != nil || got != tc.want {
+			t.Errorf("input %s\ngot:\n%s\nwant:\n%s", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A value nested fjMaxDepth levels is laid out, and one level more is an error.
+func TestFracturedJsonDeep(t *testing.T) {
+	nested := func(depth int) string {
+		return strings.Repeat("[", depth) + strings.Repeat("]", depth)
+	}
+	got, err := fracturedJson(nested(fjMaxDepth))
+	if err != nil {
+		t.Fatalf("%d levels: unexpected error: %v", fjMaxDepth, err)
+	}
+	if !strings.HasPrefix(got, "[\n    [\n") {
+		t.Errorf("unexpected start: %q", got[:20])
+	}
+	for _, in := range []string{
+		nested(fjMaxDepth + 1),
+		nested(1000000),
+		strings.Repeat(`{"a": `, fjMaxDepth) + "[1]" + strings.Repeat("}", fjMaxDepth),
+	} {
+		if got, err := fracturedJson(in); err == nil {
+			t.Errorf("%d bytes of input: want an error, got %d bytes of output", len(in), len(got))
+		}
+	}
+	// Many values side by side at the limit are not too deep.
+	wide := "[" + strings.Repeat(nested(fjMaxDepth-1)+", ", 3) + nested(fjMaxDepth-1) + "]"
+	if _, err := fracturedJson(wide); err != nil {
+		t.Errorf("side by side: unexpected error: %v", err)
+	}
+}
+
+// A list of dictionaries that all have different keys is written one per
+// line, and gets no more than fjMaxTableFields columns while that is found out.
+func TestFracturedJsonManyFields(t *testing.T) {
+	const rows = 5000
+	var in, want strings.Builder
+	in.WriteString("[")
+	want.WriteString("[")
+	for i := 0; i < rows; i++ {
+		if i > 0 {
+			in.WriteString(", ")
+			want.WriteString(",")
+		}
+		fmt.Fprintf(&in, `{"k%d": 1}`, i)
+		fmt.Fprintf(&want, "\n    {\"k%d\": 1}", i)
+	}
+	in.WriteString("]")
+	want.WriteString("\n]")
+	got, err := fracturedJson(in.String())
+	if err != nil || got != want.String() {
+		t.Fatalf("unexpected output (error %v), starts %q", err, got[:min(len(got), 60)])
+	}
+
+	p := fjParser{s: in.String()}
+	root, ok := p.value()
+	if !ok {
+		t.Fatal("test input did not parse")
+	}
+	f := fjWriter{s: p.s, nodes: p.nodes}
+	var col fjCol
+	item := root + 1
+	for i := 0; i < rows; i++ {
+		f.add(&col, item, fjMaxNesting)
+		item = f.nodes[item].next
+	}
+	if !col.tooManyFields || len(col.children) > fjMaxTableFields || len(col.keys) > fjMaxTableFields+1 {
+		t.Errorf("tooManyFields %v, %d columns, %d keys; want at most %d columns",
+			col.tooManyFields, len(col.children), len(col.keys), fjMaxTableFields)
+	}
+}
+
+// BenchmarkFracturedJson lays out a table of objects, a long list of numbers,
+// and a list of objects too wide to be a table.
+func BenchmarkFracturedJson(b *testing.B) {
+	var table, numbers, wide strings.Builder
+	for i := 0; i < 20000; i++ {
+		table.WriteString(`, {"hp": ` + strconv.Itoa(i*37) + `, "loc": [` + strconv.Itoa(i) + `, ` + strconv.Itoa(i*10) + `], "name": "enemy` + strconv.Itoa(i) + `"}`)
+	}
+	for i := 0; i < 200000; i++ {
+		numbers.WriteString(", " + strconv.FormatFloat(float64(i%9973)/4, 'g', -1, 64))
+	}
+	for i := 0; i < 3000; i++ {
+		wide.WriteString(", {")
+		for k := 0; k < 30; k++ {
+			wide.WriteString(`"field` + strconv.Itoa(k) + `": ` + strconv.Itoa(i*k) + `, `)
+		}
+		wide.WriteString(`"last": 0}`)
+	}
+	for _, bc := range []struct{ name, in string }{
+		{"small", `{"a": 1, "b": [1, 2, 3], "c": "hello"}`},
+		{"table", "[" + table.String()[2:] + "]"},
+		{"numbers", "[" + numbers.String()[2:] + "]"},
+		{"wideRows", "[" + wide.String()[2:] + "]"},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			b.SetBytes(int64(len(bc.in)))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if out, _ := fracturedJson(bc.in); len(out) < len(bc.in) {
+					b.Fatal("input was not laid out")
+				}
+			}
+		})
+	}
+}
+
+// The output of longJson is the same value, with one item per line.
+func TestLongJson(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`{"a": 1, "b": [1, {}], "c": "x, [y]: {z} \" \\"}`,
+			"{\n    \"a\": 1,\n    \"b\": [\n        1,\n        {}\n    ],\n    \"c\": \"x, [y]: {z} \\\" \\\\\"\n}"},
+		{`[]`, `[]`},
+		{`[ ]`, `[]`},
+		{`-1.5e3`, `-1.5e3`},
+	}
+	for _, tc := range cases {
+		if got, err := longJson(tc.in); err != nil || got != tc.want {
+			t.Errorf("input %s\ngot:\n%s\nwant:\n%s", tc.in, got, tc.want)
+		}
+	}
+
+	r := rand.New(rand.NewSource(2))
+	for i := 0; i < 20000; i++ {
+		var sb strings.Builder
+		fjRandomJson(r, 4, &sb)
+		compact := sb.String()
+		got, err := longJson(compact)
+		if err != nil {
+			t.Fatalf("unexpected error: %v\n%s", err, compact)
+		}
+		var want, have any
+		if err := json.Unmarshal([]byte(compact), &want); err != nil {
+			t.Fatalf("test input is not JSON: %v\n%s", err, compact)
+		}
+		if err := json.Unmarshal([]byte(got), &have); err != nil {
+			t.Fatalf("output is not JSON: %v\n%s", err, got)
+		}
+		if !reflect.DeepEqual(want, have) {
+			t.Fatalf("value changed.\ninput: %s\noutput:\n%s", compact, got)
+		}
+		// Go's own indenting gives the same text.
+		var std bytes.Buffer
+		if err := json.Indent(&std, []byte(compact), "", "    "); err != nil {
+			t.Fatalf("json.Indent: %v", err)
+		}
+		if got != std.String() {
+			t.Fatalf("differs from json.Indent.\ngot:\n%s\nwant:\n%s", got, std.String())
+		}
+	}
+
+	nested := func(depth int) string {
+		return strings.Repeat("[", depth) + "1" + strings.Repeat("]", depth)
+	}
+	if _, err := longJson(nested(fjMaxDepth)); err != nil {
+		t.Errorf("%d levels: unexpected error: %v", fjMaxDepth, err)
+	}
+	if _, err := longJson(nested(fjMaxDepth + 1)); err == nil {
+		t.Errorf("%d levels: want an error", fjMaxDepth+1)
 	}
 }

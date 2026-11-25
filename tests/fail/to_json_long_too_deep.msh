@@ -1,0 +1,5 @@
+# 1000 levels of lists is the most `toJsonLong` lays out.
+[1] as Json v! 999 seq (drop [@v] as Json v!) each
+@v toJsonLong len 0 > str wle
+[@v] toJsonLong wl
+"Should not get here" wle

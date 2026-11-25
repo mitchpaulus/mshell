@@ -1,0 +1,18 @@
+# Short values stay on one line.
+{ "a": 1, "b": [1 2 3] } toJsonFractured wl
+[] toJsonFractured wl
+
+# Long list of numbers: several per line, decimal points lined up.
+40 seq (toFloat 2.5 *) map toJsonFractured wl
+
+# Objects alike: a table. A dictionary of lists: a table with the keys padded.
+{
+    "enemies": 12 seq (i! { "name": "enemy" @i str +, "hp": @i 37 *, "loc": [@i @i 10 *] }) map,
+    "colors": {
+        "Katherine": ["blue" "lightblue" "black"],
+        "Logan": ["yellow" "blue" "black" "red"],
+        "Erik": ["red" "purple"],
+        "A much longer name than the rest": ["lightgreen" "yellow" "black" "white" "orange" "pink" "brown"]
+    },
+    "note": "a \"quoted\" string, with [brackets] and {braces}"
+} toJsonFractured wl
