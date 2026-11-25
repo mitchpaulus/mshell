@@ -13,13 +13,20 @@
     rest; [den] gives the model's mark.  Arms of two or more kinds are
     joined kind by kind and the join is the union.  Arms of one kind
     ([joinG]):
-    - every arm new: the fresh join, folded;
+    - every arm new: the fresh join of all the types ([tjoinN]);
     - some arm partly new, none stored: one mark for all ([fmergeN]), each
       arm brought to it by [ss_mc], then the types joined under it
-      ([mjoin]: [<=] at a stored position, the fresh join at a new one), so
-      each arm reaches the result by [ss_m];
+      ([mjoinN]: [<=] at a stored position, the fresh join at a new one),
+      so each arm reaches the result by [ss_m];
     - otherwise shared: a target the new and partly new arms take where they
-      can, with the rest committed and joined in ([shjoin]).
+      can, with the rest committed and joined in ([shjoin]).  The new arms
+      that do not take it are joined with each other as new values before
+      they are committed ([commit_new], [join_new_first]);
+    - failing that, every arm committed and the types joined as stored
+      values ([commit_all]).
+
+    No join is folded over the arms two at a time: every join here takes
+    all its types at once, so none depends on the order of the arms.
 
     [joinN_stack_ub]: every arm's stack reaches the join by subsumption,
     repeated; [arm_joinN] and [if_joinN] give the rules.  As in Join.v the
@@ -274,88 +281,60 @@ Qed.
 
 (** ** Joining the types under one mark *)
 
-(** The join of one label under a mark: as [fjoin], but a label present in
-    one arm only is joined with itself, since a partly new value is not
-    always [msub] of itself. *)
-Definition mfjoin (j : ty -> ty -> option ty) (f g : fstat) : option fstat :=
-  match f, g with
-  | FOpen, _ | _, FOpen => Some FOpen
-  | FAbs, FAbs => Some FAbs
-  | FReq x, FReq y => option_map FReq (j x y)
-  | FDict x, FDict y => option_map FDict (j x y)
-  | FAbs, FDict y | FDict y, FAbs => option_map FDict (j y y)
-  | FAbs, (FReq y | FOpt y) | (FReq y | FOpt y), FAbs => option_map FOpt (j y y)
-  | FReq x, (FOpt y | FDict y) | FOpt x, (FReq y | FOpt y | FDict y) | FDict x, (FReq y | FOpt y) =>
-      option_map FOpt (j x y)
-  end.
-
-Lemma mfjoin_ub (R : ty -> ty -> Prop) j f g h :
-  (forall x y z, j x y = Some z -> R x z /\ R y z) ->
-  mfjoin j f g = Some h -> frsubR R f h /\ frsubR R g h.
-Proof.
-  intros J E.
-  destruct f, g; simpl in E;
-    try (inversion E; subst; split; constructor; fail);
-    try (match type of E with context [j ?x ?y] => destruct (j x y) as [z|] eqn:Ej end;
-         simpl in E; inversion E; subst; destruct (J _ _ _ Ej) as [H1 H2]).
-  all: try (split; constructor; auto; fail).
-  all: try (split; eapply frs_opt; eauto; fail).
-  all: try (split; eapply frs_dict; eauto; fail).
-  all: try (split; [apply frs_abs_opt | eapply frs_opt; eauto]; fail).
-  all: try (split; [eapply frs_opt; eauto | apply frs_abs_opt]; fail).
-  all: try (split; [apply frs_abs_dict | eapply frs_dict; eauto]; fail).
-  all: try (split; [eapply frs_dict; eauto | apply frs_abs_dict]; fail).
-Qed.
-
-Definition is_open (f : fstat) : bool := match f with FOpen => true | _ => false end.
-
-(** A label holding a partly new value is not made open ([msub]). *)
-Definition mfield (j : fmark -> ty -> ty -> option ty) (e : fmark) (f g : fstat) : option fstat :=
-  match mfjoin (j e) f g with
+(** One label under a mark: as [fjoinN], with the types joined under the
+    label's mark.  A label holding a partly new value is not made open
+    ([msub]).  A label present in one arm only is still joined, with
+    itself, since a partly new value is not always [msub] of itself. *)
+Definition mfieldN (j : fmark -> list ty -> option ty) (e : fmark) (fs : list fstat) : option fstat :=
+  match fjoinN (j e) fs with
   | Some h => if fpartial e && is_open h then None else Some h
   | None => None
   end.
+
+(** Fuel for the relations' join of the types [ts]. *)
+Definition tfuel (ts : list ty) : nat := S (list_sum (map dsize ts)).
 
 Section MJoin.
 Variable le : bool -> ty -> ty -> bool.
 Hypothesis le_ok : forall fr a b, le fr a b = true -> jrel fr a b.
 
-Fixpoint mjoin (n : nat) (m : fmark) (a b : ty) {struct n} : option ty :=
+(** The types of all the arms joined under one mark. *)
+Fixpoint mjoinN (n : nat) (m : fmark) (ts : list ty) {struct n} : option ty :=
   match n with
   | 0 => None
   | S n' =>
     match m with
-    | FmSh => tjoin le (S (dsize a + dsize b)) false a b
-    | FmDp => tjoin le (S (dsize a + dsize b)) true a b
+    | FmSh => tjoinN le (tfuel ts) false ts
+    | FmDp => tjoinN le (tfuel ts) true ts
     | FmList e =>
-        match a, b with
-        | TList x, TList y => option_map TList (mjoin n' e x y)
-        | _, _ => None
+        match omapl as_list ts with
+        | Some xs => option_map TList (mjoinN n' e xs)
+        | None => None
         end
     | FmRec ls d =>
-        match a, b with
-        | TRec fs1 r1, TRec fs2 r2 =>
+        match omapl as_rec ts with
+        | Some rs =>
             match omapl (fun k => option_map (fun h => (k, h))
-                           (mfield (mjoin n') (flook k ls d) (field_at k fs1 r1) (field_at k fs2 r2)))
-                        (map fst ls ++ map fst fs1 ++ map fst fs2),
-                  mfield (mjoin n') d r1 r2 with
+                           (mfieldN (mjoinN n') (flook k ls d) (map (fun r => field_at k (fst r) (snd r)) rs)))
+                        (map fst ls ++ flat_map (fun r => map fst (fst r)) rs),
+                  mfieldN (mjoinN n') d (map snd rs) with
             | Some fs, Some r => Some (TRec fs r)
             | _, _ => None
             end
-        | _, _ => None
+        | None => None
         end
     end
   end.
 
-Lemma mfield_ub j e f g h :
-  (forall x y z, j e x y = Some z -> msub (den e) x z /\ msub (den e) y z) ->
-  mfield j e f g = Some h ->
-  frsubR (msub (den e)) f h /\ frsubR (msub (den e)) g h /\ (partial (den e) = true -> h <> FOpen).
+Lemma mfieldN_ub j e fs h :
+  (forall ts z, j e ts = Some z -> Forall (fun x => msub (den e) x z) ts) ->
+  mfieldN j e fs = Some h ->
+  Forall (fun f => frsubR (msub (den e)) f h) fs /\ (partial (den e) = true -> h <> FOpen).
 Proof.
-  intros J E. unfold mfield in E.
-  destruct (mfjoin (j e) f g) as [h'|] eqn:Em; [|discriminate].
+  intros J E. unfold mfieldN in E.
+  destruct (fjoinN (j e) fs) as [h'|] eqn:Em; [|discriminate].
   destruct (fpartial e && is_open h') eqn:Po; [discriminate|]. inversion E; subst.
-  destruct (mfjoin_ub _ _ _ _ _ J Em) as [H1 H2]. split; [exact H1|]. split; [exact H2|].
+  split; [exact (fjoinN_ub _ _ _ _ J Em)|].
   intros P Eo. subst. rewrite fpartial_den in P. rewrite P in Po. discriminate.
 Qed.
 
@@ -365,35 +344,42 @@ Lemma msub_rec_intro f fs1 r1 fs r :
   msub (MRec f) (TRec fs1 r1) (TRec fs r).
 Proof. intros H. simpl. do 4 eexists. split; [reflexivity|]. split; [reflexivity|]. exact H. Qed.
 
-(** The join is above both arms by [msub] under the mark. *)
-Lemma mjoin_ub : forall n m a b c, mjoin n m a b = Some c -> msub (den m) a c /\ msub (den m) b c.
+(** The join is above every arm by [msub] under the mark. *)
+Lemma mjoinN_ub : forall n m ts c, mjoinN n m ts = Some c -> Forall (fun a => msub (den m) a c) ts.
 Proof.
-  induction n as [|n IH]; intros m a b c E; simpl in E; [discriminate|].
+  induction n as [|n IH]; intros m ts c E; simpl in E; [discriminate|].
   destruct m as [| | e | ls d].
-  - exact (tjoin_ub le le_ok (S (dsize a + dsize b)) false a b c E).
-  - exact (tjoin_ub le le_ok (S (dsize a + dsize b)) true a b c E).
-  - destruct a as [| | | | | | x1 | fs1 r1 | u1 v1 | i1 o1 | E1 g1 | p1 | w1 | t1 | n1]; try discriminate; destruct b as [| | | | | | x2 | fs2 r2 | u2 v2 | i2 o2 | E2 g2 | p2 | w2 | t2 | n2]; try discriminate.
-    destruct (mjoin n e x1 x2) as [z|] eqn:Ez; simpl in E; [|discriminate]. inversion E; subst.
-    destruct (IH _ _ _ _ Ez) as [H1 H2]. simpl.
-    split; do 2 eexists; (split; [reflexivity | split; [reflexivity | eassumption]]).
-  - destruct a as [| | | | | | x1 | fs1 r1 | u1 v1 | i1 o1 | E1 g1 | p1 | w1 | t1 | n1]; try discriminate; destruct b as [| | | | | | x2 | fs2 r2 | u2 v2 | i2 o2 | E2 g2 | p2 | w2 | t2 | n2]; try discriminate.
-    match type of E with context [omapl ?F ?K] => destruct (omapl F K) as [fs|] eqn:Eo end;
+  - exact (tjoinN_ub le le_ok (tfuel ts) false ts c E).
+  - exact (tjoinN_ub le le_ok (tfuel ts) true ts c E).
+  - destruct (omapl as_list ts) as [xs|] eqn:Eo; [|discriminate].
+    destruct (mjoinN n e xs) as [z|] eqn:Ez; simpl in E; [|discriminate]. inversion E; subst.
+    pose proof (IH _ _ _ Ez) as F. rewrite Forall_forall in F.
+    apply Forall_forall. intros a I. destruct (omapl_in _ _ _ Eo a I) as (x & Ix & Ex).
+    destruct a; try discriminate. inversion Ex; subst. simpl.
+    do 2 eexists. split; [reflexivity | split; [reflexivity | exact (F x Ix)]].
+  - destruct (omapl as_rec ts) as [rs|] eqn:Eo; [|discriminate].
+    match type of E with context [omapl ?F ?K] => destruct (omapl F K) as [fs|] eqn:Ek end;
       [|discriminate].
-    destruct (mfield (mjoin n) d r1 r2) as [r|] eqn:Er; [|discriminate].
+    destruct (mfieldN (mjoinN n) d (map snd rs)) as [r|] eqn:Er; [|discriminate].
     inversion E; subst. clear E.
-    apply omapl_lookupA in Eo as [Hk Hl].
-    assert (Hf : forall k, mfield (mjoin n) (flook k ls d) (field_at k fs1 r1) (field_at k fs2 r2)
+    apply omapl_lookupA in Ek as [Hk Hl].
+    assert (Hf : forall k, mfieldN (mjoinN n) (flook k ls d) (map (fun r0 => field_at k (fst r0) (snd r0)) rs)
                            = Some (field_at k fs r)).
-    { intros k. unfold field_at at 3. destruct (lookup k fs) as [v|] eqn:Ev.
+    { intros k. unfold field_at at 2. destruct (lookup k fs) as [v|] eqn:Ev.
       - apply Hl in Ev. exact Ev.
       - apply lookup_none_iff in Ev. rewrite Hk in Ev.
-        rewrite !field_at_notin; [| intro Hc; apply Ev; rewrite !in_app_iff; tauto
-                                  | intro Hc; apply Ev; rewrite !in_app_iff; tauto].
-        unfold flook. rewrite lookup_notin; [exact Er | intro Hc; apply Ev; rewrite !in_app_iff; tauto]. }
-    assert (J : forall e x y z, mjoin n e x y = Some z -> msub (den e) x z /\ msub (den e) y z)
+        replace (map (fun r0 => field_at k (fst r0) (snd r0)) rs) with (map snd rs).
+        + unfold flook. rewrite lookup_notin; [exact Er | intro Hc; apply Ev; rewrite in_app_iff; tauto].
+        + apply map_ext_in. intros [fs0 r0] I0. simpl. symmetry. apply field_at_notin.
+          intro Hc. apply Ev. rewrite in_app_iff. right. apply in_flat_map. exists (fs0, r0). auto. }
+    assert (J : forall e ts0 z, mjoinN n e ts0 = Some z -> Forall (fun x => msub (den e) x z) ts0)
       by (intros; eapply IH; eauto).
-    rewrite den_rec. split; apply msub_rec_intro; intros k; rewrite den_f_at;
-      destruct (mfield_ub _ _ _ _ _ (J (flook k ls d)) (Hf k)) as (H1 & H2 & H3); auto.
+    apply Forall_forall. intros a I. destruct (omapl_in _ _ _ Eo a I) as ([fs1 r1] & Ix & Ex).
+    destruct a; try discriminate. inversion Ex; subst.
+    rewrite den_rec. apply msub_rec_intro. intros k. rewrite den_f_at.
+    destruct (mfieldN_ub _ _ _ _ (J (flook k ls d)) (Hf k)) as (H1 & H3). split; [|exact H3].
+    rewrite Forall_forall in H1. apply (H1 (field_at k fs1 r1)).
+    apply in_map_iff. exists (fs1, r1). auto.
 Qed.
 End MJoin.
 
@@ -419,24 +405,6 @@ Proof. intros H x y S. induction S; [apply st_refl | eapply st_step; eauto]. Qed
 
 Lemma steps_sub a b : steps sub a b -> sub a b.
 Proof. induction 1; [apply s_refl | eapply sub_trans; eauto]. Qed.
-
-(** A binary join folded over a list. *)
-Fixpoint foldj (j : ty -> ty -> option ty) (acc : ty) (xs : list ty) : option ty :=
-  match xs with
-  | [] => Some acc
-  | x :: xs' => match j acc x with Some a => foldj j a xs' | None => None end
-  end.
-
-Lemma foldj_ub (R : ty -> ty -> Prop) j :
-  (forall a b c, j a b = Some c -> R a c /\ R b c) ->
-  forall xs acc r, foldj j acc xs = Some r -> steps R acc r /\ Forall (fun x => steps R x r) xs.
-Proof.
-  intros J. induction xs as [|x xs IH]; simpl; intros acc r E.
-  - inversion E; subst. split; [apply st_refl | constructor].
-  - destruct (j acc x) as [a|] eqn:Ej; [|discriminate].
-    destruct (J _ _ _ Ej) as [H1 H2]. destruct (IH _ _ E) as [S F].
-    split; [eapply st_step; eauto | constructor; [eapply st_step; eauto | exact F]].
-Qed.
 
 (** The first candidate that gives a result. *)
 Fixpoint first_some {A B} (f : A -> option B) (xs : list A) : option B :=
@@ -471,11 +439,16 @@ Hypothesis rt_ok : forall m a c, rt m a c = true ->
   (m = Dp /\ rsub a c) \/
   (partial m = true /\ ((exists b, msub m a b /\ sub b c) \/ sub a c)).
 
-(** The relations' binary join ([join_slot]'s). *)
-Definition jt (fr : bool) (a b : ty) : option ty := tjoin le (S (dsize a + dsize b)) fr a b.
+(** The relations' join of all the types at once, [acc] among them. *)
+Definition jall (fr : bool) (acc : ty) (xs : list ty) : option ty :=
+  tjoinN le (tfuel (acc :: xs)) fr (acc :: xs).
 
-Lemma jt_ub fr a b c : jt fr a b = Some c -> jrel fr a c /\ jrel fr b c.
-Proof. apply tjoin_ub; exact le_ok. Qed.
+Lemma jall_ub fr acc xs r : jall fr acc xs = Some r ->
+  steps (jrel fr) acc r /\ Forall (fun x => steps (jrel fr) x r) xs.
+Proof.
+  intros E. pose proof (tjoinN_ub le le_ok _ _ _ _ E) as F. inversion F as [|? ? Ha F']; subst.
+  split; [apply steps_one; exact Ha|]. eapply Forall_impl; [| exact F']. intros x H. apply steps_one; exact H.
+Qed.
 
 (** Fuel for the merge and the join under a mark: the checker recurses on
     the marks and types. *)
@@ -484,7 +457,7 @@ Definition fuel (ps : list fslot) : nat :=
 
 (** 1. Every arm new: the fresh join. *)
 Definition newjoin (ps : list fslot) : option ty :=
-  match ps with [] => None | p :: rest => foldj (jt true) (snd p) (map snd rest) end.
+  match ps with [] => None | p :: rest => jall true (snd p) (map snd rest) end.
 
 (** 2. Some arm partly new and none stored: one mark, then the types
     joined under it. *)
@@ -492,22 +465,70 @@ Definition pjoinN (ps : list fslot) : option fslot :=
   if existsb (fun p => fpartial (fst p)) ps && forallb (fun p => negb (is_shf (fst p))) ps then
     match fmergeN (fuel ps) ps, ps with
     | Some m, p :: rest =>
-        if fpartial m then option_map (fun t => (m, t)) (foldj (mjoin le (fuel ps) m) (snd p) (map snd rest))
+        if fpartial m then option_map (fun t => (m, t)) (mjoinN le (fuel ps) m (snd p :: map snd rest))
         else None
     | _, _ => None
     end
   else None.
 
+(** New arms committed into [t1]: joined with each other as new values
+    first, and that join committed; or else each committed on its own.
+    Joining them first is what a fold did when it met the new arms before
+    a stored one: two new [Box[int]] and [Box[str]] widen to
+    [Box[int | str]], which a stored arm may be below, while neither is
+    related to the other once committed. *)
+Definition commit_new (t1 : ty) (news : list ty) : option ty :=
+  match news with
+  | [] => Some t1
+  | n0 :: nr =>
+      match (match jall true n0 nr with Some nt => jall false t1 [nt] | None => None end) with
+      | Some t => Some t
+      | None => jall false t1 news
+      end
+  end.
+
+(** [t1] with the members of [nt] whose kinds it has no member of. *)
+Definition extend (t1 nt : ty) : ty :=
+  match filter (fun l => negb (existsb (overlap l) (leaves t1))) (leaves nt) with
+  | [] => t1
+  | ex => TUnion t1 (munion ex)
+  end.
+
+(** The new arms joined with each other as new values first.  That join
+    takes [t1] if it can.  If not it is committed and joined in.  If that
+    has no join either, [t1] is given the members of kinds it lacks, and
+    the join of the new arms takes that: a new [int | [str]] beside a
+    stored [[str | null]] gives [int | [str | null]]. *)
+Definition join_new_first (t1 : ty) (news : list ty) : option ty :=
+  match news with
+  | [] => None
+  | n0 :: nr =>
+      match jall true n0 nr with
+      | Some nt =>
+          if rt Dp nt t1 then Some t1 else
+          match jall false t1 [nt] with
+          | Some t => Some t
+          | None => if rt Dp nt (extend t1 nt) then Some (extend t1 nt) else None
+          end
+      | None => None
+      end
+  end.
+
 (** 3. Shared: a target [t0], which new and partly new arms take where they
     can; the rest are committed and joined in.  The arms [abs] says are
-    already reach [t0]. *)
+    already reach [t0].  For the new arms: those that do not take [t1] are
+    committed ([commit_new]); or else all of them are joined as new values
+    first ([join_new_first]). *)
 Definition layer (ps : list fslot) (c : ty * (fslot -> bool)) : option ty :=
   let '(t0, abs) := c in
-  match foldj (jt false) t0
+  match jall false t0
           (map snd (filter (fun p => fpartial (fst p) && negb (abs p) && negb (rt (den (fst p)) (snd p) t0)) ps)) with
   | Some t1 =>
-      foldj (jt false) t1
-        (map snd (filter (fun p => is_dpf (fst p) && negb (abs p) && negb (rt Dp (snd p) t1)) ps))
+      match commit_new t1
+              (map snd (filter (fun p => is_dpf (fst p) && negb (abs p) && negb (rt Dp (snd p) t1)) ps)) with
+      | Some t => Some t
+      | None => join_new_first t1 (map snd (filter (fun p => is_dpf (fst p) && negb (abs p)) ps))
+      end
   | None => None
   end.
 
@@ -527,7 +548,7 @@ Definition joint (ps : list fslot) (p : fslot) : bool := fpartial (fst p) || agr
     new arms alone, then each one's own type. *)
 Definition targets (ps : list fslot) : list (ty * (fslot -> bool)) :=
   match map snd (filter (fun p => is_shf (fst p)) ps) with
-  | h :: hs => match foldj (jt false) h hs with Some t => [(t, fun _ => false)] | None => [] end
+  | h :: hs => match jall false h hs with Some t => [(t, fun _ => false)] | None => [] end
   | [] =>
       match pjoinN (filter (joint ps) ps) with Some (_, t) => [(t, joint ps)] | None => [] end ++
       match pjoinN (partials ps) with Some (_, t) => [(t, fun p => fpartial (fst p))] | None => [] end ++
@@ -537,18 +558,27 @@ Definition targets (ps : list fslot) : list (ty * (fslot -> bool)) :=
 Definition shjoin (ps : list fslot) : option ty := first_some (layer ps) (targets ps).
 
 (** The join of arms of one kind, or of arms not grouped by kind. *)
+(** 4. Every arm committed, and the types joined as stored values: when
+    the stored arms have no join of their own, another arm may be above
+    them all (unknown contents, say). *)
+Definition commit_all (ps : list fslot) : option ty :=
+  match map snd ps with [] => None | h :: tl => jall false h tl end.
+
 Definition joinG (ps : list fslot) : option fslot :=
   if forallb (fun p => is_dpf (fst p)) ps then option_map (fun t => (FmDp, t)) (newjoin ps)
   else match pjoinN ps with
        | Some r => Some r
-       | None => option_map (fun t => (FmSh, t)) (shjoin ps)
+       | None => match shjoin ps with
+                 | Some t => Some (FmSh, t)
+                 | None => option_map (fun t => (FmSh, t)) (commit_all ps)
+                 end
        end.
 
 Lemma newjoin_ub ps t : forallb (fun p => is_dpf (fst p)) ps = true -> newjoin ps = Some t ->
   Forall (fun p => steps slot_sub (fden p) (fden (FmDp, t))) ps.
 Proof.
   intros Dp' E. destruct ps as [|[m0 t0] rest]; [discriminate|]. simpl in E.
-  destruct (foldj_ub (jrel true) (jt true) (jt_ub true) _ _ _ E) as [S F].
+  destruct (jall_ub true _ _ _ E) as [S F].
   assert (L : forall x y, steps rsub x y -> steps slot_sub (Dp, x) (Dp, y))
     by (apply (steps_map rsub slot_sub (fun x => (Dp, x))); intros; apply ss_dp; auto).
   rewrite forallb_forall in Dp'. constructor.
@@ -564,10 +594,13 @@ Proof.
   destruct (fmergeN (fuel ps) ps) as [m|] eqn:Em; [|discriminate].
   destruct ps as [|[m0 t0] rest]; [discriminate|].
   destruct (fpartial m) eqn:Pm; [|discriminate].
-  destruct (foldj _ _ _) as [t|] eqn:Ef; simpl; [|discriminate]. intros E. inversion E; subst. clear E.
+  destruct (mjoinN _ _ _ _) as [t|] eqn:Ef; simpl; [|discriminate]. intros E. inversion E; subst. clear E.
   pose proof (fmergeN_ok _ _ _ Em) as C.
   assert (P : partial (den m) = true) by (rewrite fpartial_den; exact Pm).
-  destruct (foldj_ub (msub (den m)) _ (mjoin_ub le le_ok _ m) _ _ _ Ef) as [S F].
+  assert (SF : steps (msub (den m)) t0 t /\ Forall (fun x => steps (msub (den m)) x t) (map snd rest)).
+  { pose proof (mjoinN_ub le le_ok _ _ _ _ Ef) as F0. inversion F0 as [|? ? Ha F']; subst.
+    split; [apply steps_one; exact Ha|]. eapply Forall_impl; [| exact F']. intros x H. apply steps_one; exact H. }
+  destruct SF as [S F].
   assert (L : forall x y, steps (msub (den m)) x y -> steps slot_sub (den m, x) (den m, y))
     by (apply (steps_map (msub (den m)) slot_sub (fun x => (den m, x))); intros; apply ss_m; auto).
   rewrite Forall_forall in C, F |- *. intros [mp tp] I. unfold fden; simpl.
@@ -583,27 +616,81 @@ Proof.
   eapply st_step; [exact H1 | apply steps_one; exact H2].
 Qed.
 
+Lemma commit_new_ub t1 news t : commit_new t1 news = Some t ->
+  sub t1 t /\ Forall (fun x => steps slot_sub (Dp, x) (Sh, t)) news.
+Proof.
+  unfold commit_new. destruct news as [|n0 nr].
+  { intros E. inversion E; subst. split; [apply s_refl | constructor]. }
+  assert (B : jall false t1 (n0 :: nr) = Some t ->
+              sub t1 t /\ Forall (fun x => steps slot_sub (Dp, x) (Sh, t)) (n0 :: nr)).
+  { intros E. destruct (jall_ub false _ _ _ E) as [S F]. simpl in S. apply steps_sub in S.
+    split; [exact S|]. eapply Forall_impl; [| exact F]. intros x H. simpl in H.
+    apply steps_one, ss_forget, steps_sub, H. }
+  destruct (jall true n0 nr) as [nt|] eqn:En; [|exact B].
+  destruct (jall false t1 [nt]) as [t'|] eqn:Et; [|exact B].
+  intros E. inversion E; subst. clear B.
+  destruct (jall_ub false _ _ _ Et) as [S F]. simpl in S. apply steps_sub in S.
+  inversion F as [|? ? Hn _]; subst. simpl in Hn. apply steps_sub in Hn.
+  split; [exact S|].
+  destruct (jall_ub true _ _ _ En) as [S0 F0].
+  assert (L : forall x y, steps rsub x y -> steps slot_sub (Dp, x) (Dp, y))
+    by (apply (steps_map rsub slot_sub (fun x => (Dp, x))); intros; apply ss_dp; auto).
+  assert (G : forall x, steps rsub x nt -> steps slot_sub (Dp, x) (Sh, t)).
+  { intros x H. eapply steps_trans; [apply L; exact H|]. apply steps_one, ss_forget. exact Hn. }
+  constructor; [apply G; exact S0|]. eapply Forall_impl; [| exact F0]. intros x H. apply G; exact H.
+Qed.
+
+Lemma join_new_first_ub t1 news t : join_new_first t1 news = Some t ->
+  sub t1 t /\ Forall (fun x => steps slot_sub (Dp, x) (Sh, t)) news.
+Proof.
+  unfold join_new_first. destruct news as [|n0 nr]; [discriminate|].
+  destruct (jall true n0 nr) as [nt|] eqn:En; [|discriminate]. intros E.
+  destruct (jall_ub true _ _ _ En) as [S0 F0].
+  assert (L : forall x y, steps rsub x y -> steps slot_sub (Dp, x) (Dp, y))
+    by (apply (steps_map rsub slot_sub (fun x => (Dp, x))); intros; apply ss_dp; auto).
+  assert (G : steps slot_sub (Dp, nt) (Sh, t) -> Forall (fun x => steps slot_sub (Dp, x) (Sh, t)) (n0 :: nr)).
+  { intros H. constructor; [eapply steps_trans; [apply L; exact S0 | exact H]|].
+    eapply Forall_impl; [| exact F0]. intros x Hx. eapply steps_trans; [apply L; exact Hx | exact H]. }
+  destruct (rt Dp nt t1) eqn:R.
+  { inversion E; subst. split; [apply s_refl|]. apply G. apply rt_steps; [reflexivity | exact R]. }
+  destruct (jall false t1 [nt]) as [t'|] eqn:Et.
+  { inversion E; subst. destruct (jall_ub false _ _ _ Et) as [S F]. simpl in S. apply steps_sub in S.
+    inversion F as [|? ? Hn _]; subst. simpl in Hn. apply steps_sub in Hn.
+    split; [exact S|]. apply G. apply steps_one, ss_forget. exact Hn. }
+  destruct (rt Dp nt (extend t1 nt)) eqn:Rx; [|discriminate]. inversion E; subst.
+  split; [| apply G; apply rt_steps; [reflexivity | exact Rx]].
+  unfold extend. destruct (filter _ (leaves nt)); [apply s_refl | apply s_unionr1, s_refl].
+Qed.
+
 Lemma layer_ub ps t0 abs t : layer ps (t0, abs) = Some t ->
   (forall p, In p ps -> abs p = true -> steps slot_sub (fden p) (Sh, t0)) ->
   sub t0 t /\
   Forall (fun p => is_shf (fst p) = false -> steps slot_sub (fden p) (Sh, t)) ps.
 Proof.
   unfold layer.
-  destruct (foldj (jt false) t0 _) as [t1|] eqn:E1; [|discriminate]. intros E2 Ab.
-  destruct (foldj_ub (jrel false) (jt false) (jt_ub false) _ _ _ E1) as [S1 F1].
-  destruct (foldj_ub (jrel false) (jt false) (jt_ub false) _ _ _ E2) as [S2 F2].
-  simpl in S1, S2. apply steps_sub in S1, S2.
+  destruct (jall false t0 _) as [t1|] eqn:E1; [|discriminate]. intros E2 Ab.
+  destruct (jall_ub false _ _ _ E1) as [S1 F1].
+  simpl in S1. apply steps_sub in S1.
+  (* What the new arms' step gives, whichever way it was made. *)
+  assert (New : sub t1 t /\
+                forall x, In (FmDp, x) ps -> abs (FmDp, x) = false -> steps slot_sub (Dp, x) (Sh, t)).
+  { destruct (commit_new t1 _) as [t'|] eqn:Ec.
+    - inversion E2; subst. destruct (commit_new_ub _ _ _ Ec) as [S2 F2]. split; [exact S2|].
+      intros x I Ap. destruct (rt Dp x t1) eqn:R.
+      + eapply steps_trans; [apply rt_steps; [reflexivity | exact R]|]. apply steps_one, ss_sh. exact S2.
+      + rewrite Forall_forall in F2. apply F2. apply in_map_iff. exists (FmDp, x).
+        split; [reflexivity|]. apply filter_In. split; [exact I | simpl; rewrite Ap, R; reflexivity].
+    - destruct (join_new_first_ub _ _ _ E2) as [S2 F2]. split; [exact S2|].
+      intros x I Ap. rewrite Forall_forall in F2. apply F2. apply in_map_iff. exists (FmDp, x).
+      split; [reflexivity|]. apply filter_In. split; [exact I | simpl; rewrite Ap; reflexivity]. }
+  destruct New as [S2 F2].
   split; [eapply sub_trans; eauto|].
-  rewrite Forall_forall in F1, F2 |- *. intros [m x] I Nsh.
+  rewrite Forall_forall in F1 |- *. intros [m x] I Nsh.
   destruct (abs (m, x)) eqn:Ap.
   { eapply steps_trans; [exact (Ab _ I Ap)|]. apply steps_one, ss_sh. eapply sub_trans; eauto. }
   unfold fden; cbn [fst snd].
   destruct (is_dpf m) eqn:Dm.
-  - destruct m; try discriminate. simpl.
-    destruct (rt Dp x t1) eqn:R.
-    + eapply steps_trans; [apply rt_steps; [reflexivity | exact R]|]. apply steps_one, ss_sh. exact S2.
-    + apply steps_one, ss_forget. apply steps_sub. apply F2. apply in_map_iff. exists (FmDp, x).
-      split; [reflexivity|]. apply filter_In. split; [exact I | simpl; rewrite Ap, R; reflexivity].
+  - destruct m; try discriminate. simpl. apply F2; auto.
   - assert (Pm : fpartial m = true) by (destruct m; simpl in *; congruence).
     assert (P : partial (den m) = true) by (rewrite fpartial_den; exact Pm).
     assert (N : newish (den m) = true) by (destruct m; simpl in *; congruence).
@@ -620,7 +707,7 @@ Proof.
   unfold pjoinN. destruct (_ && _); [|discriminate].
   destruct (fmergeN _ _) as [m'|]; [|discriminate]. destruct ps as [|p rest]; [discriminate|].
   destruct (fpartial m') eqn:P; [|discriminate].
-  destruct (foldj _ _ _); simpl; intros E; inversion E; subst; auto.
+  destruct (mjoinN _ _ _ _); simpl; intros E; inversion E; subst; auto.
 Qed.
 
 (** The arms a target says reach it do. *)
@@ -639,7 +726,7 @@ Lemma targets_reach ps t0 abs : In (t0, abs) (targets ps) ->
   forall p, In p ps -> abs p = true -> steps slot_sub (fden p) (Sh, t0).
 Proof.
   unfold targets. destruct (map snd (filter (fun p => is_shf (fst p)) ps)) as [|h hs].
-  2: { destruct (foldj _ h hs); [|intros []]. intros [E|[]]. inversion E; subst. discriminate. }
+  2: { destruct (jall _ h hs); [|intros []]. intros [E|[]]. inversion E; subst. discriminate. }
   intros It. apply in_app_or in It as [It|It].
   { destruct (pjoinN (filter (joint ps) ps)) as [[m t]|] eqn:Ep; [|contradiction].
     destruct It as [E|[]]. inversion E; subst.
@@ -662,13 +749,26 @@ Proof.
   - exfalso. assert (Hx : In x (map snd (filter (fun p => is_shf (fst p)) ps))).
     { apply in_map_iff. exists (FmSh, x). split; [reflexivity|]. apply filter_In. auto. }
     rewrite Eh in Hx. contradiction.
-  - destruct (foldj (jt false) h hs) as [th|] eqn:Ef; [|contradiction].
+  - destruct (jall false h hs) as [th|] eqn:Ef; [|contradiction].
     destruct It as [Et|[]]. inversion Et; subst.
-    destruct (foldj_ub (jrel false) (jt false) (jt_ub false) _ _ _ Ef) as [S F'].
+    destruct (jall_ub false _ _ _ Ef) as [S F'].
     assert (Ix : In x (h :: hs)).
     { rewrite <- Eh. apply in_map_iff. exists (FmSh, x). split; [reflexivity|]. apply filter_In. auto. }
     eapply sub_trans; [| exact St]. apply steps_sub.
     destruct Ix as [<-|Ix]; [exact S|]. rewrite Forall_forall in F'. exact (F' _ Ix).
+Qed.
+
+Lemma commit_all_ub ps t : commit_all ps = Some t -> Forall (fun p => steps slot_sub (fden p) (Sh, t)) ps.
+Proof.
+  unfold commit_all. intros E.
+  assert (F : Forall (fun x => sub x t) (map snd ps)).
+  { destruct (map snd ps) as [|h tl]; [discriminate|].
+    destruct (jall_ub false _ _ _ E) as [S F]. simpl in S. apply steps_sub in S.
+    constructor; [exact S|]. eapply Forall_impl; [| exact F]. intros x H. simpl in H. apply steps_sub, H. }
+  rewrite Forall_forall in F |- *. intros [m x] I.
+  assert (Sx : sub x t) by (apply F; apply in_map_iff; exists (m, x); auto).
+  unfold fden; cbn [fst snd]. apply steps_one.
+  destruct m; simpl; [apply ss_sh | apply ss_forget | apply ss_m_forget | apply ss_m_forget]; auto.
 Qed.
 
 (** Every arm reaches the join by subsumption, repeated. *)
@@ -678,8 +778,10 @@ Proof.
   - destruct (newjoin ps) as [t|] eqn:E; simpl; [|discriminate]. intros E'. inversion E'; subst.
     apply newjoin_ub; auto.
   - destruct (pjoinN ps) as [r'|] eqn:E; [intros E'; inversion E'; subst; apply pjoinN_ub; auto|].
-    destruct (shjoin ps) as [t|] eqn:Es; simpl; [|discriminate]. intros E'. inversion E'; subst.
-    apply shjoin_ub; auto.
+    destruct (shjoin ps) as [t|] eqn:Es.
+    { intros E'. inversion E'; subst. apply shjoin_ub; auto. }
+    destruct (commit_all ps) as [t|] eqn:Ec; simpl; [|discriminate]. intros E'. inversion E'; subst.
+    apply commit_all_ub; auto.
 Qed.
 
 (** Arms of different kinds: each kind's arms are joined, and the join is
@@ -697,13 +799,6 @@ Fixpoint group_kinds (ps : list fslot) (gs : list (kind * list fslot)) : option 
                 | Some k => group_kinds ps' (add_kind k p gs)
                 | None => None
                 end
-  end.
-
-Fixpoint munion (ts : list ty) : ty :=
-  match ts with
-  | [] => TBot
-  | [t] => t
-  | t :: ts' => TUnion t (munion ts')
   end.
 
 Definition combine_kinds (rs : list fslot) : fslot :=

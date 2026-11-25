@@ -1,0 +1,14 @@
+# Two different unions join member by member, so a list holding a union
+# value checks whatever the order of its elements. Before, the str and the
+# bool joined to `bool | str` first, and that had no join with `str | null`.
+def strOrNull (-- str | null) "a" end
+
+["a" true strOrNull] len wl
+[strOrNull "a" true] len wl
+["a" strOrNull true] len wl
+[1 true strOrNull 2.0] len wl
+[["a" true] :0: strOrNull] len wl
+
+# The same join at the end of a branch.
+def intOrStr (-- int | str) 1 end
+true if strOrNull else intOrStr end str wl

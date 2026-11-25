@@ -60,8 +60,64 @@ Which arms take a target is decided against `T0` and `T1`, and which new arms jo
 none of which depend on arm order; the merge in step 2 fails on a conflict in any order.
 What can still depend on order is inside the folded `tjoin`, on unions with members of one kind.
 In Go, unions are canonical (`MakeUnion` sorts them), so member order does not show.
-The partly new arms' own types are tried as targets in arm order,
-so when several work the result type can depend on the order; whether the join succeeds does not.
+
+**Correction (2026-11-25).** The last paragraph was wrong: whether the join succeeded did depend on order.
+Every `⊔` above was the binary `tjoin` folded over the types, and `tjoin` is not a least upper bound, so the fold is not associative.
+Two types of one kind that cannot be widened inside (stored lists and dicts, quotes, aliases) join only when one is below the other,
+so `a` and `b` may have no join while both are below a third arm `c`: `a`, `c`, `b` joined and `a`, `b`, `c` did not.
+The first case found was a list, `["a" true @x]` with `x : str | null`:
+an arm that is a union has no single kind, so the arms were not grouped, the fold made `bool | str`, and two different unions had no join.
+`TestJoinOrderIndependentRandom` (`TypeRelationsGen_test.go`) then joined random arms in every order:
+6143 of 20000 sets joined in some orders only before two unions could join, and 68 after.
+
+## All the types at once (2026-11-25)
+
+`tjoin` is replaced by `tjoinN` (`Join.v`; Go: `Relations.JoinAll`), the join of any number of types, and the join of two is `tjoinN` of two.
+Nothing is folded: every `⊔` above is now one call with all its types.
+
+1. `⊥` and repeated types are dropped.
+2. If one of the types is above all the others, it is the join.
+3. Otherwise the members of the types (a union's members, or the type itself) are grouped:
+   two members are in one group when their kinds overlap, directly or through other members.
+   Each group is joined, and the join is the union of those.
+4. A group of one member is that member.
+   A group of lists, of dicts, or of instances of one enum is widened inside, its parts joined all at once (lists and dicts only when fresh).
+   Otherwise, or if that fails, the join is the member all the others are below.
+   An alias is never widened inside, but the rest of its group may be, and that join is the group's when the alias is below it.
+
+Under a partly new mark the types are joined position by position the same way (`mjoinN`).
+
+Three steps were added to the shared step so that nothing a fold accepted in some order is lost:
+
+- The new arms that do not take the target are joined with each other as new values first, and that join is committed (`commit_new`).
+  Two new `Box[int]` and `Box[str]` widen to `Box[int | str]`; committed first, neither is below the other.
+- Failing that, all the new arms are joined as new values (`join_new_first`). That join takes the target if it can, is committed and joined in if not,
+  and if that has no join either, the target is given the members of kinds it lacks and the new arms' join takes that:
+  a new `int | [str]` beside a stored `[str | null]` gives `int | [str | null]`.
+- Last, every arm is committed and the types joined as stored values (`commit_all`): another arm may be above stored arms that have no join of their own.
+
+Where the model takes the first type that fits, Go takes the one with the smallest `TypeId`, so the result is the same type for every order.
+
+### What is proved and what is tested
+
+Proved (`tjoinN_ub`, `mjoinN_ub`, `joinN_ub`): the join is above every arm.
+Each member reaches the join directly, so the proofs need no transitivity of the fresh retype, which the model does not have.
+
+Not proved: that the join is the same for every order, or that it exists whenever an upper bound does. These are tested:
+
+| Test | What it checks | Result |
+|---|---|---|
+| `TestJoinOrderIndependentRandom` | random arms (new or stored, no partly new ones) joined in every order | none of 1,000,000 sets depends on order; each gives one type |
+| `TestJoinOrderIndependent` | a pool of new, stored and partly new arms, now with two union-typed ones, in every order | no combination depends on order |
+| `TestJoinAllAgreesWithOracle` | Go `JoinAll` against the extracted `tjoinN` on random types | agree on 100,000 questions |
+| `TestRelationsAgreeWithOracle` | the join of two against the extracted `join_slot` | agree on 100,000 questions |
+
+Known gap: about 10 sets in a million have no join all at once, yet join when the join of two is folded over them in some order.
+A fold can commit some new arms before it meets others, which no single rule for all the arms does.
+`TestJoinOrderIndependentRandom` counts these and fails if one appears in its default 20000 sets.
+
+Compared with `main` on the pool of `TestJoinOrderIndependent`, the same 220 three-arm combinations check.
+The checker benchmarks are within noise of `main` (corpus: 18,663 allocations per run before, 18,736 after).
 
 ### Unification variables
 

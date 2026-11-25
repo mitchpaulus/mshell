@@ -635,3 +635,270 @@ func (g *typeGen) payloadType(depth int, params []TypeId, self uint32) TypeId {
 	}
 	return params[g.rng.Intn(len(params))]
 }
+
+// joinArms makes three or four slots that might be left by the arms of one
+// branch, or be the elements of one list: types related to one another,
+// base types, and unions and lists of those, each new or stored. modelOnly
+// leaves out float and null, which the model does not have.
+func (g *typeGen) joinArms(modelOnly bool) []coreSlot {
+	a := g.o.arena
+	base := g.ty(2, false, false)
+	pool := []TypeId{base, g.near(base, 2), g.widen(base, 2, true), g.widen(base, 2, false),
+		TidInt, TidStr, TidBool, TidRune}
+	if !modelOnly {
+		pool = append(pool, TidNull, TidFloat)
+	}
+	pick := func() TypeId { return pool[g.rng.Intn(len(pool))] }
+	one := func() TypeId {
+		switch g.rng.Intn(6) {
+		case 0, 1:
+			// A union of two or three of them, when their kinds differ.
+			members := []TypeId{pick()}
+			seen, ok := g.r.Kinds(members[0])
+			for i := 0; ok && len(seen) > 0 && i < 2; i++ {
+				m := pick()
+				if ks, ok := g.r.Kinds(m); ok && len(ks) > 0 && kindsDisjoint(ks, seen) {
+					members = append(members, m)
+					seen = append(seen, ks...)
+				}
+			}
+			return a.MakeUnion(members)
+		case 2:
+			return a.MakeList(pick())
+		}
+		return pick()
+	}
+	allNew := g.rng.Intn(2) == 0
+	slots := make([]coreSlot, 3+g.rng.Intn(2))
+	for i := range slots {
+		slots[i] = coreSlot{t: one(), fresh: allNew || g.rng.Intn(2) == 0}
+	}
+	return slots
+}
+
+// permutations calls f with every order of 0..n-1.
+func permutations(n int, f func([]int)) {
+	p := make([]int, n)
+	for i := range p {
+		p[i] = i
+	}
+	var rec func(k int)
+	rec = func(k int) {
+		if k == n {
+			f(p)
+			return
+		}
+		for i := k; i < n; i++ {
+			p[k], p[i] = p[i], p[k]
+			rec(k + 1)
+			p[k], p[i] = p[i], p[k]
+		}
+	}
+	rec(0)
+}
+
+// differentKindsOnly reports whether the members of the arms, looking
+// through a union arm, each have one kind, and any two of them are the same
+// type or of different kinds. The join of such arms is the union of the
+// members, whatever their order.
+func (g *typeGen) differentKindsOnly(arms []coreSlot) bool {
+	var members []TypeId
+	for _, s := range arms {
+		n := g.o.arena.Node(s.t)
+		if n.Kind == TKUnion {
+			members = append(members, g.o.arena.unionMembers[n.Extra]...)
+		} else {
+			members = append(members, s.t)
+		}
+	}
+	for i, m := range members {
+		k, ok := g.r.kindOf(m)
+		if !ok {
+			return false
+		}
+		for _, o := range members[:i] {
+			if ko, _ := g.r.kindOf(o); ko == k && o != m {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// TestJoinOrderIndependentRandom joins the same random arms in every order.
+// Whether they join must not depend on the order, and the join must be the
+// same type in every order: the arms are joined all at once (tjoinN in
+// Join.v, joinN in PartialJoin.v), not two at a time. The proof says only
+// that a join is above its arms, so this is tested, not proved.
+//
+// Arms whose members are of different kinds (differentKindsOnly) must also
+// have a join: `["a" true @x]` with x a `str | null` had none while
+// `[@x "a" true]` did.
+//
+// The test also counts the sets that have no join all at once, yet join
+// when the same join is folded over them two at a time in some order. A
+// fold can commit some new arms before it meets others, which no single
+// rule for all the arms does. There are about 10 in a million sets and none
+// in the default 20000; more means the join of all the arms lost a case.
+// MSH_JOIN_ORDER_SETS sets how many sets of arms to try.
+func TestJoinOrderIndependentRandom(t *testing.T) {
+	const defaultSets = 20000
+	n := defaultSets
+	if s := os.Getenv("MSH_JOIN_ORDER_SETS"); s != "" {
+		fmt.Sscan(s, &n)
+	}
+	var joined, withUnion, kindsOnly int
+	var failures, foldOnly []string
+	for seed, done := int64(1), 0; done < n; seed++ {
+		g := newTypeGen(seed)
+		c := &coreChecker{arena: g.o.arena, names: g.o.names, rel: g.r, table: &coreTable{}, defs: map[NameId]*coreSig{}}
+		for i := 0; i < 50 && done < n; i, done = i+1, done+1 {
+			arms := g.joinArms(false)
+			describe := func(order []int) string {
+				var sb strings.Builder
+				for _, k := range order {
+					kind := "stored "
+					if arms[k].fresh {
+						kind = "new "
+					}
+					sb.WriteString("\n    " + kind + FormatType(g.o.arena, g.o.names, arms[k].t))
+				}
+				return sb.String()
+			}
+			var first coreSlot
+			var okOrder, failOrder, otherOrder []int
+			permuted := make([]coreSlot, len(arms))
+			permutations(len(arms), func(order []int) {
+				for j, k := range order {
+					permuted[j] = arms[k]
+				}
+				j, ok := c.joinN(permuted)
+				switch {
+				case !ok:
+					if failOrder == nil {
+						failOrder = slices.Clone(order)
+					}
+				case okOrder == nil:
+					okOrder, first = slices.Clone(order), j
+				case (j.t != first.t || j.fresh != first.fresh) && otherOrder == nil:
+					otherOrder = slices.Clone(order)
+				}
+			})
+			if g.differentKindsOnly(arms) {
+				kindsOnly++
+				if okOrder == nil {
+					failures = append(failures, "arms of different kinds have no join:"+describe(failOrder))
+				}
+			}
+			switch {
+			case okOrder != nil && failOrder != nil:
+				failures = append(failures, fmt.Sprintf("joins in this order:%s\n  but not in this one:%s", describe(okOrder), describe(failOrder)))
+			case otherOrder != nil:
+				failures = append(failures, fmt.Sprintf("the join in this order:%s\n  is not the join in this one:%s", describe(okOrder), describe(otherOrder)))
+			}
+			if okOrder != nil {
+				joined++
+				if slices.ContainsFunc(arms, func(s coreSlot) bool { return g.o.arena.Node(s.t).Kind == TKUnion }) {
+					withUnion++
+				}
+				continue
+			}
+			// No join all at once: does a fold of the join of two find one?
+			found := false
+			permutations(len(arms), func(order []int) {
+				if found {
+					return
+				}
+				acc, ok := arms[order[0]], true
+				for _, k := range order[1:] {
+					if acc, ok = c.joinN([]coreSlot{acc, arms[k]}); !ok {
+						return
+					}
+				}
+				found = true
+				foldOnly = append(foldOnly, fmt.Sprintf("no join all at once, but two at a time in this order:%s\n  gives %s",
+					describe(order), FormatType(g.o.arena, g.o.names, acc.t)))
+			})
+		}
+	}
+	t.Logf("%d sets of arms: %d join (%d of those with a union arm), each to one type in every order; %d sets have members of different kinds only; %d join only two at a time",
+		n, joined, withUnion, kindsOnly, len(foldOnly))
+	if joined < n/2 {
+		t.Errorf("only %d of %d sets join: the generator no longer makes arms that join", joined, n)
+	}
+	for i, x := range failures {
+		if i == 5 {
+			break
+		}
+		t.Error(x)
+	}
+	if n == defaultSets {
+		for i, x := range foldOnly {
+			if i == 3 {
+				break
+			}
+			t.Error(x)
+		}
+	}
+}
+
+// TestJoinAllAgreesWithOracle asks the Go join of all the arms and the
+// extracted, proved one (tjoinN) about the same random types. They must
+// both have a join or both have none, and the joins must be equal
+// (oracleTypes.agrees).
+func TestJoinAllAgreesWithOracle(t *testing.T) {
+	bin := oracleBinary()
+	if bin == "" {
+		t.Skip("formal-ver/oracle/oracle is not built (run redo in formal-ver/oracle)")
+	}
+	n := 2000
+	if s := os.Getenv("MSH_ORACLE_QUERIES"); s != "" {
+		fmt.Sscan(s, &n)
+	}
+	var queries []string
+	for seed := int64(1); len(queries) < n; seed++ {
+		g := newTypeGen(seed)
+		for i := 0; i < 50 && len(queries) < n; i++ {
+			arms := g.joinArms(true)
+			mode := "shared"
+			if arms[0].fresh {
+				mode = "fresh"
+			}
+			types := make([]string, len(arms))
+			for j, a := range arms {
+				types[j] = g.o.print(a.t)
+			}
+			queries = append(queries, fmt.Sprintf("joinall %d %s %s", oracleFuel, mode, strings.Join(types, " ")))
+		}
+	}
+	answers := runOracle(t, bin, queries)
+	p := newOracleTypes()
+	r := NewRelations(p.arena)
+	joined := 0
+	var failures []string
+	for i, q := range queries {
+		if strings.HasPrefix(answers[i], "error:") {
+			t.Fatalf("%s: oracle answered %q; the oracle may be older than the proof (rebuild with redo in formal-ver/oracle)", q, answers[i])
+		}
+		ok, got, err := p.agrees(r, q, answers[i])
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		if answers[i] != "none" {
+			joined++
+		}
+		if !ok {
+			failures = append(failures, fmt.Sprintf("%s\n  oracle %s\n  go     %s", q, answers[i], got))
+		}
+	}
+	t.Logf("%d questions; %d have a join", len(queries), joined)
+	for i, f := range failures {
+		if i == 5 {
+			break
+		}
+		t.Error(f)
+	}
+	if len(failures) > 0 {
+		t.Errorf("%d of %d joins of all the arms disagree with the oracle", len(failures), len(queries))
+	}
+}
