@@ -339,11 +339,25 @@ func kittyFunctionalKey(code int) (KeyCode, bool) {
 		return NamedBackspace, true
 	case code >= 57376 && code <= 57398:
 		return NamedF(13 + code - 57376), true
+	case code >= 57399 && code <= 57408:
+		return KeyCode('0' + code - 57399), true
+	case code >= 57409 && code <= 57427:
+		return kittyKeypadKeys[code-57409], true
 	case code >= 57344 && code <= 63743:
-		// Keypad, media and modifier keys: no NamedKey yet.
+		// Media and modifier keys: no NamedKey yet.
 		return 0, false
 	}
 	return 0, false
+}
+
+// kittyKeypadKeys are the keys of the kitty keyboard protocol's keypad
+// codes 57409 to 57427, after the digits. A keypad key is the same key as
+// the one on the main block: the numpad's 5 types 5, its Enter is Enter.
+// The last one is the 5 key with Num Lock off, which has no key to be.
+var kittyKeypadKeys = [...]KeyCode{
+	'.', '/', '*', '-', '+', NamedEnter, '=', ',',
+	NamedLeft, NamedRight, NamedUp, NamedDown, NamedPageUp, NamedPageDown,
+	NamedHome, NamedEnd, NamedInsert, NamedDelete, 0,
 }
 
 // decodeCsiKey reads a key from a CSI sequence with parameters: the legacy
@@ -388,6 +402,9 @@ func decodeCsiKey(final byte, params string) (KeyCode, bool) {
 			}
 		}
 		if k, ok := kittyFunctionalKey(code); ok {
+			if k == 0 {
+				return 0, false
+			}
 			return normalizeKey(k | mods), true
 		}
 		if code >= 57344 && code <= 63743 {

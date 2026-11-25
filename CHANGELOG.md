@@ -276,6 +276,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The numeric keypad's keys (digits, `.`, `/`, `*`, `-`, `+`, Enter and the arrows) work in the interactive shell and the file manager
+  on terminals with the kitty keyboard protocol. They did nothing before.
 - Tab quotes an argument that would mean something else typed bare:
   `2.0` (the number 2), `@preview/x` (a variable), `<intro>` (a redirect), `true`, or the name of a built-in or definition.
   A file name is put in backticks, a completion definition's value in single quotes.
