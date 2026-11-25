@@ -279,6 +279,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Type checker: whether the elements of a list or the branches of an `if` or `match` have a common type no longer depends on their order.
   `["a" true @x]` with `x` a `str | null` was rejected with "the elements of this list have no common type",
   while `[@x "a" true]` was accepted. All the elements or branches are now joined at once, not two at a time.
+- The numeric keypad's keys (digits, `.`, `/`, `*`, `-`, `+`, Enter and the arrows) work in the interactive shell and the file manager
+  on terminals with the kitty keyboard protocol. They did nothing before.
 - Tab quotes an argument that would mean something else typed bare:
   `2.0` (the number 2), `@preview/x` (a variable), `<intro>` (a redirect), `true`, or the name of a built-in or definition.
   A file name is put in backticks, a completion definition's value in single quotes.
